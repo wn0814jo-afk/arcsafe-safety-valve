@@ -1,0 +1,115 @@
+{
+  "meta": {
+    "packageVersion": "1.0.0",
+    "generatedAt": "2026-07-07T09:00:00.000Z",
+    "engineVersion": "1.1.0"
+  },
+  "identity": {
+    "caseId": "C-2026-001",
+    "snapshotId": "SNAP-C-2026-001-1783474119382",
+    "snapshotHash": "bf22d00c"
+  },
+  "asset": {
+    "equipment": {
+      "id": "EQ-PSVR201-1783474119375",
+      "tag": "PSV-R201",
+      "revision": 1,
+      "mocId": null
+    },
+    "dischargeSystem": {
+      "id": "DS-LPFLARE01-1783474119375",
+      "name": "LP-FLARE-01",
+      "revision": 2,
+      "mocId": "MOC-2026-017",
+      "L": 12,
+      "D": 0.1,
+      "fittingsK": 2.5,
+      "headerPressure": 0.5,
+      "destination": "flare"
+    },
+    "assetFingerprint": "fb2bb5d0"
+  },
+  "calculation": {
+    "engineVersion": "1.1.0",
+    "inputs": {
+      "W": 2500,
+      "P1": 5.5,
+      "P2": 0.5,
+      "T": 373,
+      "M": 44,
+      "k": 1.3,
+      "Kd": 0.975,
+      "Kb": 1,
+      "mawp": 6
+    },
+    "result": {
+      "valid": true,
+      "areaCm2": 39120.177445641835,
+      "selected": {
+        "letter": "P+",
+        "area": 39120.177445641835,
+        "nonStandard": true
+      },
+      "margin": 1,
+      "C": 346.9764226452482,
+      "backPressureRatio": 0.09090909090909091,
+      "checklist": {
+        "capacityOK": true,
+        "backPressureOK": true,
+        "mawpOK": true,
+        "kdOK": true,
+        "marginOK": true
+      },
+      "stepData": {
+        "fluid": {
+          "M": 44,
+          "T": 373,
+          "k": 1.3,
+          "criticalPressRatio": 0.545727733814065
+        },
+        "cCoeff": {
+          "C": 346.9764226452482,
+          "k": 1.3
+        },
+        "orifice": {
+          "areaCm2": 39120.177445641835,
+          "W": 2500,
+          "P1": 5.5,
+          "KdEff": 0.975,
+          "Kb": 1,
+          "isRD": false
+        },
+        "selection": {
+          "selected": {
+            "letter": "P+",
+            "area": 39120.177445641835,
+            "nonStandard": true
+          },
+          "areaCm2": 39120.177445641835,
+          "margin": 1
+        },
+        "backpress": {
+          "ratio": 0.09090909090909091,
+          "limitSpring": 0.1,
+          "limitPilot": 0.3
+        }
+      }
+    }
+  },
+  "workflow": {
+    "state": "REVIEW",
+    "decision": {
+      "reasons": [
+        {
+          "field": "headerPressure",
+          "from": 0.3,
+          "to": 0.5,
+          "unit": "barg"
+        }
+      ],
+      "evaluatedAt": "2026-07-08T01:28:39.382Z",
+      "engineVersion": "1.1.0"
+    }
+  },
+  "approvals": []
+}

@@ -1,0 +1,4115 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+  <meta name="description" content="ArcSafe — PSM 안전밸브 사양 결정 및 검토 시스템"/>
+  <meta name="theme-color" content="#0F2B4C"/>
+  <title>ArcSafe — PSM 안전밸브 관리</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&display=swap" rel="stylesheet"/>
+  <style>
+    *,*::before,*::after{box-sizing:border-box}
+    html,body,#root{height:100%;margin:0;padding:0}
+    body{font-family:'Noto Sans KR',sans-serif;background:#F0F4FA}
+    input[type=range]{cursor:pointer}
+    details>summary{list-style:none}
+    details>summary::-webkit-details-marker{display:none}
+    textarea{font-family:'Noto Sans KR',sans-serif}
+    #boot-error{display:none;position:fixed;inset:0;background:#0F2B4C;color:#fff;
+      font-family:monospace;font-size:13px;padding:24px;white-space:pre-wrap;
+      word-break:break-all;z-index:99999;overflow:auto;line-height:1.6}
+    #boot-error.show{display:block}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<div id="boot-error"></div>
+<script>
+  // 전역 에러 캐치 — 화면이 안 넘어갈 때 원인을 사용자가 직접 볼 수 있게
+  window.addEventListener('error', function(e) {
+    var box = document.getElementById('boot-error');
+    box.className = 'show';
+    box.textContent = '[ERROR] BUILD:1c10244f5702\n\n' +
+      'message: ' + e.message + '\n' +
+      'file: ' + e.filename + '\n' +
+      'line: ' + e.lineno + ':' + e.colno + '\n\n' +
+      (e.error && e.error.stack ? e.error.stack : '');
+  });
+  window.addEventListener('unhandledrejection', function(e) {
+    var box = document.getElementById('boot-error');
+    box.className = 'show';
+    box.textContent = '[PROMISE REJECTION] BUILD:1c10244f5702\n\n' + String(e.reason);
+  });
+</script>
+<script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
+  onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] React 로드 실패 — 네트워크 확인 후 새로고침';"></script>
+<script src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js" crossorigin
+  onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] ReactDOM 로드 실패 — 네트워크 확인 후 새로고침';"></script>
+<script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"
+  onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
+<script type="text/babel" data-presets="react">
+/* ArcSafe | BUILD_HASH:1c10244f5702 | 2026-07-08T01:29:44Z | v0.2.0-asset-master */
+const { useState, useEffect, useRef, useMemo, useCallback } = React;
+const __BUILD_HASH__ = "1c10244f5702";
+
+// ── constants.js ──────────────────────────
+// ════════════════════════════════════════════════════════════════
+//  DESIGN TOKENS
+// ════════════════════════════════════════════════════════════════
+const T = {
+  // 브랜드
+  navy:    "#0F2B4C",  navyMid: "#1A3F6F",  navyLight: "#1E4D8C",
+  blue:    "#1CB0F6",  blueDk:  "#0A91C7",  blueBg:    "#DDF4FF",
+  // 상태
+  green:   "#58CC02",  greenDk: "#46A302",  greenBg:   "#D7FFB8",
+  red:     "#FF4B4B",  redDk:   "#C0392B",  redBg:     "#FFDFE0",
+  orange:  "#FF9600",  orangeBg:"#FFF0D4",
+  yellow:  "#FFC800",  yellowBg:"#FFF8CC",
+  // 뉴트럴
+  white:   "#FFFFFF",  bg:      "#F0F4FA",
+  border:  "#E2E8F0",  gray:    "#AFAFAF",
+  text:    "#1A2332",  sub:     "#64748B",
+  cardBg:  "#FFFFFF",
+};
+
+const font = { mono: "'JetBrains Mono','Courier New',monospace", sans: "'Noto Sans KR',sans-serif" };
+
+// R-201 CO2 반응기 — engine input 기본값
+// InputView, CaseView 양쪽에서 사용 (constants에 위치해 BUILD_ORDER 최상단 보장)
+const R201_DEFAULTS = {
+  W:2500, P1:5.5, P2:0.3, T:373, M:44, k:1.3, Kd:0.975, Kb:1.0, mawp:6.0
+};
+
+
+// ── engine/api520.js ──────────────────────────
+//  ENGINE (pure, stateless — UI 접근 금지)
+// ════════════════════════════════════════════════════════════════
+const ENGINE_VERSION = "1.1.0"; // API 520 Gas + Liquid 계산 지원
+
+const API_CONST = {
+  C_BASE:              520,
+  BACKPRESSURE_SPRING: 0.10,
+  BACKPRESSURE_PILOT:  0.30,
+  RD_KD_FACTOR:        0.9,
+  KD_MIN:              0.9,
+  MARGIN_MIN:          1.0,
+  SIM_MAWP_FACTOR:     1.12,
+  SIM_SPEED_NORMAL:    0.04,
+  SIM_SPEED_RELIEF:    0.08,
+  HISTORY_SIZE:        90,
+};
+
+const API526_ORIFICES = [
+  { letter:"D", area:0.71 },{ letter:"E", area:1.27 },
+  { letter:"F", area:1.98 },{ letter:"G", area:3.24 },
+  { letter:"H", area:5.07 },{ letter:"J", area:8.30 },
+  { letter:"K", area:11.05},{ letter:"L", area:15.32},
+  { letter:"M", area:20.27},{ letter:"N", area:26.0 },
+  { letter:"P", area:42.48},
+];
+
+function validateInputs(inp) {
+  const fields = ["W","P1","P2","T","M","k","Kd","Kb","mawp"];
+  for (const f of fields) {
+    const v = Number(inp[f]);
+    if (isNaN(v) || !isFinite(v)) return { ok: false, field: f, reason: "not_a_number" };
+  }
+  if (inp.P1 <= 0) return { ok: false, field:"P1", reason:"must_be_positive" };
+  if (inp.T  <= 0) return { ok: false, field:"T",  reason:"must_be_positive" };
+  if (inp.M  <= 0) return { ok: false, field:"M",  reason:"must_be_positive" };
+  if (inp.k  <= 1) return { ok: false, field:"k",  reason:"must_be_gt_1" };
+  if (inp.Kd <= 0) return { ok: false, field:"Kd", reason:"must_be_positive" };
+  if (inp.Kb <= 0) return { ok: false, field:"Kb", reason:"must_be_positive" };
+  return { ok: true };
+}
+
+// Engine — 입력만 받고 출력만 반환. 외부 state 접근 금지.
+function api520Engine(inp, deviceType) {
+  const valid = validateInputs(inp);
+  if (!valid.ok) return { valid: false, error: valid };
+
+  const { W, P1, P2, T, M, k, Kd, Kb, mawp } = Object.fromEntries(
+    Object.entries(inp).map(([key, v]) => [key, Number(v)])
+  );
+
+  const Z     = 1.0;
+  const C     = API_CONST.C_BASE * Math.sqrt(k * Math.pow(2/(k+1), (k+1)/(k-1)));
+  const KdEff = deviceType === "ruptureDisk" ? Kd * API_CONST.RD_KD_FACTOR : Kd;
+  const A_m2  = (W / (C * KdEff * Kb)) * Math.sqrt((T * Z) / (M * P1 * P1));
+  const areaCm2 = A_m2 * 1e4;
+
+  const selected = API526_ORIFICES.find(o => o.area >= areaCm2)
+    ?? { letter:"P+", area: areaCm2, nonStandard: true };
+
+  const margin            = selected.area / areaCm2;
+  const backPressureRatio = P2 / P1;
+  const criticalPressRatio= Math.pow(2/(k+1), k/(k-1));
+
+  const checklist = {
+    capacityOK:     selected.area >= areaCm2,
+    backPressureOK: backPressureRatio < API_CONST.BACKPRESSURE_SPRING,
+    mawpOK:         P1 <= mawp,
+    kdOK:           Kd >= API_CONST.KD_MIN,
+    marginOK:       margin >= API_CONST.MARGIN_MIN,
+  };
+
+  const stepData = {
+    fluid:     { M, T, k, criticalPressRatio },
+    cCoeff:    { C, k },
+    orifice:   { areaCm2, W, P1, KdEff, Kb, isRD: deviceType === "ruptureDisk" },
+    selection: { selected, areaCm2, margin },
+    backpress: { ratio: backPressureRatio, limitSpring: API_CONST.BACKPRESSURE_SPRING, limitPilot: API_CONST.BACKPRESSURE_PILOT },
+  };
+
+  return { valid: true, areaCm2, selected, margin, C, backPressureRatio, checklist, stepData };
+}
+
+
+// ── engine/backpressure.js ──────────────────────────
+//  BACKPRESSURE ENGINE (API 521 minimal model, pure, stateless)
+//  Kb는 입력값이 아니라 배출 시스템 설계의 결과값이다.
+// ════════════════════════════════════════════════════════════════
+const BP_CONST = {
+  G:              9.80665,   // m/s²
+  EXIT_K:         0.5,       // exit loss coefficient
+  CHOKED_RATIO:   0.528,     // 임계압력비 근사 (k≈1.3 평균) — 실제는 fluid k로 재계산
+  DARCY_F_DEFAULT:0.02,      // 기본 마찰계수 (turbulent, commercial steel 근사)
+};
+
+// 배관 형상 입력 — InputView에서 사용자가 결정하는 "물리적 사실"
+// (계산값이 아니라 실제 배관 도면 기준 입력)
+function validateGeometry(geo) {
+  const fields = ["L", "D", "fittingsK", "headerPressure"];
+  for (const f of fields) {
+    const v = Number(geo?.[f]);
+    if (isNaN(v) || !isFinite(v)) return { ok:false, field:f, reason:"not_a_number" };
+  }
+  if (geo.D <= 0) return { ok:false, field:"D", reason:"must_be_positive" };
+  if (geo.L <  0) return { ok:false, field:"L", reason:"must_be_non_negative" };
+  if (geo.fittingsK < 0) return { ok:false, field:"fittingsK", reason:"must_be_non_negative" };
+  if (geo.headerPressure < 0) return { ok:false, field:"headerPressure", reason:"must_be_non_negative" };
+  return { ok:true };
+}
+
+// 유체 밀도 근사 (ideal gas, P[bar]→Pa, T[K], M[g/mol])
+// rho = P*M / (R*T) — R = 8314 J/(kmol·K)
+function gasDensity(P_bar, T_K, M_gmol) {
+  const P_Pa = P_bar * 1e5;
+  const R = 8314; // J/(kmol·K), M은 g/mol = kg/kmol 이므로 그대로 사용
+  return (P_Pa * M_gmol) / (R * T_K); // kg/m³
+}
+
+// ── computeBackpressure ───────────────────────────────────────
+// 입력:
+//   W           방출량 kg/h
+//   P1          설정압 barg (set pressure)
+//   T           방출 온도 K
+//   M           분자량 g/mol
+//   k           비열비
+//   geometry: { L, D, fittingsK, headerPressure }
+//     L              배관 길이 m
+//     D              배관 내경 m
+//     fittingsK      fittings K-factor 합산 (elbow, tee, reducer 등)
+//     headerPressure flare/header 정상 압력 barg (superimposed backpressure)
+//
+// 출력: { p_static, p_dynamic, p_total, kb, velocity, choked, status, basis }
+function computeBackpressure(inp, geometry) {
+  const geoValid = validateGeometry(geometry);
+  if (!geoValid.ok) {
+    return { valid:false, error: geoValid };
+  }
+
+  const W  = Number(inp.W);   // kg/h
+  const P1 = Number(inp.P1);  // barg (set pressure)
+  const T  = Number(inp.T);   // K
+  const M  = Number(inp.M);   // g/mol
+  const k  = Number(inp.k);
+
+  if (!P1 || P1 <= 0) {
+    return { valid:false, error:{ field:"P1", reason:"must_be_positive" } };
+  }
+
+  const { L, D, fittingsK, headerPressure } = geometry;
+
+  // ── 1. 밀도 (방출 조건 기준, P1 절대압 근사) ──
+  const P1_abs = P1 + 1.01325; // barg → bara 근사
+  const rho = gasDensity(P1_abs, T, M); // kg/m³
+
+  // ── 2. 유속 ──
+  const W_kgs = W / 3600;               // kg/h → kg/s
+  const A = Math.PI * (D * D) / 4;      // m²
+  const v = A > 0 ? W_kgs / (rho * A) : 0; // m/s
+
+  // ── 3. Choked flow 판정 ──
+  // 임계압력비 = (2/(k+1))^(k/(k-1))
+  const criticalRatio = Math.pow(2/(k+1), k/(k-1));
+  const pressureRatio = headerPressure > 0 ? (headerPressure + 1.01325) / P1_abs : 0;
+  const choked = pressureRatio <= criticalRatio;
+
+  // ── 4. 동적 배압 (Darcy-Weisbach + fittings + exit) ──
+  const dynHead = rho * v * v / 2; // Pa 단위 동압
+  const dP_pipe   = D > 0 ? BP_CONST.DARCY_F_DEFAULT * (L / D) * dynHead : 0;
+  const dP_fit    = fittingsK * dynHead;
+  const dP_exit   = BP_CONST.EXIT_K * dynHead;
+  const p_dynamic_Pa = dP_pipe + dP_fit + dP_exit;
+  const p_dynamic_bar = p_dynamic_Pa / 1e5;
+
+  // ── 5. 정적 배압 (header/flare 압력) ──
+  const p_static = headerPressure;
+
+  // ── 6. 합산 + Kb ──
+  const p_total = p_static + p_dynamic_bar;
+  const kb = P1 > 0 ? Math.max(0, 1 - (p_total / P1) * 0.5) : 1.0;
+  // 참고: 정밀 Kb 곡선은 API 520 Fig.31 실측 데이터 기반이며
+  // 위 식은 P_total/P_set 비율에 대한 1차 근사. 정밀 설계는 제조사 곡선 사용 권장.
+
+  const ratio = p_total / P1;
+  let status, basis;
+  if (ratio < 0.10) {
+    status = "calculated";
+    basis = `P_total/P1 = ${(ratio*100).toFixed(1)}% — 배압 영향 미미. 표준 스프링식 적용 가능.`;
+  } else if (ratio < 0.30) {
+    status = "calculated";
+    basis = `P_total/P1 = ${(ratio*100).toFixed(1)}% — 동적+정적 배압 합산 결과. Kb 보정 적용됨 (Pipe ΔP=${(dP_pipe/1e5).toFixed(3)}bar, Fittings ΔP=${(dP_fit/1e5).toFixed(3)}bar, Exit ΔP=${(dP_exit/1e5).toFixed(3)}bar).`;
+  } else {
+    status = "out_of_range";
+    basis = `P_total/P1 = ${(ratio*100).toFixed(1)}% — 스프링식 적용 범위(30%) 초과. 파일럿식 전환 또는 배관 재설계 검토 필요.`;
+  }
+  if (choked) {
+    basis += ` [Choked flow 감지: 임계압력비 ${(criticalRatio*100).toFixed(1)}% 이하 — 음속 유동 구간]`;
+  }
+
+  return {
+    valid: true,
+    p_static:  Math.round(p_static  * 1000) / 1000,
+    p_dynamic: Math.round(p_dynamic_bar * 1000) / 1000,
+    p_total:   Math.round(p_total   * 1000) / 1000,
+    kb:        Math.round(kb * 1000) / 1000,
+    velocity:  Math.round(v * 100) / 100,
+    choked,
+    criticalRatio: Math.round(criticalRatio * 1000) / 1000,
+    breakdown: {
+      dP_pipe_bar:  Math.round(dP_pipe/1e5 * 1000) / 1000,
+      dP_fit_bar:   Math.round(dP_fit/1e5  * 1000) / 1000,
+      dP_exit_bar:  Math.round(dP_exit/1e5 * 1000) / 1000,
+      rho_kgm3:     Math.round(rho * 100) / 100,
+    },
+    status,
+    basis,
+  };
+}
+
+
+// ── engine/evidence.js ──────────────────────────
+//  EVIDENCE LAYER — Engine stepData → 근거 텍스트
+// ════════════════════════════════════════════════════════════════
+function buildEvidence(sd) {
+  if (!sd) return [];
+  const { fluid, cCoeff, orifice, selection, backpress } = sd;
+  return [
+    {
+      id:1, title:"유체 물성 확인",
+      formula:"M, T, k 입력값 확인",
+      result:`M = ${fluid.M} g/mol | T = ${fluid.T} K | k = ${fluid.k}`,
+      detail:`비열비 k=${fluid.k} 기준 임계압력비 = (2/(k+1))^(k/(k-1)) = ${fluid.criticalPressRatio.toFixed(4)}`,
+      ok:true,
+    },
+    {
+      id:2, title:"C 계수 계산 (API 520)",
+      formula:`C = ${API_CONST.C_BASE} × √( k × (2/(k+1))^((k+1)/(k-1)) )`,
+      result:`C = ${cCoeff.C.toFixed(2)}`,
+      detail:`k=${cCoeff.k}일 때 API 520 기준 C계수 = ${cCoeff.C.toFixed(2)}. 이 값이 클수록 동일 면적에서 더 많은 유량 방출 가능.`,
+      ok:true,
+    },
+    {
+      id:3, title:"필요 오리피스 면적",
+      formula:"A = (W / (C × Kd_eff × Kb)) × √(T×Z / (M×P1²))",
+      result:`A_required = ${orifice.areaCm2.toFixed(4)} cm²`,
+      detail:`W=${orifice.W} kg/h, P1=${orifice.P1} barg, Kd_eff=${orifice.KdEff.toFixed(3)}, Kb=${orifice.Kb}${orifice.isRD ? ` (럽처디스크 보정계수 ×${API_CONST.RD_KD_FACTOR} 적용)` : ""}`,
+      ok: orifice.areaCm2 > 0,
+    },
+    {
+      id:4, title:"API 526 표준 오리피스 선정",
+      formula:"A_selected ≥ A_required",
+      result:`${selection.selected.letter} 오리피스 | ${selection.selected.area} cm² ≥ ${selection.areaCm2.toFixed(4)} cm²${selection.selected.nonStandard ? " ⚠ 비표준" : ""}`,
+      detail:`여유율 = ${selection.margin.toFixed(3)}×${selection.selected.nonStandard ? " — 표준 규격 초과. 특수 제작 또는 병렬 설치 검토 필요." : ""}`,
+      ok: !selection.selected.nonStandard && selection.selected.area >= selection.areaCm2,
+    },
+    {
+      id:5, title:"Back Pressure 검증",
+      formula:`P2/P1 < ${(API_CONST.BACKPRESSURE_SPRING*100).toFixed(0)}% (스프링식) / ${(API_CONST.BACKPRESSURE_PILOT*100).toFixed(0)}% (파일럿식)`,
+      result:`P2/P1 = ${(backpress.ratio*100).toFixed(1)}% → ${backpress.ratio < backpress.limitSpring ? "스프링식 적합 ✓" : backpress.ratio < backpress.limitPilot ? "파일럿식 검토 필요 ⚠" : "초과 ✗"}`,
+      detail:`Back Pressure가 설정압력의 ${(backpress.limitSpring*100).toFixed(0)}% 초과 시 스프링식 용량 보정 필요(Kb). ${(backpress.limitPilot*100).toFixed(0)}% 초과 시 파일럿식 전환 검토.`,
+      ok: backpress.ratio < backpress.limitPilot,
+    },
+  ];
+}
+
+
+// ── snapshot/create.js ──────────────────────────
+//  SNAPSHOT — Object.freeze, 불변
+//  3-레이어 + assetRefs + workflowDecision trace
+// ════════════════════════════════════════════════════════════════
+
+function _hashResult(inputs, result) {
+  const str = JSON.stringify({
+    inputs, areaCm2: result.areaCm2, selected: result.selected?.letter
+  });
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+function _assetHash(equipment, dischargeSystem) {
+  const eq = equipment ? {
+    tag: equipment.tag, mawp: equipment.mawp,
+    setPressure: equipment.setPressure, orifice: equipment.orifice,
+    deviceType: equipment.deviceType,
+  } : null;
+  const ds = dischargeSystem ? {
+    name: dischargeSystem.name, L: dischargeSystem.L,
+    D: dischargeSystem.D, fittingsK: dischargeSystem.fittingsK,
+    headerPressure: dischargeSystem.headerPressure,
+    destination: dischargeSystem.destination,
+  } : null;
+  const str = JSON.stringify({ eq, ds });
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+const SNAPSHOT_ENGINE_VERSION = "1.1.0";
+
+// Snapshot이 기록하는 trigger fields — 감사 시 "어떤 규칙으로 판단했는지" 재현용
+const WORKFLOW_TRIGGER_FIELDS_SNAPSHOT = [
+  "headerPressure","L","D","fittingsK","destination",
+  "setPressure","mawp","orifice","deviceType",
+];
+
+function createSnapshot({ caseId, valveTag, deviceType, inputs, engineResult,
+                          equipment, dischargeSystem, workflowDecision }) {
+  if (ENGINE_VERSION !== SNAPSHOT_ENGINE_VERSION) {
+    throw new Error(
+      `INVALID_STATE: engine version mismatch. ` +
+      `engine=${ENGINE_VERSION}, snapshot expects=${SNAPSHOT_ENGINE_VERSION}.`
+    );
+  }
+
+  const resultHash       = _hashResult(inputs, engineResult);
+  const assetFingerprint = _assetHash(equipment, dischargeSystem);
+  // evaluatedAt은 Snapshot 생성 시점에서 결정 — Engine이 아닌 증거 패키지의 책임
+  const evaluatedAt      = new Date().toISOString();
+
+  // snapshotHash — Approval 서명 대상. Snapshot 핵심 내용의 fingerprint.
+  // 승인 후 Snapshot 내용이 바뀌면 이 값과 달라져 서명 검증 실패 감지 가능.
+  function _snapHash(id, rHash, aFP, ev, wfState) {
+    const str = JSON.stringify({ id, result_hash:rHash, assetFingerprint:aFP,
+                                  evaluatedAt:ev, workflow:wfState });
+    let h = 0;
+    for (let i = 0; i < str.length; i++) h = (Math.imul(31,h)+str.charCodeAt(i))|0;
+    return (h>>>0).toString(16).padStart(8,'0');
+  }
+
+  const snap = {  // eslint-disable-line prefer-const
+    id:             `SNAP-${caseId}-${Date.now()}`,
+    createdAt:      evaluatedAt,
+    caseId,
+    valveTag,
+    deviceType,
+    engine_version: ENGINE_VERSION,
+    result_hash:    resultHash,
+
+    // MOC 감지용 — 검토 시점 Asset 식별자 + Revision
+    assetRefs: Object.freeze({
+      equipmentId:         equipment?.id        || null,
+      equipmentTag:        equipment?.tag        || null,
+      equipmentRevision:   equipment?.revision   ?? null,
+      dischargeSystemId:   dischargeSystem?.id   || null,
+      dischargeSystemName: dischargeSystem?.name || null,
+      dischargeRevision:   dischargeSystem?.revision ?? null,
+      assetFingerprint,
+    }),
+
+    // Workflow 결정 trace — 감사 시 재현 가능한 불변 기록
+    // Engine이 결정한 값 그대로. UI가 수정 불가.
+    workflowDecision: workflowDecision ? Object.freeze({
+      state:         workflowDecision.state,
+      evaluatedAt,                             // Snapshot 생성 시점 — 증거 패키지 책임
+      engineVersion: workflowDecision.engineVersion || ENGINE_VERSION,
+      reasons:       Object.freeze([...(workflowDecision.reasons || [])]),
+      triggerFields: Object.freeze([...WORKFLOW_TRIGGER_FIELDS_SNAPSHOT]),
+    }) : null,
+
+    // 3-레이어 불변 복사본
+    equipment:       equipment       ? Object.freeze({ ...equipment })       : null,
+    dischargeSystem: dischargeSystem ? Object.freeze({ ...dischargeSystem }) : null,
+    inputs:          Object.freeze({ ...inputs }),
+    result:          Object.freeze({ ...engineResult }),
+    evidence:        Object.freeze(buildEvidence(engineResult.stepData)),
+    workflow:        workflowDecision?.state || "INSPECTION",
+  };
+  // snapshotHash는 id/result_hash/assetFingerprint/evaluatedAt/workflow가 확정된 후 계산
+  const snapshotHash = _snapHash(
+    snap.id, snap.result_hash, snap.assetRefs.assetFingerprint,
+    snap.evaluatedAt, snap.workflow
+  );
+  // Object.freeze 전에 snapshotHash 주입
+  snap.snapshotHash = snapshotHash;
+  return Object.freeze(snap);
+}
+
+// detectMOC → engine/workflow_engine.js 로 이동
+// Snapshot은 데이터 저장만 담당. 상태 판정은 Engine 책임.
+
+
+// ── engine/workflow_engine.js ──────────────────────────
+//  WORKFLOW ENGINE (pure, stateless)
+//  결정 계층:
+//    detectMOC()          — Fact    : 무엇이 바뀌었나
+//    evaluateSafetyImpact() — Analysis: 안전성에 영향을 주는가
+//    computeWorkflowState() — Policy  : 최종 workflow 상태 결정
+//
+//  계약:
+//    detectMOC()가 반환한 diff 객체는 이후 함수에서 재조립 금지.
+//    { field, from, to, unit } 그대로 전달.
+// ════════════════════════════════════════════════════════════════
+
+// ── _wfAssetHash (내부 전용) ──────────────────────────────────
+function _wfAssetHash(equipment, dischargeSystem) {
+  const eq = equipment ? {
+    tag: equipment.tag, mawp: equipment.mawp,
+    setPressure: equipment.setPressure, orifice: equipment.orifice,
+    deviceType: equipment.deviceType,
+  } : null;
+  const ds = dischargeSystem ? {
+    name: dischargeSystem.name, L: dischargeSystem.L,
+    D: dischargeSystem.D, fittingsK: dischargeSystem.fittingsK,
+    headerPressure: dischargeSystem.headerPressure,
+    destination: dischargeSystem.destination,
+  } : null;
+  const str = JSON.stringify({ eq, ds });
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+// ── LAYER 1: detectMOC — Fact ─────────────────────────────────
+// 반환값 스키마 (불변 계약):
+//   { changed: boolean, diffs: Array<{ field, from, to, unit }> }
+// 이 스키마를 변경하면 MOC_SCHEMA_001 contract test가 실패한다.
+function detectMOC(snap, currentEquipment, currentDischargeSystem) {
+  if (!snap?.assetRefs) return { changed: false, diffs: [] };
+
+  const currentFP = _wfAssetHash(currentEquipment, currentDischargeSystem);
+  if (currentFP === snap.assetRefs.assetFingerprint) {
+    return { changed: false, diffs: [] };
+  }
+
+  const diffs = [];
+  const eq  = snap.equipment;
+  const ds  = snap.dischargeSystem;
+  const ceq = currentEquipment;
+  const cds = currentDischargeSystem;
+
+  if (eq && ceq) {
+    if (eq.mawp        !== ceq.mawp)        diffs.push({ field:"mawp",        from:eq.mawp,        to:ceq.mawp,        unit:"barg" });
+    if (eq.setPressure !== ceq.setPressure) diffs.push({ field:"setPressure", from:eq.setPressure, to:ceq.setPressure, unit:"barg" });
+    if (eq.orifice     !== ceq.orifice)     diffs.push({ field:"orifice",     from:eq.orifice,     to:ceq.orifice,     unit:"" });
+    if (eq.deviceType  !== ceq.deviceType)  diffs.push({ field:"deviceType",  from:eq.deviceType,  to:ceq.deviceType,  unit:"" });
+  }
+  if (ds && cds) {
+    if (ds.headerPressure !== cds.headerPressure) diffs.push({ field:"headerPressure", from:ds.headerPressure, to:cds.headerPressure, unit:"barg" });
+    if (ds.L              !== cds.L)              diffs.push({ field:"L",              from:ds.L,              to:cds.L,              unit:"m" });
+    if (ds.D              !== cds.D)              diffs.push({ field:"D",              from:ds.D,              to:cds.D,              unit:"m" });
+    if (ds.fittingsK      !== cds.fittingsK)      diffs.push({ field:"fittingsK",      from:ds.fittingsK,      to:cds.fittingsK,      unit:"" });
+    if (ds.destination    !== cds.destination)    diffs.push({ field:"destination",    from:ds.destination,    to:cds.destination,    unit:"" });
+  }
+
+  return { changed: diffs.length > 0, diffs };
+}
+
+// ── LAYER 2: evaluateSafetyImpact — Analysis ─────────────────
+// detectMOC()의 diffs를 받아 안전성 영향 여부를 평가.
+// diff 객체를 재조립하지 않고 그대로 사용.
+// 반환값: { requiresReview: boolean, triggerDiffs: diff[] }
+const WORKFLOW_TRIGGER_FIELDS = [
+  "headerPressure", "L", "D", "fittingsK", "destination",
+  "setPressure", "mawp", "orifice", "deviceType",
+];
+
+function evaluateSafetyImpact(diffs) {
+  if (!diffs || diffs.length === 0) {
+    return { requiresReview: false, triggerDiffs: [] };
+  }
+  // diff 객체 재조립 금지 — 원본 참조만 전달
+  const triggerDiffs = diffs.filter(d => WORKFLOW_TRIGGER_FIELDS.includes(d.field));
+  return {
+    requiresReview: triggerDiffs.length > 0,
+    triggerDiffs,   // detectMOC()가 만든 객체 그대로
+  };
+}
+
+// ── LAYER 3: computeWorkflowState — Policy ───────────────────
+// 최종 workflow 상태 결정. diff 객체를 생성하지 않음.
+// detectMOC() → evaluateSafetyImpact() 결과만 사용.
+//
+// 반환값:
+//   {
+//     state: string,
+//     reasons: diff[],      — detectMOC 원본 참조 (재조립 없음)
+//     evaluatedAt: string,  — ISO timestamp
+//     engineVersion: string,
+//   }
+// Engine은 결정만 반환. 시간(evaluatedAt)은 Snapshot 생성 시점에서 추가.
+// 반환값에 evaluatedAt 없음 — createSnapshot()이 증거 패키지로 조립.
+function computeWorkflowState(previousSnapshot, currentEquipment, currentDischargeSystem) {
+
+  // Policy 1: 최초 검토
+  if (!previousSnapshot) {
+    return { state:"DRAFT", reasons:[], engineVersion:ENGINE_VERSION };
+  }
+
+  // Policy 2: APPROVED / CLOSED — Engine이 바꾸지 않음
+  if (["APPROVED","CLOSED"].includes(previousSnapshot.workflow)) {
+    return { state:previousSnapshot.workflow, reasons:[], engineVersion:ENGINE_VERSION };
+  }
+
+  // Fact: 무엇이 바뀌었나
+  const mocResult = detectMOC(previousSnapshot, currentEquipment, currentDischargeSystem);
+
+  if (!mocResult.changed) {
+    return { state:previousSnapshot.workflow, reasons:[], engineVersion:ENGINE_VERSION };
+  }
+
+  // Analysis: 안전성에 영향을 주는가
+  const impact = evaluateSafetyImpact(mocResult.diffs);
+
+  // Policy 3: 계산 영향 변경 → REVIEW_REQUIRED
+  if (impact.requiresReview) {
+    return {
+      state:         "REVIEW_REQUIRED",
+      reasons:       impact.triggerDiffs,
+      engineVersion: ENGINE_VERSION,
+    };
+  }
+
+  // Policy 4: 비계산 변경 → INSPECTION (재확인 필요)
+  return {
+    state:         "INSPECTION",
+    reasons:       mocResult.diffs,
+    engineVersion: ENGINE_VERSION,
+  };
+}
+
+
+// ── workflow/index.js ──────────────────────────
+//  WORKFLOW STATE MACHINE
+//  DRAFT → INSPECTION → REVIEW → APPROVED → CLOSED
+//  언제든 MOC 감지 시 → REVIEW_REQUIRED (자동 전환)
+// ════════════════════════════════════════════════════════════════
+const WF_TRANSITIONS = {
+  DRAFT:            ["INSPECTION"],
+  INSPECTION:       ["REVIEW", "ACTION_REQUIRED"],
+  REVIEW:           ["APPROVED", "ACTION_REQUIRED"],
+  ACTION_REQUIRED:  ["INSPECTION"],
+  APPROVED:         ["CLOSED"],
+  CLOSED:           [],
+  // MOC 감지 시 자동 진입 — 어느 상태에서도 전환 가능
+  REVIEW_REQUIRED:  ["INSPECTION"],
+};
+
+const WF_LABEL = {
+  DRAFT:            "초안",
+  INSPECTION:       "검토 중",
+  REVIEW:           "승인 대기",
+  ACTION_REQUIRED:  "조치 필요",
+  APPROVED:         "승인 완료",
+  CLOSED:           "종결",
+  REVIEW_REQUIRED:  "재검토 필요",
+};
+
+const WF_COLOR = {
+  DRAFT:            "#AFAFAF",
+  INSPECTION:       "#1CB0F6",
+  REVIEW:           "#FFC800",
+  ACTION_REQUIRED:  "#FF4B4B",
+  APPROVED:         "#58CC02",
+  CLOSED:           "#64748B",
+  REVIEW_REQUIRED:  "#FF4B4B",  // 빨간색 — 주의 필요
+};
+
+// Review Trigger 판정 → engine/workflow_engine.js 로 이동
+// WORKFLOW_TRIGGER_FIELDS + computeWorkflowState() 참조
+// workflow/index.js는 상태 정의(레이블/색상/전환)만 담당
+
+
+// ── approval/crypto.js ──────────────────────────
+//  APPROVAL CRYPTO
+//  전자서명 — Web Crypto API(SubtleCrypto) 기반 SHA-256.
+//  이 파일은 순수 서명/검증 계산만 담당한다.
+//  누가 승인할 수 있는지, 중복 승인인지 같은 정책은 service.js/validator.js가 처리.
+//
+//  계약:
+//    CRYPTO-001: canonicalPayload()는 필드 순서·구분자가 고정된다.
+//                순서가 바뀌면 내용이 같아도 다른 서명이 나온다.
+//    CRYPTO-002: signApproval() / verifySignature()는 async다.
+//                Web Crypto API(subtle.digest)는 Promise 기반이라 동기화 불가.
+//    CRYPTO-003: 서명 대상은 snapshotHash + decision + comment + signer +
+//                timestamp + workflowState 전부. comment도 서명 대상이다 —
+//                승인/반려 사유는 의견이 아니라 판단 근거이며 PSM 감사에서
+//                증거로 취급된다.
+// ════════════════════════════════════════════════════════════════
+
+// ── canonicalPayload ───────────────────────────────────────────
+// 서명 생성과 검증 양쪽에서 반드시 이 함수만 사용해야 한다.
+// NUL(\u0000) 구분자 사용 — 필드 값 안에 나타날 가능성이 사실상 없어
+// "ab"+"c" 와 "a"+"bc" 같은 concatenation ambiguity를 막는다.
+function canonicalPayload(record) {
+  return [
+    record.snapshotHash  || "",
+    record.decision      || "",
+    record.comment       || "",
+    record.signer        || "",
+    record.timestamp     || "",
+    record.workflowState || "",
+  ].join("\u0000");
+}
+
+// ── sha256Hex ──────────────────────────────────────────────────
+async function sha256Hex(message) {
+  const data   = new TextEncoder().encode(message);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(digest))
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// ── signApproval ───────────────────────────────────────────────
+// record: { snapshotHash, decision, comment, signer, timestamp, workflowState }
+// 반환: signature (hex string, 64자)
+async function signApproval(record) {
+  return sha256Hex(canonicalPayload(record));
+}
+
+// ── verifySignature ────────────────────────────────────────────
+// record.signature가 나머지 필드로부터 재계산한 값과 일치하는지 확인.
+// 필드 하나라도 서명 이후 바뀌면 불일치 — 즉 위변조 탐지.
+async function verifySignature(record) {
+  if (!record || !record.signature) {
+    return { valid: false, reason: "CRYPTO-002: signature missing" };
+  }
+  const recomputed = await signApproval(record);
+  if (recomputed !== record.signature) {
+    return {
+      valid: false,
+      reason: "CRYPTO-003: signature mismatch — record fields altered after signing",
+      expected:   record.signature,
+      recomputed,
+    };
+  }
+  return { valid: true };
+}
+
+
+// ── approval/record.js ──────────────────────────
+//  APPROVAL RECORD
+//  Snapshot = 영구 불변 (서명 대상)
+//  ApprovalRecord = Snapshot에 대한 별도 증명 (Snapshot을 수정하지 않음)
+//
+//  계약:
+//    APPROVAL-001: snapshotHash 없으면 생성 불가
+//    APPROVAL-002: 승인 후 Snapshot 변경 시 검증 실패
+//    APPROVAL-003: 재승인은 이전 기록을 덮어쓰지 않고 별도 이력으로 남음
+// ════════════════════════════════════════════════════════════════
+
+const APPROVAL_ROLES = ["engineer", "senior_engineer", "safety_manager", "pss_manager"];
+
+// ── validateApprovalInput ─────────────────────────────────────
+function validateApprovalInput(input) {
+  // APPROVAL-001: snapshotHash 필수
+  if (!input.snapshotHash || !input.snapshotHash.trim()) {
+    return { ok: false, contract: "APPROVAL-001",
+             reason: "snapshotHash is required — cannot approve without a snapshot hash" };
+  }
+  if (!input.snapshotId || !input.snapshotId.trim()) {
+    return { ok: false, contract: "APPROVAL-001",
+             reason: "snapshotId is required" };
+  }
+  if (!input.approver || !input.approver.trim()) {
+    return { ok: false, contract: "APPROVAL-001",
+             reason: "approver name is required" };
+  }
+  if (!APPROVAL_ROLES.includes(input.role)) {
+    return { ok: false, contract: "APPROVAL-001",
+             reason: `role must be one of: ${APPROVAL_ROLES.join(", ")}` };
+  }
+  return { ok: true };
+}
+
+// ── createApprovalRecord ──────────────────────────────────────
+// Snapshot을 수정하지 않음 — snapshotHash로 참조만 함
+// approvedAt: 선택적 주입. service.js가 서명 대상 timestamp와 동일한 값을
+// 넘겨서 "record 저장 시각"과 "서명된 시각"이 어긋나지 않도록 한다.
+// 넘기지 않으면(기존 호출 호환) 이 함수가 직접 생성한다.
+function createApprovalRecord(input) {
+  const valid = validateApprovalInput(input);
+  if (!valid.ok) {
+    throw new Error(`${valid.contract}: ${valid.reason}`);
+  }
+
+  return Object.freeze({
+    approvalId:    `APPR-${input.snapshotId}-${Date.now()}`,
+    snapshotId:    input.snapshotId,
+    snapshotHash:  input.snapshotHash,   // 서명 대상 fingerprint
+    approver:      input.approver.trim(),
+    role:          input.role,
+    approvedAt:    input.approvedAt || new Date().toISOString(),
+    comment:       input.comment || "",
+    // APPROVAL-003: 재승인은 별도 approvalId로 생성 (덮어쓰기 없음)
+    // 호출자는 이 record를 기존 배열에 push — replace 금지
+  });
+}
+
+// ── verifyApproval ────────────────────────────────────────────
+// APPROVAL-002: Snapshot의 현재 snapshotHash와 ApprovalRecord의 snapshotHash 비교
+// 일치하지 않으면 승인 이후 Snapshot이 변경된 것
+function verifyApproval(approvalRecord, currentSnapshot) {
+  if (!approvalRecord || !currentSnapshot) {
+    return { valid: false, reason: "approvalRecord or snapshot is null" };
+  }
+  if (approvalRecord.snapshotId !== currentSnapshot.id) {
+    return { valid: false, reason: "snapshotId mismatch — wrong snapshot" };
+  }
+  if (approvalRecord.snapshotHash !== currentSnapshot.snapshotHash) {
+    return {
+      valid:  false,
+      reason: "APPROVAL-002: snapshotHash mismatch — Snapshot was modified after approval",
+      approvedHash: approvalRecord.snapshotHash,
+      currentHash:  currentSnapshot.snapshotHash,
+    };
+  }
+  return { valid: true, approver: approvalRecord.approver, approvedAt: approvalRecord.approvedAt };
+}
+
+// ── ApprovalHistory ───────────────────────────────────────────
+// APPROVAL-003: 재승인은 push — replace 금지
+// 단순 배열 헬퍼. 상태 없음.
+function addApprovalRecord(history, newRecord) {
+  // history는 배열. 새 record를 추가한 새 배열 반환 (mutation 없음).
+  return Object.freeze([...history, newRecord]);
+}
+
+function getLatestApproval(history) {
+  if (!history || history.length === 0) return null;
+  return history[history.length - 1];
+}
+
+
+// ── approval/service.js ──────────────────────────
+//  APPROVAL SERVICE
+//  ApprovalForm(추후 구현)이 호출하는 유일한 진입점.
+//  UI는 hash 계산도, 서명 검증도, workflow 판단도 하지 않는다 — 여기서 전부 처리.
+//
+//  계약:
+//    SERVICE-001: idempotencyKey = SHA256(snapshotHash + signer) 기준으로
+//                 동일 (snapshot version, signer) 조합의 중복 서명을 차단한다.
+//    SERVICE-002: submitApproval()은 서명까지 완료된 ApprovalRecord만
+//                 history에 추가한다 — 미서명 record는 존재할 수 없다.
+//    SERVICE-003: Snapshot은 이 파일에서 절대 생성/수정하지 않는다 (읽기 전용).
+//                 timestamp는 이 함수가 1회만 생성해 approvedAt과 서명 대상
+//                 timestamp 양쪽에 동일하게 사용한다 (두 번 호출 시 값이
+//                 어긋날 수 있으므로 반드시 단일 지점에서 생성).
+// ════════════════════════════════════════════════════════════════
+
+// ── computeIdempotencyKey ───────────────────────────────────────
+async function computeIdempotencyKey(snapshotHash, signer) {
+  return sha256Hex(`${snapshotHash}\u0000${signer}`);
+}
+
+// ── isDuplicateApproval ──────────────────────────────────────────
+// SERVICE-001: 같은 (snapshotHash, signer) 조합으로 이미 서명한 기록이 있는지
+async function isDuplicateApproval(history, snapshotHash, signer) {
+  const key = await computeIdempotencyKey(snapshotHash, signer);
+  for (const rec of (history || [])) {
+    if (rec.idempotencyKey === key) return true;
+  }
+  return false;
+}
+
+// ── submitApproval ─────────────────────────────────────────────
+// input:   { snapshot, decision, comment, signer, role }
+// history: 이 case에 쌓인 기존 ApprovalRecord[] (없으면 [])
+// 반환:    성공 { ok:true, record, history }
+//          실패 { ok:false, contract, reason }
+async function submitApproval(input, history) {
+  const { snapshot, decision, comment, signer, role } = input;
+
+  if (!snapshot || !snapshot.snapshotHash) {
+    return { ok: false, contract: "APPROVAL-001", reason: "snapshot(with snapshotHash) is required" };
+  }
+
+  // SERVICE-003: 단일 timestamp — approvedAt과 서명 대상에 동일하게 사용
+  const now = new Date().toISOString();
+
+  const dup = await isDuplicateApproval(history, snapshot.snapshotHash, signer);
+  if (dup) {
+    return {
+      ok: false, contract: "SERVICE-001",
+      reason: "duplicate approval — this signer already signed this snapshot version",
+    };
+  }
+
+  let base;
+  try {
+    base = createApprovalRecord({
+      snapshotId:   snapshot.id,
+      snapshotHash: snapshot.snapshotHash,
+      approver:     signer,
+      role,
+      comment,
+      approvedAt:   now,
+    });
+  } catch (e) {
+    return { ok: false, contract: "APPROVAL-001", reason: e.message };
+  }
+
+  const signPayload = {
+    snapshotHash:  base.snapshotHash,
+    decision,
+    comment:       base.comment,
+    signer:        base.approver,
+    timestamp:     base.approvedAt,   // base와 동일 값 재사용 — 두 번째 Date() 없음
+    workflowState: snapshot.workflow,
+  };
+  const signature      = await signApproval(signPayload);
+  const idempotencyKey = await computeIdempotencyKey(base.snapshotHash, base.approver);
+
+  const record = Object.freeze({
+    ...base,
+    decision,
+    workflowState: snapshot.workflow,
+    signature,
+    idempotencyKey,
+  });
+
+  return { ok: true, record, history: addApprovalRecord(history || [], record) };
+}
+
+
+// ── sim/step.js ──────────────────────────
+//  SIMULATION (시간 전용 — 계산 없음)
+// ════════════════════════════════════════════════════════════════
+function stepSim(prev, setPoint, mawp) {
+  let { pressure, direction } = prev;
+  const speed = pressure >= setPoint ? API_CONST.SIM_SPEED_RELIEF : API_CONST.SIM_SPEED_NORMAL;
+  pressure += direction * speed;
+  if (pressure >= mawp * API_CONST.SIM_MAWP_FACTOR) direction = -1;
+  if (pressure <= 0.3) direction = 1;
+  return {
+    ...prev,
+    pressure: Math.max(0, pressure),
+    direction,
+    valveOpen: pressure >= setPoint,
+    ratio: Math.min(pressure / (mawp * API_CONST.SIM_MAWP_FACTOR), 1),
+  };
+}
+
+
+// ── asset/schema.js ──────────────────────────
+//  PSV ASSET SCHEMA v2
+//  Equipment = 밸브 자체 (거의 불변, 교체/MOC 시 변경)
+//  DischargeSystem = 배출계통 (배관 개조 MOC 시 변경, 복수 PSV 공유 가능)
+// ════════════════════════════════════════════════════════════════
+
+// ── PSVEquipment ─────────────────────────────────────────────
+function validateEquipment(eq) {
+  if (!eq.tag || !eq.tag.trim())
+    return { ok:false, field:"tag", reason:"required" };
+  if (!eq.mawp || Number(eq.mawp) <= 0)
+    return { ok:false, field:"mawp", reason:"must_be_positive" };
+  if (!eq.setPressure || Number(eq.setPressure) <= 0)
+    return { ok:false, field:"setPressure", reason:"must_be_positive" };
+  if (Number(eq.setPressure) > Number(eq.mawp))
+    return { ok:false, field:"setPressure", reason:"exceeds_mawp" };
+  return { ok:true };
+}
+
+function createEquipment(fields) {
+  const valid = validateEquipment(fields);
+  if (!valid.ok) throw new Error(`EQUIPMENT_INVALID: ${valid.field} — ${valid.reason}`);
+  return Object.freeze({
+    id:           `EQ-${fields.tag.replace(/[^A-Z0-9]/gi,"").toUpperCase()}-${Date.now()}`,
+    tag:          fields.tag.trim(),
+    revision:     Number(fields.revision ?? 1),
+    mocId:        fields.mocId || null,
+    location:     fields.location || "",
+    manufacturer: fields.manufacturer || "",
+    model:        fields.model || "",
+    serialNo:     fields.serialNo || "",
+    deviceType:   fields.deviceType || "safetyValve",
+    mawp:         Number(fields.mawp),
+    setPressure:  Number(fields.setPressure),
+    orifice:      fields.orifice || "",
+    inletSize:    fields.inletSize || "",
+    outletSize:   fields.outletSize || "",
+    installedAt:  fields.installedAt || "",
+    registeredAt: new Date().toISOString(),
+  });
+}
+
+// ── reviseEquipment ────────────────────────────────────────────
+// EQUIPMENT-MOC-001/002: reviseDischargeSystem과 동일한 계약.
+// mocId 없이는 개정 불가, id는 유지, revision만 증가.
+function reviseEquipment(existing, fields) {
+  if (!fields.mocId || !fields.mocId.trim()) {
+    return { ok:false, field:"mocId", reason:"required_for_revision" };
+  }
+  const merged = { ...existing, ...fields, id: existing.id };
+  const valid = validateEquipment(merged);
+  if (!valid.ok) return valid;
+
+  return {
+    ok: true,
+    equipment: Object.freeze({
+      ...existing,
+      ...fields,
+      id:           existing.id,               // identity 유지
+      revision:     Number(existing.revision) + 1,
+      mocId:        fields.mocId.trim(),
+      mawp:         Number(fields.mawp),
+      setPressure:  Number(fields.setPressure),
+      registeredAt: existing.registeredAt,     // 최초 등록일 유지
+      revisedAt:    new Date().toISOString(),
+    }),
+  };
+}
+
+// ── DischargeSystem ──────────────────────────────────────────
+// 하나의 배출계통을 여러 PSV가 공유할 수 있음 (connectedTags)
+function validateDischargeSystem(ds) {
+  if (!ds.name || !ds.name.trim())
+    return { ok:false, field:"name", reason:"required" };
+  if (!ds.D || Number(ds.D) <= 0)
+    return { ok:false, field:"D", reason:"must_be_positive" };
+  if (Number(ds.L) < 0)
+    return { ok:false, field:"L", reason:"must_be_non_negative" };
+  const validDest = ["flare","atm","closed"];
+  if (!validDest.includes(ds.destination))
+    return { ok:false, field:"destination", reason:"must_be_flare_atm_closed" };
+  return { ok:true };
+}
+
+function createDischargeSystem(fields) {
+  const valid = validateDischargeSystem(fields);
+  if (!valid.ok) throw new Error(`DISCHARGE_INVALID: ${valid.field} — ${valid.reason}`);
+  return Object.freeze({
+    id:              `DS-${fields.name.replace(/[^A-Z0-9]/gi,"").toUpperCase()}-${Date.now()}`,
+    name:            fields.name.trim(),
+    revision:        Number(fields.revision ?? 1),
+    mocId:           fields.mocId || null,
+    destination:     fields.destination,
+    L:               Number(fields.L ?? 15),
+    D:               Number(fields.D),
+    fittingsK:       Number(fields.fittingsK ?? 3.0),
+    headerPressure:  Number(fields.headerPressure ?? 0.3),
+    connectedTags:   Array.isArray(fields.connectedTags) ? [...fields.connectedTags] : [],
+    registeredAt:    new Date().toISOString(),
+  });
+}
+
+// ── reviseDischargeSystem ─────────────────────────────────────
+// GEOMETRY-002: 개정은 새 엔티티가 아니라 같은 id의 새 revision.
+// mocId 없이는 개정 불가 — "배관을 왜 바꿨는지" 근거 없는 변경 차단.
+function reviseDischargeSystem(existing, fields) {
+  if (!fields.mocId || !fields.mocId.trim()) {
+    return { ok:false, field:"mocId", reason:"required_for_revision" };
+  }
+  const merged = { ...existing, ...fields, id: existing.id };
+  const valid = validateDischargeSystem(merged);
+  if (!valid.ok) return valid;
+
+  return {
+    ok: true,
+    dischargeSystem: Object.freeze({
+      ...existing,
+      ...fields,
+      id:            existing.id,              // identity 유지 — case 연결 안 끊김
+      revision:      Number(existing.revision) + 1,
+      mocId:         fields.mocId.trim(),
+      L:             Number(fields.L),
+      D:             Number(fields.D),
+      fittingsK:     Number(fields.fittingsK),
+      headerPressure:Number(fields.headerPressure),
+      connectedTags: Array.isArray(fields.connectedTags) ? [...fields.connectedTags] : existing.connectedTags,
+      registeredAt:  existing.registeredAt,     // 최초 등록일 유지
+      revisedAt:     new Date().toISOString(),
+    }),
+  };
+}
+
+// ── Destination 레이블 ────────────────────────────────────────
+const DESTINATION_LABEL = {
+  flare:  "플레어 헤더",
+  atm:    "대기 직방출",
+  closed: "밀폐 시스템",
+};
+
+const DESTINATION_NOTE = {
+  flare:  "대기 연소 처리",
+  atm:    "비독성·비가연성 유체만 허용",
+  closed: "회수·처리 계통",
+};
+
+// ── 샘플 데이터 ──────────────────────────────────────────────
+const SAMPLE_EQUIPMENT = [
+  {
+    tag:"PSV-R201",  location:"반응기 R-201 상부",
+    deviceType:"safetyValve", mawp:6.0, setPressure:5.5, orifice:"P",
+    inletSize:"3\"", outletSize:"4\"",
+    manufacturer:"Crosby", model:"JOS-E",
+  },
+  {
+    tag:"PSV-R302",  location:"N₂ 퍼지 헤더",
+    deviceType:"safetyValve", mawp:13.0, setPressure:12.0, orifice:"J",
+    inletSize:"2\"", outletSize:"3\"",
+    manufacturer:"Anderson Greenwood", model:"Series 81",
+  },
+  {
+    tag:"PSV-S12",   location:"스팀 트레이싱 헤더",
+    deviceType:"safetyValve", mawp:9.0, setPressure:8.0, orifice:"P",
+    inletSize:"3\"", outletSize:"4\"",
+    manufacturer:"Crosby", model:"HB-BP",
+  },
+];
+
+const SAMPLE_DISCHARGE_SYSTEMS = [
+  {
+    name:"LP-FLARE-01",
+    destination:"flare", L:12, D:0.100, fittingsK:2.5, headerPressure:0.3,
+    connectedTags:["PSV-R201"],
+  },
+  {
+    name:"HP-FLARE-01",
+    destination:"flare", L:8,  D:0.075, fittingsK:1.5, headerPressure:0.5,
+    connectedTags:["PSV-R302"],
+  },
+  {
+    name:"STM-FLARE-01",
+    destination:"flare", L:25, D:0.100, fittingsK:4.0, headerPressure:1.2,
+    connectedTags:["PSV-S12"],
+  },
+];
+
+
+// ── case/history.js ──────────────────────────
+//  CASE SNAPSHOT HISTORY
+//  case.snapshotHistory[] = source of truth (append-only)
+//  case.latestSnap        = UI 편의용 pointer (검증에 사용 금지)
+//
+//  계약:
+//    HISTORY-001: appendSnapshot()은 항상 새 배열을 반환한다.
+//                 기존 history 항목은 교체·삭제되지 않는다.
+//    HISTORY-002: resolveSnapshot(hash)은 snapshotHistory에서만 조회한다.
+//                 latestSnap을 신뢰 기준으로 사용하지 않는다.
+//    HISTORY-003: 같은 case 안에서 snapshotHash가 중복되면 안 된다.
+//                 (중복 시 Approval이 어떤 버전을 서명했는지 특정할 수 없다.)
+// ════════════════════════════════════════════════════════════════
+
+// ── appendSnapshot ─────────────────────────────────────────────
+// caseObj를 직접 수정하지 않고 새 caseObj를 반환.
+// snap은 이미 Object.freeze()된 Snapshot이어야 한다 (createSnapshot()의 결과).
+function appendSnapshot(caseObj, snap) {
+  const prevHistory = caseObj.snapshotHistory || [];
+  const nextHistory = Object.freeze([...prevHistory, snap]);
+  return {
+    ...caseObj,
+    snapshotHistory: nextHistory,
+    latestSnap:      snap,        // pointer only — 표시 편의용
+    workflow:        snap.workflow,
+  };
+}
+
+// ── resolveSnapshot ────────────────────────────────────────────
+// snapshotHash로 특정 Snapshot을 조회. latestSnap은 절대 참조하지 않음.
+// Approval 검증은 반드시 이 함수를 통해서만 Snapshot을 가져와야 한다.
+function resolveSnapshot(caseObj, snapshotHash) {
+  if (!caseObj?.snapshotHistory || !snapshotHash) return null;
+  return caseObj.snapshotHistory.find(s => s.snapshotHash === snapshotHash) || null;
+}
+
+// ── getLatestSnapshot ──────────────────────────────────────────
+// latestSnap 포인터 대신 history의 마지막 항목을 기준으로 계산.
+// pointer와 history가 어긋나는 경우(향후 버그) 이 함수가 진짜 값을 반환한다.
+function getLatestSnapshot(caseObj) {
+  const h = caseObj?.snapshotHistory;
+  if (!h || h.length === 0) return null;
+  return h[h.length - 1];
+}
+
+// ── hasDuplicateHash ───────────────────────────────────────────
+// HISTORY-003 검증용. 같은 hash가 두 번 이상 나오면 true.
+function hasDuplicateHash(caseObj) {
+  const h = caseObj?.snapshotHistory || [];
+  const hashes = h.map(s => s.snapshotHash);
+  return new Set(hashes).size !== hashes.length;
+}
+
+
+// ── approval/validator.js ──────────────────────────
+//  APPROVAL VALIDATOR
+//  Report/승인 화면이 ApprovalRecord의 신뢰성을 확인할 때 호출하는 유일한 진입점.
+//  서명 재계산은 crypto.js에, Snapshot 조회는 case/history.js에 위임한다 —
+//  이 파일은 그 결과를 조합해 최종 valid/invalid만 판정한다.
+//
+//  계약:
+//    VALIDATOR-001: record.signature가 record 필드로부터 재계산한 값과
+//                   일치해야 한다 (위변조 탐지).
+//    VALIDATOR-002: record.snapshotHash가 case.snapshotHistory에 실존해야
+//                   한다. resolveSnapshot 실패 = 존재한 적 없는 버전에 대한
+//                   서명 — 즉 승인 대상 자체가 위조되었다는 뜻.
+//    VALIDATOR-003: 전체 승인 이력 안에 동일 idempotencyKey가 2회 이상
+//                   나오면 invalid (SERVICE-001을 우회해 만들어진 기록).
+// ════════════════════════════════════════════════════════════════
+
+async function verifyApprovalRecord(record, caseObj, allApprovals) {
+  if (!record) return { valid: false, reason: "record is null" };
+
+  // VALIDATOR-001: 서명 재계산 (crypto.js에 위임)
+  const sigCheck = await verifySignature({
+    snapshotHash:  record.snapshotHash,
+    decision:      record.decision,
+    comment:       record.comment,
+    signer:        record.approver,
+    timestamp:     record.approvedAt,
+    workflowState: record.workflowState,
+    signature:     record.signature,
+  });
+  if (!sigCheck.valid) {
+    return { valid: false, contract: "VALIDATOR-001", ...sigCheck };
+  }
+
+  // VALIDATOR-002: 서명 대상 Snapshot이 실제로 history에 존재하는지
+  // (UI pointer가 아니라 resolveSnapshot으로만 조회 — HISTORY-002 준수)
+  const targetSnap = resolveSnapshot(caseObj, record.snapshotHash);
+  if (!targetSnap) {
+    return {
+      valid: false, contract: "VALIDATOR-002",
+      reason: "snapshotHash not found in case.snapshotHistory",
+    };
+  }
+
+  // 기존 APPROVAL-002 검증 재사용 (snapshotId 교차 확인)
+  const baseCheck = verifyApproval(record, targetSnap);
+  if (!baseCheck.valid) {
+    return { valid: false, contract: "APPROVAL-002", ...baseCheck };
+  }
+
+  // VALIDATOR-003: idempotency 중복 검사
+  const dupCount = (allApprovals || [])
+    .filter(r => r.idempotencyKey === record.idempotencyKey).length;
+  if (dupCount > 1) {
+    return {
+      valid: false, contract: "VALIDATOR-003",
+      reason: "duplicate idempotencyKey found in approval history",
+    };
+  }
+
+  return {
+    valid: true,
+    approver: record.approver,
+    approvedAt: record.approvedAt,
+    snapshotWorkflow: targetSnap.workflow,
+  };
+}
+
+
+// ── report/schema.js ──────────────────────────
+//  REPORT PACKAGE SCHEMA
+//  Snapshot을 최종 출력(PDF/HTML/JSON)과 분리시키는 계약 레이어.
+//  이 파일은 "형태가 맞는지"만 검증한다 — 계산도, Asset 재조회도, Approval
+//  재판단도 하지 않는다. buildReportPackage()가 만든 결과를 사후 점검할 때만 쓴다.
+//
+//  계약:
+//    REPORT-PKG-002: ReportPackage는 생성 이후 절대 수정되지 않는다(freeze).
+// ════════════════════════════════════════════════════════════════
+
+const REPORT_PACKAGE_VERSION = "1.0.0";
+
+const REPORT_PACKAGE_REQUIRED_KEYS = [
+  "meta", "identity", "asset", "calculation", "workflow", "approvals",
+];
+
+// ── validateReportPackage ──────────────────────────────────────
+// 순수 형태 검증. true/false 판단 로직(계산)이 전혀 없다 — 키 존재 확인뿐.
+function validateReportPackage(pkg) {
+  if (!pkg || typeof pkg !== "object") {
+    return { ok: false, reason: "package is not an object" };
+  }
+  const missing = REPORT_PACKAGE_REQUIRED_KEYS.filter(k => !(k in pkg));
+  if (missing.length > 0) {
+    return { ok: false, reason: `missing keys: ${missing.join(", ")}` };
+  }
+  if (pkg.meta.packageVersion !== REPORT_PACKAGE_VERSION) {
+    return { ok: false, reason: `unsupported packageVersion: ${pkg.meta.packageVersion}` };
+  }
+  if (!pkg.identity.snapshotHash) {
+    return { ok: false, reason: "identity.snapshotHash missing — package has no signable identity" };
+  }
+  return { ok: true };
+}
+
+
+// ── report/createPackage.js ──────────────────────────
+//  REPORT PACKAGE — Snapshot → 불변 export 모델
+//  PDF/HTML/JSON은 전부 이 결과물을 그대로 출력만 한다. 렌더러가 UI 구조에
+//  결합되지 않도록 하는 게 이 파일의 유일한 목적.
+//
+//  계약:
+//    REPORT-PKG-001: 같은 snapshot(+같은 generatedAt) → 항상 같은 package.
+//                    (generatedAt은 "패키지를 만든 시각"이라 순수함수가 직접
+//                    생성하면 결정론이 깨진다 — 호출자가 주입, 기본값은 폴백일 뿐)
+//    REPORT-PKG-002: 결과는 Object.freeze — 이후 어떤 필드도 수정 불가.
+//    REPORT-PKG-003: snapshot 하나만 받는다. currentEquipment/currentDischargeSystem/
+//                    equipments/dischargeSystems 같은 "현재 Asset" 인자는 받지 않는다.
+//                    Asset은 반드시 snapshot에 이미 박제된 값(assetRefs, snapshot.equipment,
+//                    snapshot.dischargeSystem)에서만 읽는다.
+//    REPORT-PKG-004: approvals는 snapshotHash가 일치하는 것만 포함한다.
+//    REPORT-PKG-005: computeBackpressure/calculateKb/detectMOC 등 계산 함수를
+//                    이 파일에서 호출하지 않는다 — snapshot.result를 그대로 옮길 뿐.
+// ════════════════════════════════════════════════════════════════
+
+// ── buildReportPackage ──────────────────────────────────────────
+// snapshot:        createSnapshot()이 만든 frozen Snapshot (필수)
+// opts.approvalRecords:          이 case의 ApprovalRecord[] (없으면 [])
+// opts.approvalVerificationResults: { [approvalId]: {valid, ...} } —
+//                  validator.js(verifyApprovalRecord)가 미리 계산해 넘긴 결과.
+//                  이 함수는 절대 재검증하지 않는다.
+// opts.generatedAt: 패키지 생성 시각 문자열(ISO). 안 주면 이 함수가 생성 —
+//                  결정론 테스트에서는 반드시 명시적으로 넘겨야 한다.
+function buildReportPackage(snapshot, opts) {
+  if (!snapshot || !snapshot.snapshotHash) {
+    return { ok: false, reason: "REPORT-PKG: snapshot(with snapshotHash) is required" };
+  }
+  const { approvalRecords, approvalVerificationResults, generatedAt } = opts || {};
+  const genAt = generatedAt || new Date().toISOString();
+
+  const matchedApprovals = (approvalRecords || [])
+    .filter(a => a.snapshotHash === snapshot.snapshotHash)
+    .map(a => Object.freeze({
+      approvalId:  a.approvalId,
+      signer:      a.approver,
+      role:        a.role,
+      approvedAt:  a.approvedAt,
+      decision:    a.decision,
+      comment:     a.comment,
+      signature:   a.signature,
+      verified:    (approvalVerificationResults || {})[a.approvalId]?.valid ?? null,
+    }));
+
+  const pkg = {
+    meta: Object.freeze({
+      packageVersion: REPORT_PACKAGE_VERSION,
+      generatedAt:    genAt,
+      engineVersion:  snapshot.engine_version,
+    }),
+
+    identity: Object.freeze({
+      caseId:       snapshot.caseId,
+      snapshotId:   snapshot.id,
+      snapshotHash: snapshot.snapshotHash,
+    }),
+
+    asset: Object.freeze({
+      equipment: Object.freeze({
+        id:       snapshot.assetRefs.equipmentId,
+        tag:      snapshot.assetRefs.equipmentTag,
+        revision: snapshot.assetRefs.equipmentRevision,
+        mocId:    snapshot.equipment?.mocId ?? null,
+      }),
+      dischargeSystem: Object.freeze({
+        id:       snapshot.assetRefs.dischargeSystemId,
+        name:     snapshot.assetRefs.dischargeSystemName,
+        revision: snapshot.assetRefs.dischargeRevision,
+        mocId:    snapshot.dischargeSystem?.mocId ?? null,
+        // Backpressure Basis — 감사자가 "이 Kb가 어떤 배관 형상에서 나왔는지"를
+        // 봐야 하므로 snapshot.dischargeSystem(당시 박제된 값)에서 그대로 복사.
+        // 재계산 없음 — REPORT-PKG-005.
+        L:              snapshot.dischargeSystem?.L ?? null,
+        D:              snapshot.dischargeSystem?.D ?? null,
+        fittingsK:      snapshot.dischargeSystem?.fittingsK ?? null,
+        headerPressure: snapshot.dischargeSystem?.headerPressure ?? null,
+        destination:    snapshot.dischargeSystem?.destination ?? null,
+      }),
+      assetFingerprint: snapshot.assetRefs.assetFingerprint,
+    }),
+
+    calculation: Object.freeze({
+      engineVersion: snapshot.engine_version,
+      inputs:        Object.freeze({ ...snapshot.inputs }),   // 재계산 없이 그대로 복사
+      result:        Object.freeze({ ...snapshot.result }),   // 재계산 없이 그대로 복사
+    }),
+
+    workflow: Object.freeze({
+      state: snapshot.workflow,
+      decision: snapshot.workflowDecision ? Object.freeze({
+        reasons:       Object.freeze([...(snapshot.workflowDecision.reasons || [])]),
+        evaluatedAt:   snapshot.workflowDecision.evaluatedAt,
+        engineVersion: snapshot.workflowDecision.engineVersion,
+      }) : null,
+    }),
+
+    approvals: Object.freeze(matchedApprovals),
+  };
+
+  return Object.freeze(pkg);
+}
+
+
+// ── report/renderer/pdf/styles.js ──────────────────────────
+//  PDF STYLES
+//  renderPDF()가 만드는 인쇄용 HTML에 삽입되는 순수 CSS 문자열.
+//  계산/로직 없음 — 스타일 상수만.
+// ════════════════════════════════════════════════════════════════
+const PDF_STYLES = `
+  @page { size: A4; margin: 18mm 16mm; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Pretendard','Malgun Gothic',sans-serif;
+    color: #1a2b3d; font-size: 11px; line-height: 1.5;
+    margin: 0; padding: 0;
+  }
+  .pdf-title { font-size: 18px; font-weight: 900; margin-bottom: 2px; }
+  .pdf-subtitle { font-size: 11px; color: #64748b; margin-bottom: 16px; font-family: monospace; }
+  .pdf-section {
+    border: 1px solid #e2e8f0; border-radius: 6px;
+    margin-bottom: 12px; page-break-inside: avoid;
+  }
+  .pdf-section-title {
+    background: #1a3f6f; color: #fff; font-weight: 700;
+    font-size: 11px; padding: 6px 10px; letter-spacing: 0.5px;
+  }
+  .pdf-section-body { padding: 10px 12px; }
+  .pdf-row {
+    display: flex; justify-content: space-between;
+    padding: 3px 0; border-bottom: 1px dotted #e2e8f0; font-size: 11px;
+  }
+  .pdf-row:last-child { border-bottom: none; }
+  .pdf-row .k { color: #64748b; font-family: monospace; }
+  .pdf-row .v { font-weight: 700; font-family: monospace; }
+  .pdf-badge-ok    { color: #16a34a; font-weight: 700; }
+  .pdf-badge-fail  { color: #dc2626; font-weight: 700; }
+  .pdf-badge-none  { color: #94a3b8; font-weight: 700; }
+  .pdf-footer {
+    margin-top: 20px; padding-top: 8px; border-top: 1px solid #e2e8f0;
+    font-size: 9px; color: #94a3b8; font-family: monospace;
+  }
+  .pdf-reason-item { font-size: 10px; color: #64748b; padding: 2px 0; }
+  @media print {
+    .pdf-no-print { display: none; }
+  }
+`;
+
+
+// ── report/renderer/pdf/template.js ──────────────────────────
+//  PDF TEMPLATE
+//  Presentation Dictionary(raw 값 → 사람이 읽는 라벨) + HTML 문서 조립.
+//  Raw Evidence(ReportPackage) → Presentation Dictionary → HTML, 순서 고정.
+//
+//  계약:
+//    PDF-002: buildPDFHtml(reportPackage) — reportPackage 하나만 받는다.
+//             snapshot/equipment/caseData 등 다른 인자를 받지 않는다.
+//    PDF-004: Asset/Calculation/Workflow/Approval/Integrity 5개 섹션 전부 출력.
+//
+//  이 파일은 renderer 전용 dictionary를 별도로 둔다 — components/report/*의
+//  FLUID_CHOICES/WF_LABEL을 재사용하지 않는다. renderer는 UI 컴포넌트 트리와
+//  완전히 독립적이어야(서버/CLI로 옮겨도 동작) 하기 때문에 의도적으로 중복시킨다.
+// ════════════════════════════════════════════════════════════════
+
+// ── Presentation Dictionary ────────────────────────────────────
+const PDF_FLUID_LABELS = [
+  { M:44, k:1.30, label:"CO₂ — 이산화탄소" },
+  { M:28, k:1.40, label:"N₂ — 질소" },
+  { M:18, k:1.33, label:"Steam — 수증기" },
+  { M:29, k:1.40, label:"Air — 공기" },
+  { M:16, k:1.31, label:"CH₄ — 메탄" },
+];
+
+const PDF_WF_STATE_LABELS = {
+  DRAFT:           "초안",
+  INSPECTION:      "점검 중",
+  REVIEW:          "검토 대기",
+  ACTION_REQUIRED: "조치 필요",
+  APPROVED:        "승인 완료",
+  CLOSED:          "종결",
+};
+
+function _pdfFluidLabel(inputs) {
+  if (!inputs) return "커스텀";
+  const m = PDF_FLUID_LABELS.find(f => f.M === inputs.M && f.k === inputs.k);
+  return m ? m.label : "커스텀 유체 (직접 입력값)";
+}
+
+function _pdfWfLabel(state) {
+  return PDF_WF_STATE_LABELS[state] || state || "—";
+}
+
+function _pdfRow(k, v) {
+  return `<div class="pdf-row"><span class="k">${k}</span><span class="v">${v}</span></div>`;
+}
+
+function _pdfSection(title, bodyHtml) {
+  return `<div class="pdf-section">
+    <div class="pdf-section-title">${title}</div>
+    <div class="pdf-section-body">${bodyHtml}</div>
+  </div>`;
+}
+
+// ── buildPDFHtml ────────────────────────────────────────────────
+// reportPackage 하나만 받는다. 계산/조회 없음 — package 필드를 그대로 문자열로 옮길 뿐.
+function buildPDFHtml(reportPackage) {
+  const pkg = reportPackage;
+
+  const assetBody =
+    _pdfRow("Equipment", `${pkg.asset.equipment.tag || "—"} · Rev.${pkg.asset.equipment.revision ?? "—"}`) +
+    _pdfRow("Equipment MOC", pkg.asset.equipment.mocId || "—") +
+    _pdfRow("Discharge System", `${pkg.asset.dischargeSystem.name || "—"} · Rev.${pkg.asset.dischargeSystem.revision ?? "—"}`) +
+    _pdfRow("Discharge MOC", pkg.asset.dischargeSystem.mocId || "—");
+
+  const calcBody =
+    _pdfRow("Fluid", _pdfFluidLabel(pkg.calculation.inputs)) +
+    _pdfRow("Engine", `API520 v${pkg.calculation.engineVersion}`) +
+    _pdfRow("Selected Orifice", pkg.calculation.result?.selected?.letter || "—") +
+    _pdfRow("Required Area", pkg.calculation.result?.areaCm2 ? `${pkg.calculation.result.areaCm2.toFixed(2)} cm²` : "—") +
+    `<div style="margin-top:6px;font-size:9px;font-weight:700;color:#64748b;letter-spacing:0.5px;">BACKPRESSURE BASIS</div>` +
+    _pdfRow("Header Pressure", pkg.asset.dischargeSystem.headerPressure != null ? `${pkg.asset.dischargeSystem.headerPressure} barg` : "—") +
+    _pdfRow("Pipe Length",     pkg.asset.dischargeSystem.L != null ? `${pkg.asset.dischargeSystem.L} m` : "—") +
+    _pdfRow("Diameter",        pkg.asset.dischargeSystem.D != null ? `${Math.round(pkg.asset.dischargeSystem.D*1000)} mm` : "—") +
+    _pdfRow("Fittings K",      pkg.asset.dischargeSystem.fittingsK ?? "—");
+
+  const reasons = (pkg.workflow.decision?.reasons || [])
+    .map(r => `<div class="pdf-reason-item">· ${r.field} ${r.from}${r.unit||""} → ${r.to}${r.unit||""}</div>`)
+    .join("");
+  const wfBody =
+    _pdfRow("State", _pdfWfLabel(pkg.workflow.state)) +
+    _pdfRow("Evaluated At", (pkg.workflow.decision?.evaluatedAt || "—").slice(0,19).replace("T"," ")) +
+    reasons;
+
+  const approvalBody = pkg.approvals.length === 0
+    ? `<div class="pdf-row"><span class="k">Status</span><span class="pdf-badge-none">서명 없음</span></div>`
+    : pkg.approvals.map(a => {
+        const badgeClass = a.verified === true ? "pdf-badge-ok"
+                          : a.verified === false ? "pdf-badge-fail" : "pdf-badge-none";
+        const badgeText  = a.verified === true ? "✓ 서명 유효"
+                          : a.verified === false ? "✗ 위변조 의심" : "검증 안 됨";
+        return `<div class="pdf-row">
+          <span class="k">${a.signer} (${a.role||"—"})</span>
+          <span class="${badgeClass}">${badgeText}</span>
+        </div>` + _pdfRow("승인일", (a.approvedAt||"").slice(0,10));
+      }).join("");
+
+  const integrityBody =
+    _pdfRow("Snapshot Hash", pkg.identity.snapshotHash) +
+    _pdfRow("Snapshot ID", pkg.identity.snapshotId) +
+    _pdfRow("Case ID", pkg.identity.caseId) +
+    _pdfRow("Report Package Version", pkg.meta.packageVersion) +
+    _pdfRow("Generated At", (pkg.meta.generatedAt||"").slice(0,19).replace("T"," "));
+
+  return `<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8">
+<title>ArcSafe Audit Report — ${pkg.identity.snapshotId}</title>
+<style>${PDF_STYLES}</style>
+</head><body>
+  <div class="pdf-title">PSV 검토 감사 보고서</div>
+  <div class="pdf-subtitle">${pkg.identity.caseId} · ${pkg.identity.snapshotId}</div>
+
+  ${_pdfSection("ASSET", assetBody)}
+  ${_pdfSection("CALCULATION BASIS", calcBody)}
+  ${_pdfSection("WORKFLOW DECISION", wfBody)}
+  ${_pdfSection("APPROVAL", approvalBody)}
+  ${_pdfSection("INTEGRITY", integrityBody)}
+
+  <div class="pdf-footer">
+    ArcSafe Report Package v${pkg.meta.packageVersion} · Engine v${pkg.meta.engineVersion} ·
+    본 문서는 Snapshot ${pkg.identity.snapshotHash}에서 생성되었으며 원본 데이터를 재계산하지 않습니다.
+  </div>
+</body></html>`;
+}
+
+
+// ── report/renderer/pdf/renderPDF.js ──────────────────────────
+//  RENDER PDF
+//  ReportPackage → HTML → 브라우저 인쇄(PDF 저장). React 화면을 print()하지 않는다 —
+//  항상 buildPDFHtml(reportPackage)이 새로 만든 독립 문서를 인쇄한다.
+//
+//  계약:
+//    PDF-001: 이 파일은 계산/재검증 함수를 호출하지 않는다
+//             (computeBackpressure, calculateKb, detectMOC, verifyApprovalRecord 전부 금지).
+//    PDF-002: renderPDF(reportPackage) — 단일 인자. snapshot/equipment/caseData 등
+//             추가 데이터를 받지 않는다.
+//    PDF-003: 유효하지 않은 Package는 절대 렌더링하지 않는다 —
+//             validateReportPackage() 실패 시 즉시 중단.
+// ════════════════════════════════════════════════════════════════
+function renderPDF(reportPackage) {
+  const check = validateReportPackage(reportPackage);
+  if (!check.ok) {
+    return { ok: false, reason: `INVALID_REPORT_PACKAGE: ${check.reason}` };
+  }
+
+  const html = buildPDFHtml(reportPackage);
+
+  const win = window.open("", "_blank");
+  if (!win) {
+    return { ok: false, reason: "팝업이 차단되었습니다 — 브라우저에서 팝업을 허용해주세요" };
+  }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  win.focus();
+
+  const doPrint = () => { try { win.print(); } catch (e) { /* noop */ } };
+  win.onload = doPrint;
+  setTimeout(doPrint, 300); // onload 타이밍을 놓치는 브라우저 대비 백업 트리거
+
+  return { ok: true };
+}
+
+
+// ── components/renderers/index.jsx ──────────────────────────
+//  REPORT RENDERERS (Snapshot projection — UI 컴포넌트 아님)
+// ════════════════════════════════════════════════════════════════
+
+// PipeFlow — Snapshot.result 기준 렌더링
+function PipeFlowRenderer({ snap, sim }) {
+  const { valveOpen, ratio, pressure } = sim;
+  const [offset, setOffset] = useState(0);
+  const deviceType = snap.deviceType;
+  const setPoint   = snap.inputs.P1;
+  const mawp       = snap.inputs.mawp;
+
+  useEffect(() => {
+    const id = setInterval(() => setOffset(o => (o + 3) % 40), 50);
+    return () => clearInterval(id);
+  }, []);
+
+  const pColor     = ratio < 0.65 ? T.green : ratio < 0.88 ? T.yellow : T.red;
+  const orangeColor= T.orange;
+
+  return (
+    <svg viewBox="0 0 700 265" style={{ width:"100%", height:"auto" }}>
+      <defs>
+        <pattern id="fp2" x="0" y="0" width="40" height="20" patternUnits="userSpaceOnUse" patternTransform={`translate(${offset},0)`}>
+          <circle cx="10" cy="10" r="3" fill={T.blue} opacity="0.4"/>
+          <circle cx="30" cy="10" r="3" fill={T.blue} opacity="0.4"/>
+        </pattern>
+        <pattern id="dp2" x="0" y="0" width="40" height="20" patternUnits="userSpaceOnUse" patternTransform={`translate(${valveOpen?offset:0},0)`}>
+          <circle cx="10" cy="10" r="3" fill={T.orange} opacity={valveOpen?0.5:0.08}/>
+          <circle cx="30" cy="10" r="3" fill={T.orange} opacity={valveOpen?0.5:0.08}/>
+        </pattern>
+        <filter id="sh2"><feDropShadow dx="0" dy="3" stdDeviation="4" floodColor="#00000020"/></filter>
+        <filter id="gl2"><feGaussianBlur stdDeviation="4" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      </defs>
+
+      <rect width="700" height="265" fill="#EEF4FF" rx="16"/>
+
+      {/* VESSEL */}
+      <rect x="14" y="78" width="62" height="104" rx="10" fill={T.blueBg} stroke={T.blue} strokeWidth="2.5" filter="url(#sh2)"/>
+      <rect x="14" y={78+104*(1-ratio)} width="62" height={104*ratio} rx="10" fill={pColor} opacity="0.3" style={{transition:"height 0.1s,y 0.1s"}}/>
+      <text x="45" y="197" textAnchor="middle" fontSize="9" fontWeight="700" fill={T.sub} fontFamily="monospace">VESSEL</text>
+      <text x="45" y="209" textAnchor="middle" fontSize="8" fill={pColor} fontFamily="monospace" fontWeight="700">{pressure.toFixed(1)}b</text>
+
+      {/* 게이지 */}
+      <circle cx="45" cy="58" r="23" fill={T.white} stroke={pColor} strokeWidth="3" filter="url(#sh2)"/>
+      <path d={`M45 58 L${45+17*Math.cos((ratio*180-210)*Math.PI/180)} ${58+17*Math.sin((ratio*180-210)*Math.PI/180)}`} stroke={pColor} strokeWidth="3" strokeLinecap="round"/>
+      <circle cx="45" cy="58" r="3" fill={pColor}/>
+      <text x="45" y="87" textAnchor="middle" fontSize="8" fill={T.sub} fontFamily="monospace">PI-01</text>
+
+      {/* 업스트림 */}
+      <rect x="76" y="112" width="162" height="32" rx="7" fill={T.white} stroke={T.border} strokeWidth="2"/>
+      <rect x="78" y="114" width="158" height="28" rx="6" fill="url(#fp2)" opacity={Math.min(ratio*1.3,1)}/>
+      <text x="157" y="106" textAnchor="middle" fontSize="10" fontWeight="700" fill={T.blue} fontFamily="monospace">UPSTREAM</text>
+      <text x="157" y="157" textAnchor="middle" fontSize="9" fill={T.sub} fontFamily="monospace">P1 = {pressure.toFixed(2)} barg</text>
+
+      {/* 밸브 */}
+      {deviceType === "safetyValve" ? (
+        <g>
+          <rect x="240" y="98" width="66" height="62" rx="10"
+            fill={valveOpen?T.orangeBg:T.blueBg} stroke={valveOpen?T.orange:T.blue}
+            strokeWidth="3" filter="url(#sh2)" style={{transition:"all 0.3s"}}/>
+          {[0,1,2,3].map(i=>(
+            <path key={i} d={`M${250+i*10} 108 Q${255+i*10} 119 ${260+i*10} 108`}
+              fill="none" stroke={valveOpen?T.orange:T.blue} strokeWidth="1.5"/>
+          ))}
+          <rect x="254" y={valveOpen?148:155} width="25" height="7" rx="3"
+            fill={valveOpen?T.orange:T.blue} filter={valveOpen?"url(#gl2)":"none"} style={{transition:"all 0.25s"}}/>
+          {valveOpen && <>
+            <line x1="273" y1="98" x2="273" y2="68" stroke={T.orange} strokeWidth="2.5" strokeDasharray="4,2"/>
+            <polygon points="273,56 265,72 281,72" fill={T.orange}/>
+          </>}
+          <text x="273" y="173" textAnchor="middle" fontSize="9" fontWeight="700"
+            fill={valveOpen?T.orange:T.blue} fontFamily="monospace">{valveOpen?"OPEN ▲":"S.V ✅"}</text>
+          <text x="273" y="185" textAnchor="middle" fontSize="8" fill={T.yellow} fontFamily="monospace">Set: {setPoint}b</text>
+        </g>
+      ) : (
+        <g>
+          <rect x="240" y="103" width="66" height="52" rx="10"
+            fill={valveOpen?"#FFDFE0":"#F1E0FF"} stroke={valveOpen?T.red:"#CE82FF"}
+            strokeWidth="3" filter="url(#sh2)" style={{transition:"all 0.3s"}}/>
+          {valveOpen ? <>
+            <line x1="250" y1="113" x2="296" y2="145" stroke={T.red} strokeWidth="4" strokeLinecap="round"/>
+            <line x1="296" y1="113" x2="250" y2="145" stroke={T.red} strokeWidth="4" strokeLinecap="round"/>
+            <line x1="273" y1="103" x2="273" y2="68" stroke={T.red} strokeWidth="2.5" strokeDasharray="4,2"/>
+            <polygon points="273,56 265,72 281,72" fill={T.red}/>
+          </> : <ellipse cx="273" cy="129" rx="23" ry="13" fill="none" stroke="#CE82FF" strokeWidth="2.5"/>}
+          <text x="273" y="168" textAnchor="middle" fontSize="9" fontWeight="700"
+            fill={valveOpen?T.red:"#CE82FF"} fontFamily="monospace">{valveOpen?"BURST 💥":"R.D ✅"}</text>
+          <text x="273" y="180" textAnchor="middle" fontSize="8" fill={T.yellow} fontFamily="monospace">Burst: {setPoint}b</text>
+        </g>
+      )}
+
+      {/* 다운스트림 */}
+      <rect x="307" y="112" width="162" height="32" rx="7" fill={T.white} stroke={T.border} strokeWidth="2"/>
+      <rect x="309" y="114" width="158" height="28" rx="6" fill="url(#dp2)" opacity={valveOpen?1:0.3}/>
+      <text x="388" y="106" textAnchor="middle" fontSize="10" fontWeight="700"
+        fill={valveOpen?T.orange:T.gray} fontFamily="monospace">DOWNSTREAM</text>
+      <text x="388" y="157" textAnchor="middle" fontSize="9" fill={T.sub} fontFamily="monospace">
+        {valveOpen?"▶ 방출 중":"── 정상 운전"}
+      </text>
+
+      {/* 플레어 */}
+      <rect x="472" y="88" width="52" height="72" rx="8" fill={T.yellowBg} stroke={T.yellow} strokeWidth="2" filter="url(#sh2)"/>
+      <rect x="488" y="38" width="18" height="50" rx="4" fill={T.yellowBg} stroke={T.yellow} strokeWidth="2"/>
+      {valveOpen && <>
+        <ellipse cx="497" cy="28" rx="10" ry="14" fill={T.yellow} opacity="0.85" filter="url(#gl2)"/>
+        <ellipse cx="497" cy="20" rx="6" ry="10" fill="#FFA500" opacity="0.9"/>
+        <ellipse cx="497" cy="13" rx="4" ry="7" fill={T.red} opacity="0.7"/>
+      </>}
+      <text x="497" y="172" textAnchor="middle" fontSize="9" fontWeight="700" fill={T.yellow} fontFamily="monospace">FLARE</text>
+
+      {/* 상태 패널 */}
+      <rect x="540" y="86" width="144" height="114" rx="13" fill={T.white} stroke={T.border} strokeWidth="2" filter="url(#sh2)"/>
+      <text x="612" y="104" textAnchor="middle" fontSize="9" fontWeight="700" fill={T.sub} fontFamily="monospace">PRESSURE STATUS</text>
+      <rect x="555" y="112" width="114" height="13" rx="6" fill="#F0F4FA"/>
+      <rect x="555" y="112" width={Math.min(ratio*114,114)} height="13" rx="6" fill={pColor} style={{transition:"width 0.1s"}}/>
+      <text x="612" y="142" textAnchor="middle" fontSize="22" fontWeight="900" fill={pColor} fontFamily="monospace">{pressure.toFixed(1)}</text>
+      <text x="612" y="156" textAnchor="middle" fontSize="9" fill={T.sub} fontFamily="monospace">barg</text>
+      <rect x="557" y="164" width="110" height="24" rx="9"
+        fill={valveOpen?T.orangeBg:T.greenBg} stroke={valveOpen?T.orange:T.green} strokeWidth="1.5"/>
+      <text x="612" y="180" textAnchor="middle" fontSize="9" fontWeight="700"
+        fill={valveOpen?T.orange:T.green} fontFamily="monospace">{valveOpen?"▲ RELIEVING":"● NORMAL"}</text>
+    </svg>
+  );
+}
+
+// PressChartRenderer — Snapshot.inputs 기준
+function PressChartRenderer({ hist, snap }) {
+  const setPoint = snap.inputs.P1;
+  const mawp     = snap.inputs.mawp;
+  const W=580, H=115;
+  const mx = mawp * 1.3;
+  const y  = p => H-20-((p/mx)*(H-30));
+  const x  = (i,n) => 38+(i/Math.max(n-1,1))*(W-50);
+  const pts= hist.map((p,i)=>({x:x(i,hist.length),y:y(p)}));
+  const ln = pts.map((p,i)=>`${i===0?"M":"L"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  const ar = pts.length>1?`${ln} L${pts[pts.length-1].x},${H-20} L${pts[0].x},${H-20} Z`:"";
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:115,borderRadius:10}}>
+      <defs>
+        <linearGradient id="ag2" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={T.blue} stopOpacity="0.3"/>
+          <stop offset="100%" stopColor={T.blue} stopOpacity="0"/>
+        </linearGradient>
+      </defs>
+      <rect width={W} height={H} fill="#F0F4FA" rx="10"/>
+      {[.25,.5,.75,1].map(r=><line key={r} x1="38" y1={y(mx*r)} x2={W-10} y2={y(mx*r)} stroke={T.border} strokeWidth="1"/>)}
+      <line x1="38" y1={y(mawp)} x2={W-10} y2={y(mawp)} stroke={T.red} strokeWidth="1.5" strokeDasharray="5,3"/>
+      <text x={W-12} y={y(mawp)-3} fontSize="8" fill={T.red} textAnchor="end" fontFamily="monospace" fontWeight="700">MAWP {mawp}b</text>
+      <line x1="38" y1={y(setPoint)} x2={W-10} y2={y(setPoint)} stroke={T.yellow} strokeWidth="1.5" strokeDasharray="5,3"/>
+      <text x={W-12} y={y(setPoint)-3} fontSize="8" fill={T.yellow} textAnchor="end" fontFamily="monospace" fontWeight="700">SET {setPoint}b</text>
+      {ar && <path d={ar} fill="url(#ag2)"/>}
+      {pts.length>1 && <path d={ln} fill="none" stroke={T.blue} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>}
+      <line x1="38" y1="5" x2="38" y2={H-20} stroke={T.border} strokeWidth="1.5"/>
+      <line x1="38" y1={H-20} x2={W-10} y2={H-20} stroke={T.border} strokeWidth="1.5"/>
+    </svg>
+  );
+}
+
+// EvidenceCard — Snapshot.evidence 렌더링
+function EvidenceCard({ step }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{border:`2px solid ${step.ok?T.green:T.red}`,borderRadius:12,overflow:"hidden",marginBottom:10,boxShadow:"0 2px 8px #0001"}}>
+      <div onClick={()=>setOpen(o=>!o)} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 15px",cursor:"pointer",background:step.ok?T.greenBg:T.redBg}}>
+        <div style={{width:28,height:28,borderRadius:"50%",background:step.ok?T.green:T.red,display:"flex",alignItems:"center",justifyContent:"center",color:T.white,fontWeight:900,fontSize:13,flexShrink:0}}>
+          {step.ok?"✓":"✗"}
+        </div>
+        <div style={{flex:1}}>
+          <div style={{fontSize:13,fontWeight:700,color:T.text,fontFamily:font.mono}}>Step {step.id}: {step.title}</div>
+          <div style={{fontSize:11,color:T.sub,marginTop:2,fontFamily:font.mono}}>{step.result}</div>
+        </div>
+        <span style={{fontSize:11,color:T.sub}}>{open?"▲":"▼"}</span>
+      </div>
+      {open && (
+        <div style={{background:T.white,padding:"12px 15px",borderTop:`1px solid ${T.border}`}}>
+          <div style={{background:"#F0F4FA",borderRadius:8,padding:"7px 12px",fontFamily:font.mono,fontSize:11,color:T.blue,marginBottom:8}}>{step.formula}</div>
+          <p style={{fontSize:11,color:T.sub,margin:0,lineHeight:1.65}}>{step.detail}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ChecklistRenderer — Snapshot.result.checklist 렌더링
+function ChecklistRenderer({ checklist }) {
+  const items = [
+    { key:"capacityOK",     label:"방출용량 충족",    detail:"선정 오리피스 면적 ≥ 필요 면적" },
+    { key:"backPressureOK", label:"배압 허용 범위",    detail:`P2/P1 < ${(API_CONST.BACKPRESSURE_SPRING*100).toFixed(0)}% (스프링식 기준)` },
+    { key:"mawpOK",         label:"설정압 ≤ MAWP",    detail:"P1 ≤ 최고허용운전압력" },
+    { key:"kdOK",           label:"Kd ≥ 0.9",         detail:"방출계수 최소 권고값 충족" },
+    { key:"marginOK",       label:"여유율 ≥ 1.0",     detail:"오리피스 면적 여유율" },
+  ];
+  return (
+    <div>
+      {items.map(({ key, label, detail }) => {
+        const ok = checklist[key];
+        return (
+          <div key={key} style={{display:"flex",gap:10,alignItems:"flex-start",padding:"10px 13px",borderRadius:10,marginBottom:8,background:ok?T.greenBg:T.redBg,border:`1.5px solid ${ok?T.green:T.red}`}}>
+            <div style={{width:24,height:24,borderRadius:"50%",background:ok?T.green:T.red,display:"flex",alignItems:"center",justifyContent:"center",color:T.white,fontWeight:900,fontSize:12,flexShrink:0}}>{ok?"✓":"✗"}</div>
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:T.text,fontFamily:font.mono}}>{label}</div>
+              <div style={{fontSize:10,color:T.sub,marginTop:2}}>{detail}</div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+
+// ── components/InputView.jsx ──────────────────────────
+//  PARAMETER DECISION VIEW (구 InputView)
+//  역할: "값 입력" → "사양 결정"
+// ════════════════════════════════════════════════════════════════
+
+// ── 결정 슬라이더 (수치 입력이 필요한 파라미터용) ────────────
+function DecisionSlider({ param, label, unit, value, min, max, step, onChange, basis, warning }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{background:T.bg,borderRadius:12,padding:"12px 14px",marginBottom:10,border:`1.5px solid ${open?T.blue:T.border}`,transition:"border-color 0.15s"}}>
+      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8,marginBottom:8}}>
+        <div>
+          <div style={{display:"flex",alignItems:"center",gap:6}}>
+            <span style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono,letterSpacing:0.5}}>{param}</span>
+            {warning && <span style={{fontSize:9,background:T.yellowBg,color:"#7A5800",border:`1px solid ${T.yellow}`,borderRadius:5,padding:"1px 6px",fontFamily:font.mono,fontWeight:700}}>{warning}</span>}
+          </div>
+          <div style={{fontSize:13,fontWeight:900,color:T.navy,fontFamily:font.sans,marginTop:1}}>{label}</div>
+        </div>
+        <div style={{textAlign:"right",flexShrink:0}}>
+          <div style={{fontSize:20,fontWeight:900,color:T.navyLight,fontFamily:font.mono,lineHeight:1}}>{Number(value).toFixed(step<1?1:0)}</div>
+          <div style={{fontSize:10,color:T.sub,fontFamily:font.mono}}>{unit}</div>
+        </div>
+      </div>
+      <input type="range" min={min} max={max} step={step} value={value}
+        onChange={e=>onChange(+e.target.value)}
+        style={{width:"100%",accentColor:T.navyLight,cursor:"pointer",marginBottom:4}}/>
+      <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+        <span style={{fontSize:9,color:T.gray,fontFamily:font.mono}}>{min} {unit}</span>
+        <span style={{fontSize:9,color:T.gray,fontFamily:font.mono}}>{max} {unit}</span>
+      </div>
+      <button onClick={()=>setOpen(o=>!o)} style={{background:"none",border:"none",cursor:"pointer",padding:0,fontSize:10,color:T.blue,fontFamily:font.sans,fontWeight:700,display:"flex",alignItems:"center",gap:3}}>
+        {open?"▲ 적용 근거 닫기":"▼ 이 값을 왜 쓰는가?"}
+      </button>
+      {open && (
+        <div style={{marginTop:8,background:T.blueBg,borderRadius:8,padding:"8px 11px",fontSize:11,color:T.navyLight,fontFamily:font.sans,lineHeight:1.65,borderLeft:`3px solid ${T.blue}`}}>
+          {basis}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── 결정 선택 카드 (선택지가 명확한 파라미터용) ───────────────
+function DecisionChoice({ param, label, options, value, onChange }) {
+  const selected = options.find(o => Math.abs(o.value - value) < 0.001) ?? null;
+  return (
+    <div style={{background:T.bg,borderRadius:12,padding:"12px 14px",marginBottom:10,border:`1.5px solid ${selected?T.navyLight:T.border}`}}>
+      <div style={{marginBottom:10}}>
+        <span style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono,letterSpacing:0.5}}>{param}</span>
+        <div style={{fontSize:13,fontWeight:900,color:T.navy,fontFamily:font.sans,marginTop:1}}>{label}</div>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:7}}>
+        {options.map(opt=>{
+          const isSelected = Math.abs(opt.value - value) < 0.001;
+          return (
+            <div key={opt.id} onClick={()=>onChange(opt.value)}
+              style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",borderRadius:10,cursor:"pointer",
+                border:`2px solid ${isSelected?T.navyLight:T.border}`,
+                background:isSelected?T.navy+"0D":T.white,
+                transition:"all 0.12s"}}>
+              <div style={{width:18,height:18,borderRadius:"50%",border:`2px solid ${isSelected?T.navyLight:T.border}`,background:isSelected?T.navyLight:T.white,flexShrink:0,marginTop:1,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                {isSelected && <div style={{width:8,height:8,borderRadius:"50%",background:T.white}}/>}
+              </div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                  <span style={{fontSize:12,fontWeight:700,color:isSelected?T.navy:T.text,fontFamily:font.sans}}>{opt.label}</span>
+                  {opt.tag && <span style={{fontSize:9,padding:"2px 6px",borderRadius:5,background:isSelected?T.navyLight+"22":T.bg,color:isSelected?T.navyLight:T.sub,fontFamily:font.mono,fontWeight:700,border:`1px solid ${isSelected?T.navyLight:T.border}`}}>{opt.tag}</span>}
+                  <span style={{fontSize:12,fontWeight:900,color:isSelected?T.navyLight:T.sub,fontFamily:font.mono,marginLeft:"auto"}}>{opt.value}</span>
+                </div>
+                <div style={{fontSize:10,color:T.sub,marginTop:3,fontFamily:font.sans,lineHeight:1.5}}>{opt.basis}</div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── 섹션 구분선 ──────────────────────────────────────────────
+function SectionHeader({ step, title, sub }) {
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,marginTop:6}}>
+      <div style={{width:24,height:24,borderRadius:"50%",background:T.navyLight,color:T.white,fontSize:11,fontWeight:900,fontFamily:font.mono,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>{step}</div>
+      <div>
+        <div style={{fontSize:13,fontWeight:900,color:T.navy,fontFamily:font.sans}}>{title}</div>
+        {sub && <div style={{fontSize:10,color:T.sub,fontFamily:font.sans}}>{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ── 온도 변환 헬퍼 ───────────────────────────────────────────
+function TempInput({ value, onChange }) {
+  const [mode, setMode] = useState("K");
+  const displayVal = mode === "K" ? value : Math.round((value - 273.15) * 10) / 10;
+  const handleChange = (v) => onChange(mode === "K" ? v : Math.round((v + 273.15) * 10) / 10);
+  return (
+    <div style={{background:T.bg,borderRadius:12,padding:"12px 14px",marginBottom:10,border:`1.5px solid ${T.border}`}}>
+      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8,marginBottom:8}}>
+        <div>
+          <span style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono,letterSpacing:0.5}}>T</span>
+          <div style={{fontSize:13,fontWeight:900,color:T.navy,fontFamily:font.sans,marginTop:1}}>방출 온도</div>
+          <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginTop:2}}>정상 운전 온도가 아닌 방출 시나리오 온도</div>
+        </div>
+        <div style={{textAlign:"right",flexShrink:0}}>
+          <div style={{fontSize:20,fontWeight:900,color:T.navyLight,fontFamily:font.mono,lineHeight:1}}>{displayVal}</div>
+          <div style={{display:"flex",gap:4,marginTop:3,justifyContent:"flex-end"}}>
+            {["K","C"].map(m=>(
+              <button key={m} onClick={()=>setMode(m)} style={{padding:"2px 7px",borderRadius:5,border:`1px solid ${mode===m?T.navyLight:T.border}`,background:mode===m?T.navyLight:T.white,color:mode===m?T.white:T.sub,fontSize:10,fontFamily:font.mono,fontWeight:700,cursor:"pointer"}}>°{m}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+      <input type="range" min={mode==="K"?200:-73} max={mode==="K"?700:427} step={5} value={displayVal}
+        onChange={e=>handleChange(+e.target.value)}
+        style={{width:"100%",accentColor:T.navyLight,cursor:"pointer"}}/>
+      <div style={{display:"flex",justifyContent:"space-between",marginTop:4}}>
+        <span style={{fontSize:9,color:T.gray,fontFamily:font.mono}}>{mode==="K"?"200 K":"-73 °C"}</span>
+        <span style={{fontSize:9,color:T.gray,fontFamily:font.mono}}>{mode==="K"?"700 K":"427 °C"}</span>
+      </div>
+      <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginTop:4}}>
+        ≈ {mode==="K" ? `${Math.round((value-273.15)*10)/10} °C` : `${value} K`}
+      </div>
+    </div>
+  );
+}
+
+// ── 유체 선택 데이터 ─────────────────────────────────────────
+const FLUID_CHOICES = [
+  { id:"co2",   label:"CO₂ — 이산화탄소",  M:44,  k:1.30, Kd:0.975, tag:"공정 일반",  basis:"반응기·분리 공정에서 가장 흔한 고압 방출 유체. NIST 기준 k=1.30 (25°C)." },
+  { id:"n2",    label:"N₂ — 질소",         M:28,  k:1.40, Kd:0.975, tag:"불활성",     basis:"질소 블랭킷, 퍼지 라인 등 불활성 유체. k=1.40 (이상기체 근사 적용 가능)." },
+  { id:"steam", label:"Steam — 수증기",     M:18,  k:1.33, Kd:0.975, tag:"포화/과열",  basis:"유틸리티 스팀 라인, 증류 재비기 등. k=1.33 (API 520 권고값)." },
+  { id:"air",   label:"Air — 공기",         M:29,  k:1.40, Kd:0.975, tag:"계장/공기",  basis:"공기 공급 시스템, 계장 에어. k=1.40. 습도 영향은 무시 가능." },
+  { id:"ch4",   label:"CH₄ — 메탄",        M:16,  k:1.31, Kd:0.975, tag:"탄화수소",   basis:"천연가스 주성분. 고온에서 k 변동 있으나 API 520 계산에는 상온값 적용." },
+  { id:"other", label:"직접 입력",          M:null,k:null, Kd:null,  tag:"커스텀",     basis:"MSDS 또는 공정 시뮬레이터(Aspen/HYSYS) 결과값을 직접 입력." },
+];
+
+// Kd 결정 선택지
+const KD_OPTIONS = [
+  { id:"sv_std",  label:"스프링식 — 표준",    value:0.975, tag:"API 526",     basis:"API 526 인증 밸브 기본값. 제조사 성능시험 미제출 시 이 값 적용." },
+  { id:"sv_con",  label:"스프링식 — 보수적",   value:0.900, tag:"안전 여유",   basis:"설계 여유 확보 또는 노후 밸브에 적용. 10% 여유율 내재." },
+  { id:"rd",      label:"럽처디스크 병용",      value:0.877, tag:"×0.9 보정",   basis:"API 520 Annex C. Kd × 0.9 보정 자동 적용됨 (중복 설치 손실)." },
+];
+
+// Kb 참고 테이블 — 더 이상 사용자가 직접 선택하지 않음.
+// engine/backpressure.js의 computeBackpressure()가 API 521 모델로 자동 계산.
+// 여기 남겨두는 이유: override UI에서 구간 설명 참조용.
+const KB_OPTIONS_SPRING = [
+  { id:"low",  label:"배압 낮음 — 보정 없음",  value:1.00, tag:"P2/P1 < 10%",  basis:"P2/P1이 10% 미만이면 용량 감소 없음. Kb=1.0 적용. 일반 대기 방출 또는 저압 플레어." },
+  { id:"mid",  label:"배압 보통 — 경미한 감소", value:0.96, tag:"10~15%",       basis:"P2/P1 10~15% 구간. API 520 Fig.31 기준 Kb≈0.96. 제조사 곡선 우선." },
+  { id:"high", label:"배압 높음 — 감소 적용",   value:0.90, tag:"15~20%",       basis:"P2/P1 15~20% 구간. 스프링식 용량 10% 이상 감소. 파일럿식 전환 검토 필요." },
+];
+
+function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dischargeSystem }) {
+  const [fluidId, setFluidId]   = useState("co2");
+  const [kdId,    setKdId]      = useState("sv_std");
+  const [showCustomFluid, setShowCustomFluid] = useState(false);
+  const [kbOverride, setKbOverride] = useState(false);
+  const [kbOverrideReason, setKbOverrideReason] = useState("");
+
+  // 유체 선택 → M, k, Kd 동시 결정
+  const handleFluidSelect = (f) => {
+    setFluidId(f.id);
+    if (f.id === "other") { setShowCustomFluid(true); return; }
+    setShowCustomFluid(false);
+    onChange("M",  f.M);
+    onChange("k",  f.k);
+    onChange("Kd", f.Kd);
+    // Kd 선택을 표준으로 초기화
+    setKdId("sv_std");
+  };
+
+  // Kd 선택 → Kd 결정
+  const handleKdSelect = (opt) => {
+    setKdId(opt.id);
+    onChange("Kd", opt.value);
+  };
+
+  // Kb — system 계산값 (engine의 computeBackpressure 순수함수, API 521 모델)
+  // GEOMETRY-001: 배관 형상은 Case 입력값이 아니라 Asset(DischargeSystem) 데이터.
+  // 임의 기본값을 몰래 대입하지 않는다 — 미연결이면 명시적으로 경고하고
+  // Kb=1.0(보수적 가정)을 쓰되 그 사실을 화면에 그대로 노출한다.
+  const bpResult = dischargeSystem
+    ? computeBackpressure(inputs, {
+        L: dischargeSystem.L, D: dischargeSystem.D,
+        fittingsK: dischargeSystem.fittingsK,
+        headerPressure: dischargeSystem.headerPressure,
+      })
+    : { valid: false, error: { field: "dischargeSystem", reason: "not_linked" } };
+  const kbCalc = bpResult.valid
+    ? { value: bpResult.kb, basis: bpResult.basis, status: bpResult.status }
+    : dischargeSystem
+    ? { value: 1.0, basis: "배관 형상 입력 오류 — 기본값 적용", status: "calculated" }
+    : { value: 1.0, basis: "배출계통 미연결 — Kb=1.0 보수적 가정 (설비대장에서 연결 필요)", status: "calculated" };
+
+  // P1/P2가 바뀌면 override 중이 아닌 한 시스템 계산값을 자동 반영
+  useEffect(() => {
+    if (!kbOverride) {
+      onChange("Kb", kbCalc.value);
+    }
+  }, [inputs.P1, inputs.P2, kbOverride]);
+
+  // 배압 비율 실시간 계산 (경고용)
+  const bpRatio = inputs.P1 > 0 ? (inputs.P2 / inputs.P1 * 100).toFixed(1) : 0;
+  const bpWarning = bpRatio > 30 ? "파일럿식 검토" : bpRatio > 10 ? "Kb 확인" : null;
+
+  // 설정압 > MAWP 경고
+  const mawpWarning = inputs.P1 > inputs.mawp ? "설정압 > MAWP!" : null;
+
+  return (
+    <div style={{padding:"0 2px"}}>
+
+      {/* ── 1. 밸브 종류 결정 ── */}
+      <SectionHeader step="1" title="밸브 종류" sub="설치된 밸브 또는 럽처디스크 선택"/>
+      <div style={{display:"flex",gap:8,marginBottom:16}}>
+        {[
+          ["safetyValve","🔧 안전밸브","스프링식 또는 파일럿식. 설정압에서 개방, 이후 자동 재폐."],
+          ["ruptureDisk","💥 럽처디스크","단일 작동. 파열 후 교체 필요. Kd ×0.9 보정 적용."],
+        ].map(([v,l,sub])=>(
+          <div key={v} onClick={()=>onDeviceChange(v)}
+            style={{flex:1,padding:"12px",borderRadius:12,cursor:"pointer",
+              border:`2px solid ${deviceType===v?T.navyLight:T.border}`,
+              background:deviceType===v?T.navy+"0D":T.cardBg,
+              transition:"all 0.15s"}}>
+            <div style={{fontSize:13,fontWeight:900,color:deviceType===v?T.navy:T.text,fontFamily:font.sans}}>{l}</div>
+            <div style={{fontSize:10,color:T.sub,marginTop:3,fontFamily:font.sans,lineHeight:1.4}}>{sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* ── 2. 방출 시나리오 ── */}
+      <SectionHeader step="2" title="방출 시나리오" sub="어떤 상황에서 밸브가 열리는가 — API 521 시나리오"/>
+      <DecisionSlider
+        param="W" label="설계 방출량" unit="kg/h"
+        value={inputs.W} min={500} max={10000} step={100}
+        onChange={v=>onChange("W",v)}
+        basis="HAZOP 또는 API 521 시나리오 계산서 기반. 화재, 반응 폭주, 냉각 상실 등 최대 방출 시나리오 중 지배 케이스 적용. 설계 여유 없이 계산된 최대값 사용."
+      />
+
+      {/* ── 3. 유체 사양 결정 ── */}
+      <SectionHeader step="3" title="유체 사양" sub="M, k 값은 유체 선택 시 자동 결정됨"/>
+      <div style={{background:T.cardBg,borderRadius:12,padding:"12px 14px",marginBottom:10,border:`1.5px solid ${fluidId?T.navyLight:T.border}`}}>
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {FLUID_CHOICES.map(f=>{
+            const isSel = fluidId === f.id;
+            return (
+              <div key={f.id} onClick={()=>handleFluidSelect(f)}
+                style={{display:"flex",alignItems:"flex-start",gap:10,padding:"9px 11px",borderRadius:9,cursor:"pointer",
+                  border:`2px solid ${isSel?T.navyLight:T.border}`,
+                  background:isSel?T.navy+"0D":T.bg,
+                  transition:"all 0.12s"}}>
+                <div style={{width:16,height:16,borderRadius:"50%",border:`2px solid ${isSel?T.navyLight:T.border}`,background:isSel?T.navyLight:T.white,flexShrink:0,marginTop:2,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  {isSel && <div style={{width:6,height:6,borderRadius:"50%",background:T.white}}/>}
+                </div>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                    <span style={{fontSize:12,fontWeight:700,color:isSel?T.navy:T.text,fontFamily:font.sans}}>{f.label}</span>
+                    <span style={{fontSize:9,padding:"1px 6px",borderRadius:4,background:isSel?T.navyLight+"22":T.bg,color:isSel?T.navyLight:T.sub,fontFamily:font.mono,border:`1px solid ${isSel?T.navyLight:T.border}`}}>{f.tag}</span>
+                    {f.M && <span style={{fontSize:9,color:T.gray,fontFamily:font.mono,marginLeft:"auto"}}>M={f.M} k={f.k}</span>}
+                  </div>
+                  {isSel && <div style={{fontSize:10,color:T.sub,marginTop:3,fontFamily:font.sans,lineHeight:1.5}}>{f.basis}</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        {/* 커스텀 유체 직접 입력 */}
+        {showCustomFluid && (
+          <div style={{marginTop:10,display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            {[
+              {key:"M",label:"분자량 M",unit:"g/mol",min:2,max:200,step:1},
+              {key:"k",label:"비열비 k",unit:"",min:1.05,max:1.7,step:0.01},
+            ].map(({key,label,unit,min,max,step})=>(
+              <div key={key}>
+                <div style={{fontSize:10,color:T.sub,fontFamily:font.mono,marginBottom:3}}>{label}</div>
+                <input type="number" value={inputs[key]} min={min} max={max} step={step}
+                  onChange={e=>onChange(key,+e.target.value)}
+                  style={{width:"100%",padding:"7px 9px",borderRadius:8,border:`1px solid ${T.border}`,fontSize:13,fontFamily:font.mono,fontWeight:700,color:T.navy,background:T.bg,boxSizing:"border-box"}}/>
+                <div style={{fontSize:9,color:T.gray,fontFamily:font.mono,marginTop:2}}>{unit}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 온도 */}
+      <TempInput value={inputs.T} onChange={v=>onChange("T",v)}/>
+
+      {/* ── 4. 압력 조건 결정 ── */}
+      <SectionHeader step="4" title="압력 조건" sub="명판 및 공정 설계 문서 기준"/>
+      <DecisionSlider
+        param="MAWP" label="최고허용운전압력" unit="barg"
+        value={inputs.mawp} min={0.5} max={25} step={0.1}
+        onChange={v=>onChange("mawp",v)}
+        basis="압력용기 명판(Nameplate) 또는 배관 설계 문서에서 확인. 이 값이 밸브 설정압의 상한을 결정함. 설정압 ≤ MAWP 조건 위반 시 PSM 부적합."
+      />
+      <DecisionSlider
+        param="P1" label="설정압력 (Set Pressure)" unit="barg"
+        value={inputs.P1} min={0.5} max={inputs.mawp || 20} step={0.1}
+        onChange={v=>onChange("P1",v)}
+        basis="밸브 명판의 설정압. MAWP의 100% 이하 유지 (단일 밸브 기준). 공정 최고운전압력 대비 최소 10% 여유 권고 (API 521)."
+        warning={mawpWarning}
+      />
+      <DecisionSlider
+        param="P2" label="배압 (Back Pressure)" unit="barg"
+        value={inputs.P2} min={0} max={5} step={0.05}
+        onChange={v=>onChange("P2",v)}
+        basis={`플레어 헤더 또는 방출 배관 압력. 현재 P2/P1 = ${bpRatio}%.${bpRatio>10?" 10% 초과 → Kb 1.0 미만 적용 필요.":""}${bpRatio>30?" 30% 초과 → 스프링식 부적합, 파일럿식 전환 검토.":""}`}
+        warning={bpWarning}
+      />
+
+      {/* ── 5. 방출계수 결정 ── */}
+      <SectionHeader step="5" title="방출계수 Kd" sub="어떤 근거로 이 계수를 적용하는가"/>
+      <DecisionChoice
+        param="Kd" label="방출계수 선택"
+        options={KD_OPTIONS}
+        value={inputs.Kd}
+        onChange={v=>{ const opt=KD_OPTIONS.find(o=>Math.abs(o.value-v)<0.001); if(opt) handleKdSelect(opt); }}
+      />
+      {/* Kd 커스텀 슬라이더 (미세 조정용, 접혀 있음) */}
+      <details style={{marginBottom:10}}>
+        <summary style={{fontSize:10,color:T.sub,fontFamily:font.mono,cursor:"pointer",padding:"4px 2px"}}>제조사 실측값 직접 입력</summary>
+        <div style={{marginTop:6,padding:"10px 12px",background:T.bg,borderRadius:9,border:`1px solid ${T.border}`}}>
+          <input type="range" min={0.5} max={1.0} step={0.005} value={inputs.Kd}
+            onChange={e=>onChange("Kd",+e.target.value)}
+            style={{width:"100%",accentColor:T.navyLight}}/>
+          <div style={{textAlign:"center",fontSize:12,fontFamily:font.mono,fontWeight:700,color:T.navyLight,marginTop:4}}>{inputs.Kd.toFixed(3)}</div>
+        </div>
+      </details>
+
+      {/* ── 6. 배압보정계수 — 시스템 계산값 (사용자 직접 선택 금지) ── */}
+      <SectionHeader step="6" title="배압보정계수 Kb" sub="P1, P2로부터 시스템이 계산 — 직접 선택 불가"/>
+      <div style={{
+        background: kbCalc.status==="out_of_range" ? T.redBg : T.bg,
+        borderRadius:12, padding:"14px 16px", marginBottom:10,
+        border:`1.5px solid ${kbCalc.status==="out_of_range" ? T.red : T.border}`}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+          <div style={{display:"flex",alignItems:"center",gap:6}}>
+            <span style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono}}>Kb</span>
+            <span style={{fontSize:9,padding:"2px 7px",borderRadius:5,
+              background: kbOverride ? T.orangeBg : T.greenBg,
+              color: kbOverride ? "#946200" : T.greenDk,
+              border:`1px solid ${kbOverride ? T.orange : T.green}`,
+              fontFamily:font.mono,fontWeight:700}}>
+              {kbOverride ? "ENGINEER OVERRIDE" : "SYSTEM CALCULATED"}
+            </span>
+          </div>
+          <div style={{fontSize:22,fontWeight:900,color:T.navyLight,fontFamily:font.mono}}>
+            {Number(inputs.Kb).toFixed(3)}
+          </div>
+        </div>
+        <div style={{fontSize:11,color:T.sub,fontFamily:font.sans,lineHeight:1.6,marginBottom:10}}>
+          {kbOverride
+            ? "엔지니어 override 적용 중 — 아래 근거를 반드시 기록하세요."
+            : kbCalc.basis}
+        </div>
+        {kbCalc.status==="out_of_range" && !kbOverride && (
+          <div style={{fontSize:11,color:T.red,fontFamily:font.sans,fontWeight:700,marginBottom:10}}>
+            ⚠ 표준 곡선 범위 초과 — 제조사 데이터 확인 후 override 필요
+          </div>
+        )}
+
+        {!kbOverride ? (
+          <button onClick={()=>setKbOverride(true)}
+            style={{fontSize:10,color:T.sub,background:"none",border:`1px dashed ${T.border}`,
+              borderRadius:7,padding:"6px 10px",cursor:"pointer",fontFamily:font.mono}}>
+            제조사 곡선값으로 override (근거 기록 필요)
+          </button>
+        ) : (
+          <div>
+            <input type="range" min={0.5} max={1.0} step={0.005} value={inputs.Kb}
+              onChange={e=>onChange("Kb",+e.target.value)}
+              style={{width:"100%",accentColor:T.orange,marginBottom:8}}/>
+            <textarea
+              value={kbOverrideReason}
+              onChange={e=>setKbOverrideReason(e.target.value)}
+              placeholder="override 근거 필수 — 예: 제조사 Kb 곡선 Doc.No.XXX 기준 0.88 적용"
+              rows={2}
+              style={{width:"100%",borderRadius:8,border:`1.5px solid ${kbOverrideReason.trim()?T.orange:T.red}`,
+                padding:"8px 10px",fontSize:11,fontFamily:font.sans,color:T.text,
+                resize:"none",boxSizing:"border-box",background:T.white,outline:"none",marginBottom:8}}
+            />
+            <button onClick={()=>{ setKbOverride(false); setKbOverrideReason(""); }}
+              style={{fontSize:10,color:T.sub,background:"none",border:`1px solid ${T.border}`,
+                borderRadius:7,padding:"6px 10px",cursor:"pointer",fontFamily:font.mono}}>
+              시스템 계산값으로 복귀
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* ── 결정 요약 ── */}
+      <div style={{background:T.navy,borderRadius:14,padding:"14px 16px",marginBottom:14}}>
+        <div style={{fontSize:10,fontWeight:700,color:"#7B9EC0",fontFamily:font.mono,marginBottom:8,letterSpacing:1}}>사양 결정 요약</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
+          {[
+            ["W", `${inputs.W} kg/h`],
+            ["P1/MAWP", `${inputs.P1}/${inputs.mawp} b`],
+            ["P2", `${inputs.P2} barg`],
+            ["M / k", `${inputs.M} / ${inputs.k}`],
+            ["Kd", inputs.Kd.toFixed(3)],
+            ["Kb", inputs.Kb.toFixed(2)],
+          ].map(([k,v])=>(
+            <div key={k} style={{background:"#FFFFFF12",borderRadius:8,padding:"6px 8px",textAlign:"center"}}>
+              <div style={{fontSize:9,color:"#7B9EC0",fontFamily:font.mono}}>{k}</div>
+              <div style={{fontSize:12,fontWeight:900,color:T.white,fontFamily:font.mono}}>{v}</div>
+            </div>
+          ))}
+        </div>
+        {mawpWarning && (
+          <div style={{marginTop:10,background:T.redBg,border:`1px solid ${T.red}`,borderRadius:8,padding:"7px 10px",fontSize:11,color:T.red,fontFamily:font.sans,fontWeight:700}}>
+            ⚠ 설정압력({inputs.P1} barg)이 MAWP({inputs.mawp} barg)를 초과합니다. 계산 전 수정 필요.
+          </div>
+        )}
+      </div>
+
+      {(() => {
+        const blockReason = mawpWarning
+          ? "⚠ 설정압 오류 — 수정 후 진행 가능"
+          : (kbOverride && !kbOverrideReason.trim())
+          ? "⚠ Kb override 근거를 입력해야 진행 가능"
+          : null;
+        return (
+          <button onClick={onSubmit} disabled={!!blockReason}
+            style={{width:"100%",padding:"16px",background:blockReason?T.border:T.navyLight,color:T.white,border:"none",borderRadius:14,fontSize:15,fontWeight:900,fontFamily:font.sans,cursor:blockReason?"not-allowed":"pointer",boxShadow:blockReason?"none":`0 5px 0 ${T.navy}`,transition:"all 0.15s",letterSpacing:0.5}}>
+            {blockReason || "사양 확정 → 계산 실행"}
+          </button>
+        );
+      })()}
+    </div>
+  );
+}
+
+
+// ── components/WorkflowTransition.jsx ──────────────────────────
+//  WORKFLOW TRANSITION — 코멘트 포함 전환 UI
+// ════════════════════════════════════════════════════════════════
+function WorkflowTransition({ currentState, nextStates, onAdvance }) {
+  const [comment, setComment] = useState("");
+  const [selected, setSelected] = useState(nextStates[0]);
+
+  return (
+    <div style={{marginTop:14,background:T.cardBg,borderRadius:14,padding:14,border:`1px solid ${T.border}`}}>
+      <div style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono,marginBottom:10,letterSpacing:1}}>WORKFLOW 전환</div>
+      <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+        {nextStates.map(ns => (
+          <button key={ns} onClick={()=>setSelected(ns)} style={{padding:"8px 14px",background:selected===ns?WF_COLOR[ns]+"22":T.bg,border:`1.5px solid ${selected===ns?WF_COLOR[ns]:T.border}`,borderRadius:10,fontSize:11,fontWeight:700,color:selected===ns?WF_COLOR[ns]:T.sub,fontFamily:font.mono,cursor:"pointer",transition:"all 0.12s"}}>
+            {WF_LABEL[ns]}
+          </button>
+        ))}
+      </div>
+      <textarea
+        value={comment}
+        onChange={e=>setComment(e.target.value)}
+        placeholder="전환 사유 또는 검토 의견 (선택)"
+        rows={2}
+        style={{width:"100%",borderRadius:9,border:`1px solid ${T.border}`,padding:"8px 10px",fontSize:11,fontFamily:font.sans,color:T.text,resize:"none",boxSizing:"border-box",background:T.bg,marginBottom:10,outline:"none"}}
+      />
+      <button onClick={()=>{ onAdvance(selected, comment); setComment(""); }} style={{width:"100%",padding:"11px",background:WF_COLOR[selected],color:T.white,border:"none",borderRadius:10,fontSize:12,fontWeight:700,fontFamily:font.mono,cursor:"pointer",boxShadow:`0 3px 0 ${WF_COLOR[selected]}88`}}>
+        → {WF_LABEL[selected]}(으)로 전환
+      </button>
+    </div>
+  );
+}
+
+
+// ── components/ApprovalForm.jsx ──────────────────────────
+//  APPROVAL FORM — 전자서명 UI
+//  hash 계산, 서명 검증, workflow 판단 전부 금지 — submitApproval()만 호출한다.
+//  REVIEW 상태에서만 노출 (ReportView가 조건부 렌더링으로 보장).
+// ════════════════════════════════════════════════════════════════
+function ApprovalForm({ snap, onSubmit }) {
+  const [signer,     setSigner]     = useState("");
+  const [role,       setRole]       = useState(APPROVAL_ROLES[0]);
+  const [decision,   setDecision]   = useState("approve");
+  const [comment,    setComment]    = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error,      setError]      = useState(null);
+
+  const canSubmit = signer.trim().length > 0 && !submitting;
+
+  const handleSubmit = async () => {
+    setSubmitting(true);
+    setError(null);
+    const result = await onSubmit({ decision, comment, signer: signer.trim(), role });
+    setSubmitting(false);
+    if (!result || !result.ok) {
+      setError(result?.reason || "승인 처리에 실패했습니다.");
+      return;
+    }
+    setComment("");
+  };
+
+  const accent = decision === "approve" ? T.green : T.red;
+
+  return (
+    <div style={{marginTop:14,background:T.cardBg,borderRadius:14,padding:14,border:`2px solid ${T.navyLight}`}}>
+      <div style={{fontSize:10,fontWeight:700,color:T.navyLight,fontFamily:font.mono,marginBottom:2,letterSpacing:1}}>
+        전자서명 · APPROVAL
+      </div>
+      <div style={{fontSize:10,color:T.gray,fontFamily:font.mono,marginBottom:10}}>
+        서명 대상: {snap.id} · hash {(snap.snapshotHash || "").slice(0,12)}…
+      </div>
+
+      <div style={{display:"flex",gap:8,marginBottom:8}}>
+        <input
+          value={signer}
+          onChange={e=>setSigner(e.target.value)}
+          placeholder="서명자 이름"
+          style={{flex:1,padding:"8px 10px",borderRadius:9,border:`1px solid ${T.border}`,fontSize:12,fontFamily:font.sans,outline:"none",boxSizing:"border-box"}}
+        />
+        <select
+          value={role}
+          onChange={e=>setRole(e.target.value)}
+          style={{padding:"8px 10px",borderRadius:9,border:`1px solid ${T.border}`,fontSize:11,fontFamily:font.mono,background:T.bg}}
+        >
+          {APPROVAL_ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+        </select>
+      </div>
+
+      <div style={{display:"flex",gap:8,marginBottom:10}}>
+        <button onClick={()=>setDecision("approve")} style={{flex:1,padding:"9px",borderRadius:9,
+          border:`1.5px solid ${decision==="approve"?T.green:T.border}`,
+          background:decision==="approve"?T.greenBg:T.bg,
+          color:decision==="approve"?T.green:T.sub,
+          fontWeight:700,fontSize:12,fontFamily:font.mono,cursor:"pointer"}}>
+          ✓ 승인
+        </button>
+        <button onClick={()=>setDecision("request_change")} style={{flex:1,padding:"9px",borderRadius:9,
+          border:`1.5px solid ${decision==="request_change"?T.red:T.border}`,
+          background:decision==="request_change"?T.redBg:T.bg,
+          color:decision==="request_change"?T.red:T.sub,
+          fontWeight:700,fontSize:12,fontFamily:font.mono,cursor:"pointer"}}>
+          ↺ 조치 요청
+        </button>
+      </div>
+
+      <textarea
+        value={comment}
+        onChange={e=>setComment(e.target.value)}
+        placeholder="승인/반려 사유 — 서명 대상에 포함되어 위변조 시 감지됩니다"
+        rows={3}
+        style={{width:"100%",borderRadius:9,border:`1px solid ${T.border}`,padding:"8px 10px",fontSize:11,fontFamily:font.sans,color:T.text,resize:"none",boxSizing:"border-box",background:T.bg,marginBottom:10,outline:"none"}}
+      />
+
+      {error && (
+        <div style={{fontSize:11,color:T.red,fontFamily:font.mono,marginBottom:8}}>⚠ {error}</div>
+      )}
+
+      <button
+        onClick={handleSubmit}
+        disabled={!canSubmit}
+        style={{width:"100%",padding:"11px",
+          background: canSubmit ? accent : T.gray,
+          color:T.white,border:"none",borderRadius:10,fontSize:12,fontWeight:700,fontFamily:font.mono,
+          cursor:canSubmit?"pointer":"not-allowed",
+          boxShadow:canSubmit?`0 3px 0 ${accent}88`:"none"}}
+      >
+        {submitting ? "서명 처리 중…" : `전자서명 후 ${decision==="approve"?"승인":"조치 요청"}`}
+      </button>
+    </div>
+  );
+}
+
+//  APPROVAL HISTORY — 서명 검증 배지 타임라인
+//  검증(verifyApprovalRecord)은 이 컴포넌트가 직접 하지 않는다.
+//  ReportView가 1회 계산한 verifiedResults를 그대로 표시만 한다.
+//  (AuditEvidence의 ApprovalEvidence와 동일한 결과를 공유 — 중복 검증 호출 방지)
+// ════════════════════════════════════════════════════════════════
+function ApprovalHistory({ approvals, verifiedResults }) {
+  if (!approvals || approvals.length === 0) return null;
+
+  return (
+    <div style={{marginTop:14}}>
+      <div style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono,marginBottom:8,letterSpacing:1}}>
+        승인 이력 · APPROVAL TIMELINE
+      </div>
+      {approvals.slice().reverse().map(rec => {
+        const v  = (verifiedResults || {})[rec.approvalId];
+        const ok = v?.valid;
+        const badgeColor = v === undefined ? T.gray : ok ? T.green : T.red;
+        return (
+          <div key={rec.approvalId} style={{background:T.cardBg,borderRadius:12,padding:"10px 12px",marginBottom:8,border:`1px solid ${T.border}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:6}}>
+              <div style={{fontSize:12,fontWeight:700,color:T.navy,fontFamily:font.mono}}>
+                {rec.approver} <span style={{color:T.sub,fontWeight:400}}>({rec.role})</span>
+              </div>
+              <div style={{fontSize:10,fontWeight:700,fontFamily:font.mono,color:badgeColor}}>
+                {v === undefined ? "검증 중…" : ok ? "✓ 서명 유효" : "✗ 위변조 의심"}
+              </div>
+            </div>
+            <div style={{fontSize:11,color:T.sub,fontFamily:font.sans,marginTop:4}}>
+              {rec.decision === "approve" ? "승인" : "조치 요청"} · {(rec.approvedAt || "").slice(0,19).replace("T"," ")}
+            </div>
+            {rec.comment && (
+              <div style={{fontSize:11,color:T.text,fontFamily:font.sans,marginTop:6,background:T.bg,borderRadius:8,padding:"6px 8px"}}>
+                “{rec.comment}”
+              </div>
+            )}
+            {v && !ok && (
+              <div style={{fontSize:10,color:T.red,fontFamily:font.mono,marginTop:6}}>
+                [{v.contract}] {v.reason}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+
+// ── components/NewCaseForm.jsx ──────────────────────────
+//  NEW CASE FORM — 기본 정보 입력
+// ════════════════════════════════════════════════════════════════
+const FLUID_OPTIONS = ["CO₂ (고압)","N₂ (불활성)","수증기 (Steam)","공기","메탄 (CH₄)","기타"];
+const REVIEW_OPTIONS = ["정기 PSM 검토","최초 설치 검토","변경 검토 (MOC)","사고 후 검토","기타"];
+
+function NewCaseForm({ onConfirm, onCancel }) {
+  const [tag,    setTag]    = useState("");
+  const [loc,    setLoc]    = useState("");
+  const [fluid,  setFluid]  = useState(FLUID_OPTIONS[0]);
+  const [review, setReview] = useState(REVIEW_OPTIONS[0]);
+
+  const valid = tag.trim().length > 0;
+
+  const iStyle = {
+    width:"100%", padding:"12px 13px", borderRadius:10,
+    fontSize:15, fontFamily:font.mono, color:T.text,
+    boxSizing:"border-box", background:T.white, outline:"none",
+    WebkitAppearance:"none", appearance:"none",
+  };
+
+  return (
+    <div style={{background:T.cardBg,borderRadius:16,padding:18,
+      border:`1.5px solid ${T.border}`,boxShadow:"0 4px 16px #0002"}}>
+      <div style={{fontSize:15,fontWeight:900,color:T.navy,fontFamily:font.mono,marginBottom:16}}>
+        새 검토 등록
+      </div>
+
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:11,fontWeight:700,color:T.sub,fontFamily:font.mono,marginBottom:5}}>
+          Tag No. <span style={{color:T.red}}>*</span>
+        </div>
+        <input
+          type="text"
+          value={tag}
+          onChange={(e) => setTag(e.target.value)}
+          placeholder="예: PSV-R301"
+          autoComplete="off" autoCorrect="off" spellCheck="false"
+          style={{...iStyle, border:`1.5px solid ${valid ? T.navyLight : T.border}`}}
+        />
+        {/* 입력 확인용 즉시 표시 — 디버그 겸 사용자 피드백 */}
+        <div style={{fontSize:11,color:tag?T.navyLight:T.gray,fontFamily:font.mono,marginTop:5,minHeight:16}}>
+          {tag ? `입력됨: "${tag}"` : "아직 입력되지 않음"}
+        </div>
+      </div>
+
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:11,fontWeight:700,color:T.sub,fontFamily:font.mono,marginBottom:5}}>설치 위치</div>
+        <input
+          type="text"
+          value={loc}
+          onChange={(e) => setLoc(e.target.value)}
+          placeholder="예: 반응기 R-301 상부"
+          autoComplete="off"
+          style={{...iStyle, border:`1.5px solid ${T.border}`}}
+        />
+      </div>
+
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:11,fontWeight:700,color:T.sub,fontFamily:font.mono,marginBottom:5}}>유체</div>
+        <select value={fluid} onChange={(e) => setFluid(e.target.value)}
+          style={{...iStyle, border:`1.5px solid ${T.border}`, cursor:"pointer"}}>
+          {FLUID_OPTIONS.map(o=><option key={o} value={o}>{o}</option>)}
+        </select>
+      </div>
+
+      <div style={{marginBottom:18}}>
+        <div style={{fontSize:11,fontWeight:700,color:T.sub,fontFamily:font.mono,marginBottom:5}}>검토 유형</div>
+        <select value={review} onChange={(e) => setReview(e.target.value)}
+          style={{...iStyle, border:`1.5px solid ${T.border}`, cursor:"pointer"}}>
+          {REVIEW_OPTIONS.map(o=><option key={o} value={o}>{o}</option>)}
+        </select>
+      </div>
+
+      <div style={{display:"flex",gap:10}}>
+        <button onClick={onCancel}
+          style={{flex:1,padding:"13px",background:T.bg,color:T.sub,
+            border:`1px solid ${T.border}`,borderRadius:11,fontSize:13,
+            fontWeight:700,fontFamily:font.mono,cursor:"pointer"}}>
+          취소
+        </button>
+        <button
+          onClick={()=>{ if(valid) onConfirm({tag:tag.trim(),loc,fluid,review}); }}
+          style={{flex:2,padding:"13px",
+            background:valid?T.navyLight:"#CBD5E1",
+            color:T.white,border:"none",borderRadius:11,fontSize:13,
+            fontWeight:900,fontFamily:font.sans,
+            cursor:valid?"pointer":"not-allowed",
+            boxShadow:valid?`0 4px 0 ${T.navy}`:"none",
+            transition:"all 0.15s"}}>
+          {valid ? "검토 등록 →" : "Tag 입력 후 등록"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
+// ── components/AssetMaster.jsx ──────────────────────────
+//  ASSET MASTER — Equipment + DischargeSystem 등록/조회/선택
+// ════════════════════════════════════════════════════════════════
+
+const DEST_OPTIONS = [
+  { id:"flare",  label:"플레어 헤더",  note:"대기 연소" },
+  { id:"atm",    label:"대기 직방출",  note:"비독성·비가연만" },
+  { id:"closed", label:"밀폐 시스템",  note:"회수·처리" },
+];
+const DEVICE_OPTIONS = [
+  { id:"safetyValve", label:"🔧 안전밸브" },
+  { id:"ruptureDisk",  label:"💥 럽처디스크" },
+];
+
+// ── 공통 스타일 헬퍼 ────────────────────────────────────────
+const iS = (extra={}) => ({
+  width:"100%", padding:"10px 12px", borderRadius:9,
+  border:`1.5px solid ${T.border}`, fontSize:13,
+  fontFamily:font.mono, color:T.text, background:T.white,
+  boxSizing:"border-box", outline:"none",
+  ...extra,
+});
+const Lbl = ({txt, req}) => (
+  <div style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono,marginBottom:4}}>
+    {txt}{req && <span style={{color:T.red}}> *</span>}
+  </div>
+);
+const Field = ({label, req, children}) => (
+  <div style={{marginBottom:12}}><Lbl txt={label} req={req}/>{children}</div>
+);
+const Row2 = ({a, b}) => (
+  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>{a}{b}</div>
+);
+const Section = ({title, children}) => (
+  <div style={{background:T.bg,borderRadius:12,padding:"13px 13px 4px",
+    marginBottom:12,border:`1px solid ${T.border}`}}>
+    <div style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono,
+      marginBottom:10,letterSpacing:1}}>{title}</div>
+    {children}
+  </div>
+);
+
+// ── EquipmentForm ─────────────────────────────────────────────
+function EquipmentForm({ onSave, onCancel, editing }) {
+  const isRevision = !!editing;
+  const [f, setF] = useState(editing ? {
+    tag: editing.tag, location: editing.location, deviceType: editing.deviceType,
+    mawp: editing.mawp, setPressure: editing.setPressure, orifice: editing.orifice,
+    inletSize: editing.inletSize, outletSize: editing.outletSize,
+    manufacturer: editing.manufacturer, model: editing.model,
+    serialNo: editing.serialNo, installedAt: editing.installedAt,
+    mocId: "",
+  } : {
+    tag:"", location:"", deviceType:"safetyValve",
+    mawp:6.0, setPressure:5.5, orifice:"",
+    inletSize:"3\"", outletSize:"4\"",
+    manufacturer:"", model:"", serialNo:"", installedAt:"",
+    mocId:"",
+  });
+  const upd = (k,v) => setF(p=>({...p,[k]:v}));
+  const psetErr = f.setPressure > f.mawp;
+  const valid = f.tag.trim() && f.mawp>0 && f.setPressure>0 && !psetErr &&
+    (!isRevision || f.mocId.trim().length > 0);
+
+  const handleSave = () => {
+    if (!valid) return;
+    if (isRevision) {
+      const result = reviseEquipment(editing, f);
+      if (!result.ok) { alert(`${result.field}: ${result.reason}`); return; }
+      onSave(result.equipment);
+      return;
+    }
+    try { onSave(createEquipment(f)); } catch(e) { alert(e.message); }
+  };
+
+  return (
+    <div style={{background:T.cardBg,borderRadius:16,padding:18,
+      border:`1.5px solid ${T.border}`,boxShadow:"0 4px 16px #0002"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+        <div style={{fontSize:14,fontWeight:900,color:T.navy,fontFamily:font.mono}}>
+          {isRevision ? `설비 개정 — ${editing.tag}` : "PSV 설비 등록"}
+        </div>
+        {isRevision && (
+          <div style={{fontSize:10,fontWeight:700,color:T.orange,fontFamily:font.mono}}>
+            Rev.{editing.revision} → Rev.{editing.revision + 1}
+          </div>
+        )}
+      </div>
+
+      {isRevision && (
+        <Section title="MOC (변경 관리)">
+          <Field label="MOC 번호" req>
+            <input value={f.mocId}
+              onChange={e=>upd("mocId",e.target.value)}
+              placeholder="MOC-2026-0012"
+              style={iS({border:`1.5px solid ${f.mocId.trim()?T.navyLight:T.red}`})}/>
+            <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:3}}>
+              설비 사양 개정은 MOC 번호 없이 저장할 수 없습니다 — 근거 없는 변경 차단.
+            </div>
+          </Field>
+        </Section>
+      )}
+
+      <Section title="기본 정보">
+        <Row2
+          a={<Field label="Tag No." req><input value={f.tag}
+            onChange={e=>upd("tag",e.target.value)}
+            onInput={e=>upd("tag",e.target.value)}
+            placeholder="PSV-R201" autoComplete="off"
+            style={iS({border:`1.5px solid ${f.tag.trim()?T.navyLight:T.border}`})}/></Field>}
+          b={<Field label="설치 위치"><input value={f.location}
+            onChange={e=>upd("location",e.target.value)}
+            placeholder="반응기 R-201 상부"
+            style={iS()}/></Field>}
+        />
+        <Field label="밸브 종류">
+          <div style={{display:"flex",gap:8}}>
+            {DEVICE_OPTIONS.map(d=>(
+              <div key={d.id} onClick={()=>upd("deviceType",d.id)}
+                style={{flex:1,padding:"8px 10px",borderRadius:9,cursor:"pointer",
+                  textAlign:"center",
+                  border:`2px solid ${f.deviceType===d.id?T.navyLight:T.border}`,
+                  background:f.deviceType===d.id?T.navy+"0D":T.white,
+                  fontSize:12,fontWeight:700,
+                  color:f.deviceType===d.id?T.navy:T.text,
+                  fontFamily:font.sans}}>
+                {d.label}
+              </div>
+            ))}
+          </div>
+        </Field>
+      </Section>
+
+      <Section title="압력 및 오리피스">
+        <Row2
+          a={<Field label="MAWP (barg)" req>
+            <input type="number" value={f.mawp} step={0.1} min={0.1}
+              onChange={e=>upd("mawp",+e.target.value)} style={iS()}/>
+          </Field>}
+          b={<Field label="설정압 (barg)" req>
+            <input type="number" value={f.setPressure} step={0.1} min={0.1}
+              onChange={e=>upd("setPressure",+e.target.value)}
+              style={iS({border:`1.5px solid ${psetErr?T.red:T.border}`})}/>
+            {psetErr && <div style={{fontSize:9,color:T.red,marginTop:3}}>MAWP 초과</div>}
+          </Field>}
+        />
+        <Row2
+          a={<Field label="오리피스">
+            <input value={f.orifice}
+              onChange={e=>upd("orifice",e.target.value.toUpperCase())}
+              placeholder="P" style={iS()}/>
+          </Field>}
+          b={<Field label="입구/출구 Size">
+            <div style={{display:"flex",gap:6}}>
+              <input value={f.inletSize} onChange={e=>upd("inletSize",e.target.value)}
+                placeholder='3"' style={iS({width:"50%"})}/>
+              <input value={f.outletSize} onChange={e=>upd("outletSize",e.target.value)}
+                placeholder='4"' style={iS({width:"50%"})}/>
+            </div>
+          </Field>}
+        />
+      </Section>
+
+      <Section title="제조사 정보 (선택)">
+        <Row2
+          a={<Field label="제조사"><input value={f.manufacturer}
+            onChange={e=>upd("manufacturer",e.target.value)}
+            placeholder="Crosby" style={iS()}/></Field>}
+          b={<Field label="모델"><input value={f.model}
+            onChange={e=>upd("model",e.target.value)}
+            placeholder="JOS-E" style={iS()}/></Field>}
+        />
+        <Row2
+          a={<Field label="Serial No."><input value={f.serialNo}
+            onChange={e=>upd("serialNo",e.target.value)}
+            placeholder="SN-2024-001" style={iS()}/></Field>}
+          b={<Field label="설치일"><input type="date" value={f.installedAt}
+            onChange={e=>upd("installedAt",e.target.value)}
+            style={iS()}/></Field>}
+        />
+      </Section>
+
+      <div style={{display:"flex",gap:10}}>
+        <button onClick={onCancel}
+          style={{flex:1,padding:"12px",background:T.bg,color:T.sub,
+            border:`1px solid ${T.border}`,borderRadius:11,
+            fontSize:12,fontWeight:700,fontFamily:font.mono,cursor:"pointer"}}>
+          취소
+        </button>
+        <button onClick={handleSave}
+          style={{flex:2,padding:"12px",
+            background:valid?T.navyLight:"#CBD5E1",
+            color:T.white,border:"none",borderRadius:11,fontSize:13,
+            fontWeight:900,fontFamily:font.sans,
+            cursor:valid?"pointer":"not-allowed",
+            boxShadow:valid?`0 4px 0 ${T.navy}`:"none"}}>
+          {valid?(isRevision?"개정 저장 →":"설비 등록 →"):"필수 항목 입력 필요"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── DischargeSystemForm ───────────────────────────────────────
+// editing이 있으면 "개정" 모드: mocId 필수, revision은 자동 증가(읽기 전용 표시)
+function DischargeSystemForm({ onSave, onCancel, editing }) {
+  const isRevision = !!editing;
+  const [f, setF] = useState(editing ? {
+    name: editing.name, destination: editing.destination,
+    L: editing.L, D: editing.D, fittingsK: editing.fittingsK,
+    headerPressure: editing.headerPressure,
+    connectedTags: (editing.connectedTags || []).join(", "),
+    mocId: "",
+  } : {
+    name:"", destination:"flare",
+    L:15, D:0.1, fittingsK:3.0, headerPressure:0.3, connectedTags:"",
+    mocId:"",
+  });
+  const upd = (k,v) => setF(p=>({...p,[k]:v}));
+  const valid = f.name.trim() && f.D > 0 && f.L >= 0 &&
+    (!isRevision || f.mocId.trim().length > 0);
+
+  const handleSave = () => {
+    if (!valid) return;
+    const tags = f.connectedTags.split(",").map(t=>t.trim()).filter(Boolean);
+    if (isRevision) {
+      const result = reviseDischargeSystem(editing, { ...f, connectedTags: tags });
+      if (!result.ok) { alert(`${result.field}: ${result.reason}`); return; }
+      onSave(result.dischargeSystem);
+      return;
+    }
+    try {
+      onSave(createDischargeSystem({ ...f, connectedTags: tags }));
+    } catch(e) { alert(e.message); }
+  };
+
+  return (
+    <div style={{background:T.cardBg,borderRadius:16,padding:18,
+      border:`1.5px solid ${T.border}`,boxShadow:"0 4px 16px #0002"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+        <div style={{fontSize:14,fontWeight:900,color:T.navy,fontFamily:font.mono}}>
+          {isRevision ? `배출계통 개정 — ${editing.name}` : "배출계통 등록"}
+        </div>
+        {isRevision && (
+          <div style={{fontSize:10,fontWeight:700,color:T.orange,fontFamily:font.mono}}>
+            Rev.{editing.revision} → Rev.{editing.revision + 1}
+          </div>
+        )}
+      </div>
+
+      {isRevision && (
+        <Section title="MOC (변경 관리)">
+          <Field label="MOC 번호" req>
+            <input value={f.mocId}
+              onChange={e=>upd("mocId",e.target.value)}
+              placeholder="MOC-2026-0012"
+              style={iS({border:`1.5px solid ${f.mocId.trim()?T.navyLight:T.red}`})}/>
+            <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:3}}>
+              배관 개정은 MOC 번호 없이 저장할 수 없습니다 — 근거 없는 변경 차단.
+            </div>
+          </Field>
+        </Section>
+      )}
+
+      <Section title="계통 정보">
+        <Field label="계통 명칭" req>
+          <input value={f.name}
+            onChange={e=>upd("name",e.target.value)}
+            onInput={e=>upd("name",e.target.value)}
+            placeholder="LP-FLARE-01" autoComplete="off"
+            style={iS({border:`1.5px solid ${f.name.trim()?T.navyLight:T.border}`})}/>
+        </Field>
+        <Field label="배출 목적지">
+          <div style={{display:"flex",gap:6}}>
+            {DEST_OPTIONS.map(d=>(
+              <div key={d.id} onClick={()=>upd("destination",d.id)}
+                style={{flex:1,padding:"8px",borderRadius:9,cursor:"pointer",
+                  textAlign:"center",
+                  border:`2px solid ${f.destination===d.id?T.navyLight:T.border}`,
+                  background:f.destination===d.id?T.navy+"0D":T.white}}>
+                <div style={{fontSize:11,fontWeight:700,
+                  color:f.destination===d.id?T.navy:T.text,
+                  fontFamily:font.sans}}>{d.label}</div>
+                <div style={{fontSize:9,color:T.sub}}>{d.note}</div>
+              </div>
+            ))}
+          </div>
+        </Field>
+      </Section>
+
+      <Section title="배관 형상 (도면 기준)">
+        <Row2
+          a={<Field label="배관 길이 L (m)" req>
+            <input type="number" value={f.L} step={0.5} min={0}
+              onChange={e=>upd("L",+e.target.value)} style={iS()}/>
+          </Field>}
+          b={<Field label="배관 내경 D (m)" req>
+            <input type="number" value={f.D} step={0.005} min={0.01}
+              onChange={e=>upd("D",+e.target.value)}
+              style={iS({border:`1.5px solid ${f.D>0?T.border:T.red}`})}/>
+          </Field>}
+        />
+        <Row2
+          a={<Field label="Fittings ΣK">
+            <input type="number" value={f.fittingsK} step={0.1} min={0}
+              onChange={e=>upd("fittingsK",+e.target.value)} style={iS()}/>
+          </Field>}
+          b={<Field label="Header 압력 (barg)">
+            <input type="number" value={f.headerPressure} step={0.05} min={0}
+              onChange={e=>upd("headerPressure",+e.target.value)} style={iS()}/>
+          </Field>}
+        />
+        <Field label="연결 PSV Tag (쉼표 구분)">
+          <input value={f.connectedTags}
+            onChange={e=>upd("connectedTags",e.target.value)}
+            placeholder="PSV-R201, PSV-R202" style={iS()}/>
+          <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:3}}>
+            이 계통을 공유하는 PSV tag를 쉼표로 구분해 입력
+          </div>
+        </Field>
+      </Section>
+
+      <div style={{display:"flex",gap:10}}>
+        <button onClick={onCancel}
+          style={{flex:1,padding:"12px",background:T.bg,color:T.sub,
+            border:`1px solid ${T.border}`,borderRadius:11,
+            fontSize:12,fontWeight:700,fontFamily:font.mono,cursor:"pointer"}}>
+          취소
+        </button>
+        <button onClick={handleSave}
+          style={{flex:2,padding:"12px",
+            background:valid?T.navyLight:"#CBD5E1",
+            color:T.white,border:"none",borderRadius:11,fontSize:13,
+            fontWeight:900,fontFamily:font.sans,
+            cursor:valid?"pointer":"not-allowed",
+            boxShadow:valid?`0 4px 0 ${T.navy}`:"none"}}>
+          {valid?(isRevision?"개정 저장 →":"배출계통 등록 →"):"필수 항목 입력 필요"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── EquipmentCard ─────────────────────────────────────────────
+function EquipmentCard({ eq, dischargeSystem, onSelect, onEdit }) {
+  const ds = dischargeSystem;
+  return (
+    <div
+      style={{display:"block",width:"100%",textAlign:"left",
+        background:T.cardBg,borderRadius:14,padding:"13px 15px",
+        marginBottom:10,border:`1.5px solid ${T.border}`,
+        boxShadow:"0 2px 6px #0001",
+        fontFamily:font.sans}}>
+      <div style={{display:"flex",alignItems:"flex-start",
+        justifyContent:"space-between",marginBottom:5}}>
+        <div>
+          <div style={{fontSize:15,fontWeight:900,color:T.navy,fontFamily:font.mono}}>
+            {eq.tag}
+            <span style={{marginLeft:6,fontSize:9,fontWeight:700,color:T.sub}}>
+              Rev.{eq.revision ?? 1}
+            </span>
+          </div>
+          <div style={{fontSize:10,color:T.sub,fontFamily:font.mono,marginTop:1}}>
+            {eq.location}
+          </div>
+        </div>
+        <div style={{display:"flex",gap:5,flexShrink:0}}>
+          <span style={{fontSize:9,padding:"2px 7px",borderRadius:10,
+            background:T.blueBg,color:T.blue,border:`1px solid ${T.blue}`,
+            fontFamily:font.mono,fontWeight:700}}>
+            {eq.orifice||"?"}
+          </span>
+          <span style={{fontSize:9,padding:"2px 7px",borderRadius:10,
+            background:T.bg,color:T.sub,border:`1px solid ${T.border}`,
+            fontFamily:font.mono}}>
+            {eq.deviceType==="safetyValve"?"S.V":"R.D"}
+          </span>
+        </div>
+      </div>
+
+      <div style={{display:"flex",gap:6,marginBottom:ds?6:0}}>
+        {[
+          ["SET",  `${eq.setPressure}b`],
+          ["MAWP", `${eq.mawp}b`],
+          ["IN/OUT",`${eq.inletSize}/${eq.outletSize}`],
+        ].map(([k,v])=>(
+          <div key={k} style={{background:T.bg,borderRadius:6,
+            padding:"3px 8px",flex:1,textAlign:"center"}}>
+            <div style={{fontSize:8,color:T.gray,fontFamily:font.mono}}>{k}</div>
+            <div style={{fontSize:11,fontWeight:700,color:T.navyLight,
+              fontFamily:font.mono}}>{v}</div>
+          </div>
+        ))}
+      </div>
+
+      {ds && (
+        <div style={{background:T.blueBg,borderRadius:8,padding:"5px 10px",
+          fontSize:10,color:T.navyLight,fontFamily:font.mono,display:"flex",
+          alignItems:"center",justifyContent:"space-between"}}>
+          <span>⟶ {ds.name}</span>
+          <span>{ds.destination==="flare"?"플레어":ds.destination==="atm"?"대기":"밀폐"} · L={ds.L}m · Ø{Math.round(ds.D*1000)}mm</span>
+        </div>
+      )}
+
+      <div style={{marginTop:8,display:"flex",gap:8,justifyContent:"flex-end"}}>
+        <button onClick={()=>onEdit(eq)}
+          style={{padding:"5px 12px",background:T.bg,color:T.navyLight,
+            border:`1px solid ${T.navyLight}`,borderRadius:8,
+            fontSize:10,fontWeight:700,fontFamily:font.mono,cursor:"pointer"}}>
+          설비 개정 (MOC) →
+        </button>
+        <button onClick={()=>onSelect(eq)}
+          style={{padding:"5px 12px",background:T.navyLight,color:T.white,
+            border:"none",borderRadius:8,
+            fontSize:10,fontWeight:700,fontFamily:font.mono,cursor:"pointer"}}>
+          이 설비로 검토 시작 →
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── AssetMaster ───────────────────────────────────────────────
+function AssetMaster({ equipments, dischargeSystems, onSelectEquipment,
+                       onAddEquipment, onReviseEquipment,
+                       onAddDischargeSystem,
+                       onReviseDischargeSystem, onBack }) {
+  const [tab,      setTab]      = useState("equipment"); // equipment | discharge
+  const [showEqForm, setShowEqForm] = useState(false);
+  const [showDsForm, setShowDsForm] = useState(false);
+  const [editingEq,  setEditingEq]  = useState(null); // 개정 대상 Equipment
+  const [editingDs,  setEditingDs]  = useState(null); // 개정 대상 DischargeSystem
+
+  // Equipment에 매칭되는 DischargeSystem 찾기
+  const findDs = (eq) => dischargeSystems.find(
+    ds => ds.connectedTags.includes(eq.tag)
+  ) || null;
+
+  const Tab = ({id, label}) => (
+    <button onClick={()=>setTab(id)}
+      style={{flex:1,padding:"9px",border:"none",borderRadius:9,cursor:"pointer",
+        fontSize:12,fontWeight:700,fontFamily:font.mono,
+        background:tab===id?T.navyLight:T.bg,
+        color:tab===id?T.white:T.sub,
+        boxShadow:tab===id?`0 3px 0 ${T.navy}`:"0 2px 0 #ccc"}}>
+      {label}
+    </button>
+  );
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+        <button onClick={onBack}
+          style={{padding:"8px 12px",background:T.bg,border:`1px solid ${T.border}`,
+            borderRadius:9,fontSize:13,fontWeight:700,color:T.sub,
+            fontFamily:font.mono,cursor:"pointer"}}>←</button>
+        <div>
+          <div style={{fontSize:16,fontWeight:900,color:T.navy,fontFamily:font.mono}}>
+            설비대장
+          </div>
+          <div style={{fontSize:10,color:T.sub,fontFamily:font.sans}}>
+            PSV 설비 선택 → 검토 시작
+          </div>
+        </div>
+      </div>
+
+      {/* 탭 */}
+      <div style={{display:"flex",gap:6,marginBottom:14}}>
+        <Tab id="equipment" label={`🔧 설비 (${equipments.length})`}/>
+        <Tab id="discharge" label={`⟶ 배출계통 (${dischargeSystems.length})`}/>
+      </div>
+
+      {/* Equipment 탭 */}
+      {tab === "equipment" && (
+        <>
+          {!showEqForm && !editingEq && (
+            <button onClick={()=>setShowEqForm(true)}
+              style={{width:"100%",padding:"12px",background:T.navyLight,color:T.white,
+                border:"none",borderRadius:12,fontSize:13,fontWeight:900,
+                fontFamily:font.sans,cursor:"pointer",boxShadow:`0 4px 0 ${T.navy}`,
+                marginBottom:12}}>
+              + 새 설비 등록
+            </button>
+          )}
+          {showEqForm && (
+            <div style={{marginBottom:12}}>
+              <EquipmentForm
+                onSave={eq=>{ onAddEquipment(eq); setShowEqForm(false); }}
+                onCancel={()=>setShowEqForm(false)}/>
+            </div>
+          )}
+          {editingEq && (
+            <div style={{marginBottom:12}}>
+              <EquipmentForm
+                editing={editingEq}
+                onSave={eq=>{ onReviseEquipment(eq); setEditingEq(null); }}
+                onCancel={()=>setEditingEq(null)}/>
+            </div>
+          )}
+          {equipments.length === 0 ? (
+            <div style={{textAlign:"center",padding:"40px 20px",color:T.gray}}>
+              <div style={{fontSize:36,marginBottom:8}}>🔧</div>
+              <div style={{fontSize:13,color:T.sub}}>등록된 설비가 없습니다</div>
+            </div>
+          ) : (
+            equipments.map(eq => (
+              <EquipmentCard key={eq.id} eq={eq} dischargeSystem={findDs(eq)}
+                onSelect={onSelectEquipment} onEdit={setEditingEq}/>
+            ))
+          )}
+        </>
+      )}
+
+      {/* DischargeSystem 탭 */}
+      {tab === "discharge" && (
+        <>
+          {!showDsForm && !editingDs && (
+            <button onClick={()=>setShowDsForm(true)}
+              style={{width:"100%",padding:"12px",background:T.navyLight,color:T.white,
+                border:"none",borderRadius:12,fontSize:13,fontWeight:900,
+                fontFamily:font.sans,cursor:"pointer",boxShadow:`0 4px 0 ${T.navy}`,
+                marginBottom:12}}>
+              + 배출계통 등록
+            </button>
+          )}
+          {showDsForm && (
+            <div style={{marginBottom:12}}>
+              <DischargeSystemForm
+                onSave={ds=>{ onAddDischargeSystem(ds); setShowDsForm(false); }}
+                onCancel={()=>setShowDsForm(false)}/>
+            </div>
+          )}
+          {editingDs && (
+            <div style={{marginBottom:12}}>
+              <DischargeSystemForm
+                editing={editingDs}
+                onSave={ds=>{ onReviseDischargeSystem(ds); setEditingDs(null); }}
+                onCancel={()=>setEditingDs(null)}/>
+            </div>
+          )}
+          {dischargeSystems.length === 0 ? (
+            <div style={{textAlign:"center",padding:"40px 20px",color:T.gray}}>
+              <div style={{fontSize:36,marginBottom:8}}>⟶</div>
+              <div style={{fontSize:13,color:T.sub}}>등록된 배출계통이 없습니다</div>
+            </div>
+          ) : (
+            dischargeSystems.map(ds => (
+              <div key={ds.id}
+                style={{background:T.cardBg,borderRadius:14,padding:"13px 15px",
+                  marginBottom:10,border:`1.5px solid ${T.border}`}}>
+                <div style={{display:"flex",alignItems:"center",
+                  justifyContent:"space-between",marginBottom:6}}>
+                  <div style={{fontSize:14,fontWeight:900,color:T.navy,fontFamily:font.mono}}>
+                    {ds.name}
+                    <span style={{marginLeft:6,fontSize:9,fontWeight:700,color:T.sub}}>
+                      Rev.{ds.revision}
+                    </span>
+                  </div>
+                  <span style={{fontSize:10,padding:"3px 9px",borderRadius:10,
+                    background:T.blueBg,color:T.blue,border:`1px solid ${T.blue}`,
+                    fontFamily:font.mono,fontWeight:700}}>
+                    {DESTINATION_LABEL[ds.destination]}
+                  </span>
+                </div>
+                <div style={{display:"flex",gap:6}}>
+                  {[
+                    ["L", `${ds.L}m`],
+                    ["D", `Ø${Math.round(ds.D*1000)}mm`],
+                    ["ΣK", ds.fittingsK],
+                    ["P_hdr", `${ds.headerPressure}b`],
+                  ].map(([k,v])=>(
+                    <div key={k} style={{background:T.bg,borderRadius:6,
+                      padding:"3px 8px",flex:1,textAlign:"center"}}>
+                      <div style={{fontSize:8,color:T.gray,fontFamily:font.mono}}>{k}</div>
+                      <div style={{fontSize:11,fontWeight:700,color:T.navyLight,
+                        fontFamily:font.mono}}>{v}</div>
+                    </div>
+                  ))}
+                </div>
+                {ds.connectedTags.length > 0 && (
+                  <div style={{marginTop:6,fontSize:10,color:T.sub,fontFamily:font.mono}}>
+                    연결: {ds.connectedTags.join(", ")}
+                  </div>
+                )}
+                <div style={{marginTop:8,textAlign:"right"}}>
+                  <button onClick={()=>setEditingDs(ds)}
+                    style={{padding:"5px 12px",background:T.bg,color:T.navyLight,
+                      border:`1px solid ${T.navyLight}`,borderRadius:8,
+                      fontSize:10,fontWeight:700,fontFamily:font.mono,cursor:"pointer"}}>
+                    배관 개정 (MOC) →
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+
+// ── components/report/AssetEvidence.jsx ──────────────────────────
+//  ASSET EVIDENCE
+//  AUDIT-001: snapshot.assetRefs만 읽는다. "지금 이 순간의" Asset 상태 참조 금지
+//  — 감사자는 "검토 당시 무엇이었는지"를 봐야 하며 최신 Asset 값과 섞이면
+//  증거가 아니라 현재값이 되어버린다.
+// ════════════════════════════════════════════════════════════════
+function AssetEvidence({ snapshot }) {
+  const refs = snapshot.assetRefs || {};
+  const ds = snapshot.dischargeSystem; // 당시 박제된 값 — 현재 Asset 아님 (AUDIT-001)
+  return (
+    <div>
+      <div style={{fontSize:9,fontWeight:700,color:T.sub,fontFamily:font.mono,
+        letterSpacing:1,marginBottom:6}}>ASSET</div>
+      <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12}}>
+        <span style={{color:T.sub,fontFamily:font.mono}}>Equipment</span>
+        <span style={{color:T.text,fontWeight:700,fontFamily:font.mono}}>
+          {refs.equipmentTag || "—"} · Rev.{refs.equipmentRevision ?? "—"}
+        </span>
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12}}>
+        <span style={{color:T.sub,fontFamily:font.mono}}>Discharge</span>
+        <span style={{color:T.text,fontWeight:700,fontFamily:font.mono}}>
+          {refs.dischargeSystemName || "—"} · Rev.{refs.dischargeRevision ?? "—"}
+        </span>
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:11}}>
+        <span style={{color:T.gray,fontFamily:font.mono}}>Fingerprint</span>
+        <span style={{color:T.gray,fontFamily:font.mono}}>
+          {(refs.assetFingerprint || "").slice(0,16)}
+        </span>
+      </div>
+      <div style={{fontSize:9,fontWeight:700,color:T.sub,fontFamily:font.mono,
+        letterSpacing:1,margin:"10px 0 4px"}}>BACKPRESSURE BASIS</div>
+      <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12}}>
+        <span style={{color:T.sub,fontFamily:font.mono}}>Header Pressure</span>
+        <span style={{color:T.text,fontWeight:700,fontFamily:font.mono}}>
+          {ds?.headerPressure ?? "—"} barg
+        </span>
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12}}>
+        <span style={{color:T.sub,fontFamily:font.mono}}>Pipe / Diameter</span>
+        <span style={{color:T.text,fontWeight:700,fontFamily:font.mono}}>
+          {ds?.L ?? "—"}m / Ø{ds?.D != null ? Math.round(ds.D*1000) : "—"}mm
+        </span>
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12}}>
+        <span style={{color:T.sub,fontFamily:font.mono}}>Fittings K</span>
+        <span style={{color:T.text,fontWeight:700,fontFamily:font.mono}}>{ds?.fittingsK ?? "—"}</span>
+      </div>
+    </div>
+  );
+}
+
+
+// ── components/report/WorkflowEvidence.jsx ──────────────────────────
+//  WORKFLOW EVIDENCE
+//  Calculation Basis + Workflow Decision — snapshot 필드만 읽는 projection.
+//  fluid 라벨은 FLUID_CHOICES 테이블 조회일 뿐 계산이 아님 (WF_LABEL과 동일한 성격).
+// ════════════════════════════════════════════════════════════════
+function _findFluidLabel(inputs) {
+  if (!inputs) return "커스텀";
+  const match = FLUID_CHOICES.find(f => f.M === inputs.M && f.k === inputs.k);
+  return match ? match.label : "커스텀 유체 (직접 입력값)";
+}
+
+function WorkflowEvidence({ snapshot }) {
+  const wd = snapshot.workflowDecision;
+  return (
+    <div>
+      <div style={{fontSize:9,fontWeight:700,color:T.sub,fontFamily:font.mono,
+        letterSpacing:1,marginBottom:6}}>CALCULATION BASIS</div>
+      <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12}}>
+        <span style={{color:T.sub,fontFamily:font.mono}}>Fluid</span>
+        <span style={{color:T.text,fontWeight:700,fontFamily:font.mono}}>{_findFluidLabel(snapshot.inputs)}</span>
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12}}>
+        <span style={{color:T.sub,fontFamily:font.mono}}>Engine</span>
+        <span style={{color:T.text,fontWeight:700,fontFamily:font.mono}}>API520 v{snapshot.engine_version}</span>
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:11}}>
+        <span style={{color:T.gray,fontFamily:font.mono}}>Snapshot</span>
+        <span style={{color:T.gray,fontFamily:font.mono}}>{(snapshot.snapshotHash||"").slice(0,16)}</span>
+      </div>
+
+      <div style={{fontSize:9,fontWeight:700,color:T.sub,fontFamily:font.mono,
+        letterSpacing:1,margin:"12px 0 6px"}}>WORKFLOW DECISION</div>
+      <div style={{display:"flex",justifyContent:"space-between",padding:"4px 0",fontSize:12}}>
+        <span style={{color:T.sub,fontFamily:font.mono}}>State</span>
+        <span style={{color:WF_COLOR[snapshot.workflow]||T.text,fontWeight:700,fontFamily:font.mono}}>
+          {WF_LABEL[snapshot.workflow] || snapshot.workflow}
+        </span>
+      </div>
+      {wd && wd.reasons && wd.reasons.length > 0 && (
+        <div style={{marginTop:4}}>
+          {wd.reasons.map((r,i) => (
+            <div key={i} style={{fontSize:11,color:T.sub,fontFamily:font.mono,padding:"2px 0"}}>
+              · {r.field} {r.from}{r.unit} → {r.to}{r.unit}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ── components/report/ApprovalEvidence.jsx ──────────────────────────
+//  APPROVAL EVIDENCE
+//  현재 보고 있는 snapshot(snapshotHash)에 실제로 서명된 Approval만 필터링해 보여준다.
+//  검증(verifyApprovalRecord)은 여기서 호출하지 않는다 — ReportView가 1회 계산해
+//  넘겨주는 verifiedResults를 그대로 표시만 (ApprovalHistory와 동일 결과 공유).
+//  AUDIT-005: Evidence(Asset/Workflow)는 항상 존재하지만 Approval은 조건부 —
+//  승인 전에는 빈 상태를 명확히 보여준다(감춤 없이).
+// ════════════════════════════════════════════════════════════════
+function ApprovalEvidence({ snapshot, approvals, verifiedResults }) {
+  const matched = (approvals || []).filter(a => a.snapshotHash === snapshot.snapshotHash);
+  const emptyMsg = snapshot.workflow === "REVIEW"
+    ? "승인 대기 중 — 아래 전자서명 양식에서 진행하세요"
+    : "이 버전에 대한 승인 없음";
+
+  return (
+    <div>
+      <div style={{fontSize:9,fontWeight:700,color:T.sub,fontFamily:font.mono,
+        letterSpacing:1,marginBottom:6}}>APPROVAL</div>
+      {matched.length === 0 ? (
+        <div style={{fontSize:12,color:T.gray,fontFamily:font.mono}}>{emptyMsg}</div>
+      ) : (
+        matched.map(rec => {
+          const v  = (verifiedResults || {})[rec.approvalId];
+          const ok = v?.valid;
+          return (
+            <div key={rec.approvalId} style={{display:"flex",justifyContent:"space-between",
+              alignItems:"center",padding:"4px 0",fontSize:12}}>
+              <span style={{color:T.text,fontWeight:700,fontFamily:font.mono}}>
+                {v === undefined ? "· " : ok ? "✓ " : "✗ "}{rec.approver}
+              </span>
+              <span style={{color:T.sub,fontFamily:font.mono,fontSize:11}}>
+                {(rec.approvedAt||"").slice(0,10)}
+              </span>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+
+// ── components/report/AuditEvidence.jsx ──────────────────────────
+//  AUDIT EVIDENCE
+//  "왜 이 결과가 나왔는가"를 감사자가 한 화면에서 볼 수 있게 조립.
+//  AUDIT-001: 여기서도 하위 컴포넌트에서도 Snapshot 외부 Asset을 조회하지 않는다.
+//  AUDIT-004: snapshot/approvals 어떤 필드도 여기서 쓰거나(assign) 지우지 않는다 — 표시만.
+//  AUDIT-005: Evidence는 workflow 단계와 무관하게 항상 렌더링된다(DRAFT부터).
+//             Approval 파트만 승인 전엔 빈 상태로 보여준다 — "Evidence는 항상 존재,
+//             Approval은 조건부 존재"를 분리. 헤더 라벨만 단계에 따라 다르게 표시
+//             (승인 전: 검토 근거 / 승인 후: 승인 기록) — 승인자가 "무엇을 승인했는지"를
+//             검토 시작 시점부터 추적 가능해야 하므로 숨기지 않는다.
+// ════════════════════════════════════════════════════════════════
+function AuditEvidence({ snapshot, approvals, verifiedResults }) {
+  const [showPkg, setShowPkg] = useState(false);
+  const approved = snapshot.workflow === "APPROVED" || snapshot.workflow === "CLOSED";
+  const headerLabel = approved ? "✓ 승인 기록 · AUDIT EVIDENCE" : "검토 근거 · EVIDENCE CHAIN";
+
+  // ReportView 화면에 보이는 것과 실제 export 대상(ReportPackage)이 같은 Snapshot에서
+  // 파생됐는지 확인 — Package는 여기서 "만들기만" 하고 계산/재검증은 절대 안 함.
+  const pkg = buildReportPackage(snapshot, {
+    approvalRecords: approvals,
+    approvalVerificationResults: verifiedResults,
+  });
+  const pkgValid = validateReportPackage(pkg);
+  const identityMatch = pkg.identity?.snapshotHash === snapshot.snapshotHash;
+
+  return (
+    <div style={{background:T.cardBg,borderRadius:14,border:`1px solid ${T.border}`,
+      overflow:"hidden",marginBottom:12}}>
+      <div style={{padding:"10px 14px",background:T.navy,color:T.white,
+        fontSize:11,fontWeight:900,fontFamily:font.mono,letterSpacing:1}}>
+        {headerLabel}
+      </div>
+      <div style={{padding:"12px 14px",borderBottom:`1px solid ${T.border}`}}>
+        <AssetEvidence snapshot={snapshot} />
+      </div>
+      <div style={{padding:"12px 14px",borderBottom:`1px solid ${T.border}`}}>
+        <WorkflowEvidence snapshot={snapshot} />
+      </div>
+      <div style={{padding:"12px 14px",borderBottom:`1px solid ${T.border}`}}>
+        <ApprovalEvidence snapshot={snapshot} approvals={approvals} verifiedResults={verifiedResults} />
+      </div>
+      <div style={{padding:"10px 14px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{fontSize:10,fontFamily:font.mono,
+            color:(pkgValid.ok && identityMatch)?T.green:T.red}}>
+            {(pkgValid.ok && identityMatch) ? "✓ ReportPackage 무결성 확인됨" : `✗ ${pkgValid.reason || "identity mismatch"}`}
+          </span>
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={()=>setShowPkg(s=>!s)}
+              style={{fontSize:10,padding:"3px 8px",background:T.bg,color:T.navyLight,
+                border:`1px solid ${T.navyLight}`,borderRadius:6,cursor:"pointer",fontFamily:font.mono}}>
+              {showPkg?"JSON 닫기":"패키지 JSON 보기"}
+            </button>
+            <button onClick={()=>{
+                const r = renderPDF(pkg);
+                if (!r.ok) alert(`PDF 생성 실패: ${r.reason}`);
+              }}
+              disabled={!pkgValid.ok || !identityMatch}
+              style={{fontSize:10,padding:"3px 8px",
+                background:(pkgValid.ok&&identityMatch)?T.navyLight:T.gray,color:T.white,
+                border:"none",borderRadius:6,
+                cursor:(pkgValid.ok&&identityMatch)?"pointer":"not-allowed",fontFamily:font.mono}}>
+              PDF 내보내기
+            </button>
+          </div>
+        </div>
+        {showPkg && (
+          <pre style={{marginTop:8,padding:10,background:T.bg,borderRadius:8,
+            fontSize:9,color:T.sub,fontFamily:font.mono,overflowX:"auto",maxHeight:240}}>
+            {JSON.stringify(pkg, null, 2)}
+          </pre>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+// ── components/ReportView.jsx ──────────────────────────
+//  REPORT VIEW — Snapshot projection
+// ════════════════════════════════════════════════════════════════
+function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, onApprovalSubmit }) {
+  const [simMode, setSimMode] = useState("IDLE");
+  const [sim, setSim] = useState({pressure:2.0,direction:1,valveOpen:false,ratio:0});
+  const [hist, setHist] = useState([2.0]);
+  const [reportTab, setReportTab] = useState("sim");
+  const simRef = useRef(null);
+
+  // 서명 검증은 여기서 1회만 계산 — ApprovalHistory와 AuditEvidence가 결과 공유
+  // (두 곳에서 각자 verifyApprovalRecord를 부르면 중복 호출)
+  const [verifiedResults, setVerifiedResults] = useState({});
+  useEffect(() => {
+    let cancelled = false;
+    const caseObj = { snapshotHistory: caseSnapshotHistory || [] };
+    (async () => {
+      const entries = {};
+      for (const rec of (approvals || [])) {
+        entries[rec.approvalId] = await verifyApprovalRecord(rec, caseObj, approvals);
+      }
+      if (!cancelled) setVerifiedResults(entries);
+    })();
+    return () => { cancelled = true; };
+  }, [approvals, caseSnapshotHistory]);
+
+  const setPoint = snap.inputs.P1;
+  const mawp     = snap.inputs.mawp;
+
+  useEffect(() => {
+    if (simMode !== "RUNNING") { clearInterval(simRef.current); return; }
+    simRef.current = setInterval(() => {
+      setSim(prev => {
+        const next = stepSim(prev, setPoint, mawp);
+        setHist(h => [...h.slice(-API_CONST.HISTORY_SIZE), next.pressure]);
+        return next;
+      });
+    }, 50);
+    return () => clearInterval(simRef.current);
+  }, [simMode, setPoint, mawp]);
+
+  const resetSim = () => {
+    setSimMode("IDLE");
+    setSim({pressure:1.0,direction:1,valveOpen:false,ratio:0});
+    setHist([1.0]);
+  };
+
+  const r = snap.result;
+  const allOK = r.checklist && Object.values(r.checklist).every(Boolean);
+  const nextStates = WF_TRANSITIONS[snap.workflow] || [];
+
+  const TAB = (id, label) => (
+    <button key={id} onClick={()=>setReportTab(id)} style={{padding:"9px 14px",border:"none",cursor:"pointer",borderRadius:9,fontWeight:700,fontSize:11,fontFamily:font.mono,
+      background:reportTab===id?T.navyLight:T.bg,color:reportTab===id?T.white:T.sub,
+      boxShadow:reportTab===id?`0 3px 0 ${T.navy}`:"0 2px 0 #ccc",transition:"all 0.15s"}}>
+      {label}
+    </button>
+  );
+
+  return (
+    <div>
+      {/* Snapshot 헤더 */}
+      <div style={{background:T.cardBg,borderRadius:14,padding:"14px 16px",marginBottom:12,border:`1.5px solid ${T.border}`,boxShadow:"0 2px 8px #0001"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
+          <div>
+            <div style={{fontSize:17,fontWeight:900,color:T.navy,fontFamily:font.mono}}>{snap.valveTag}</div>
+            <div style={{fontSize:11,color:T.sub,fontFamily:font.sans,marginTop:2}}>
+              {snap.deviceType === "safetyValve" ? "안전밸브" : "럽처디스크"} · API 520/526 계산
+            </div>
+            <div style={{fontSize:10,color:T.gray,fontFamily:font.mono,marginTop:4}}>{snap.createdAt.slice(0,19).replace("T"," ")} · {snap.id}</div>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <div style={{padding:"5px 12px",borderRadius:20,background:WF_COLOR[snap.workflow]+"22",border:`1.5px solid ${WF_COLOR[snap.workflow]}`,fontSize:11,fontWeight:700,color:WF_COLOR[snap.workflow],fontFamily:font.mono}}>
+              {WF_LABEL[snap.workflow]}
+            </div>
+            <div style={{padding:"5px 12px",borderRadius:20,background:allOK?T.greenBg:T.redBg,border:`1.5px solid ${allOK?T.green:T.red}`,fontSize:11,fontWeight:700,color:allOK?T.green:T.red,fontFamily:font.mono}}>
+              {allOK?"ALL PASS":"FAIL"}
+            </div>
+          </div>
+        </div>
+
+        {/* 결과 요약 */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginTop:12}}>
+          {[
+            ["오리피스", r.selected?.letter ?? "-"],
+            ["필요 면적", `${r.areaCm2?.toFixed(3)} cm²`],
+            ["여유율", `${r.margin?.toFixed(3)}×`],
+          ].map(([k,v])=>(
+            <div key={k} style={{background:T.bg,borderRadius:9,padding:"8px 10px",textAlign:"center"}}>
+              <div style={{fontSize:9,color:T.sub,fontFamily:font.mono}}>{k}</div>
+              <div style={{fontSize:16,fontWeight:900,color:T.navyLight,fontFamily:font.mono,marginTop:2}}>{v}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 리포트 탭 */}
+      <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
+        {TAB("sim","📊 시뮬레이션")}
+        {TAB("evidence","🧮 계산 근거")}
+        {TAB("checklist","✅ PSM 체크")}
+        {TAB("audit", (snap.workflow === "APPROVED" || snap.workflow === "CLOSED")
+          ? "✓ 승인 기록" : "🔍 검토 근거")}
+      </div>
+
+      {reportTab === "sim" && (
+        <div>
+          <div style={{background:T.cardBg,borderRadius:14,padding:12,marginBottom:10,border:`1px solid ${T.border}`}}>
+            <PipeFlowRenderer snap={snap} sim={sim}/>
+          </div>
+          <div style={{background:T.cardBg,borderRadius:14,padding:12,marginBottom:10,border:`1px solid ${T.border}`}}>
+            <PressChartRenderer hist={hist} snap={snap}/>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            {simMode === "RUNNING"
+              ? <button onClick={()=>setSimMode("IDLE")} style={{flex:1,padding:"11px",background:T.orange,color:T.white,border:"none",borderRadius:10,fontWeight:700,fontSize:12,fontFamily:font.mono,cursor:"pointer",boxShadow:`0 4px 0 #CC7000`}}>⏸ 정지</button>
+              : <button onClick={()=>setSimMode("RUNNING")} style={{flex:1,padding:"11px",background:T.blue,color:T.white,border:"none",borderRadius:10,fontWeight:700,fontSize:12,fontFamily:font.mono,cursor:"pointer",boxShadow:`0 4px 0 ${T.blueDk}`}}>▶ 시뮬 시작</button>
+            }
+            <button onClick={resetSim} style={{padding:"11px 16px",background:T.bg,color:T.sub,border:`1px solid ${T.border}`,borderRadius:10,fontWeight:700,fontSize:12,fontFamily:font.mono,cursor:"pointer"}}>↺ 초기화</button>
+          </div>
+        </div>
+      )}
+
+      {reportTab === "evidence" && (
+        <div>
+          {snap.evidence.map(step => <EvidenceCard key={step.id} step={step}/>)}
+        </div>
+      )}
+
+      {reportTab === "checklist" && (
+        <div style={{background:T.cardBg,borderRadius:14,padding:14,border:`1px solid ${T.border}`}}>
+          <ChecklistRenderer checklist={snap.result.checklist}/>
+        </div>
+      )}
+
+      {reportTab === "audit" && (
+        <AuditEvidence snapshot={snap} approvals={approvals} verifiedResults={verifiedResults} />
+      )}
+
+      {/* Workflow 전환 — REVIEW는 전자서명(ApprovalForm)을 거쳐야 함 */}
+      {snap.workflow === "REVIEW" ? (
+        <ApprovalForm snap={snap} onSubmit={onApprovalSubmit} />
+      ) : (
+        nextStates.length > 0 && (
+          <WorkflowTransition
+            currentState={snap.workflow}
+            nextStates={nextStates}
+            onAdvance={onWorkflowAdvance}
+          />
+        )
+      )}
+
+      <ApprovalHistory approvals={approvals} verifiedResults={verifiedResults} />
+    </div>
+  );
+}
+
+
+// ── components/CaseView.jsx ──────────────────────────
+//  CASE VIEW
+// ════════════════════════════════════════════════════════════════
+function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onApprovalUpdate }) {
+  const equipment = caseData.equipment || null;
+
+  // 매칭 DischargeSystem — connectedTags 또는 명시적 지정
+  const dischargeSystem = caseData.dischargeSystemId
+    ? (dischargeSystems || []).find(ds => ds.id === caseData.dischargeSystemId) || null
+    : equipment
+    ? (dischargeSystems || []).find(ds => ds.connectedTags?.includes(equipment.tag)) || null
+    : null;
+
+  // Equipment 값으로 inputs 초기화
+  const initialInputs = {
+    ...R201_DEFAULTS,
+    ...(equipment ? {
+      P1:   equipment.setPressure,
+      mawp: equipment.mawp,
+      P2:   dischargeSystem?.headerPressure ?? R201_DEFAULTS.P2,
+    } : {}),
+  };
+
+  const startScreen = caseData.latestSnap ? "report" : "input";
+  const [screen,     setScreen]     = useState(startScreen);
+  const [inputs,     setInputs]     = useState(initialInputs);
+  const [deviceType, setDeviceType] = useState(
+    equipment?.deviceType ?? "safetyValve"
+  );
+  const [snapshot, setSnapshot] = useState(caseData.latestSnap || null);
+  const [approvals, setApprovals] = useState(caseData.approvals || []);
+
+  const handleInputChange = (key, val) => setInputs(p => ({ ...p, [key]: val }));
+
+  const handleCalculate = () => {
+    const engineResult = api520Engine(inputs, deviceType);
+    if (!engineResult.valid) {
+      alert(`입력 오류: ${engineResult.error.field} — ${engineResult.error.reason}`);
+      return;
+    }
+    // Engine이 workflow 결정 — timestamp는 UI에서 주입 (Engine 순수성 유지)
+    const wfDec = computeWorkflowState(null, equipment, dischargeSystem);
+    const snap = createSnapshot({
+      caseId:           caseData.id,
+      valveTag:         caseData.valveTag,
+      deviceType,
+      inputs,
+      engineResult,
+      equipment,
+      dischargeSystem,
+      workflowDecision: { ...wfDec, state: "INSPECTION" },
+    });
+    setSnapshot(snap);
+    onSnapshotCreate(caseData.id, snap);
+    setScreen("report");
+  };
+
+  // workflow 변경 = 새 Snapshot 생성 (patch 금지)
+  // snapshotHash가 workflow를 포함해 계산되므로, workflow가 바뀌면
+  // 반드시 새로운 identity(새 hash)를 가진 Snapshot이어야 한다.
+  // inputs/engineResult는 재사용 — Engine을 다시 돌리는 게 아니라
+  // "동일 계산 결과 + 새 workflow 결정"을 새 버전으로 기록하는 것.
+  //
+  // build/commit을 분리한 이유(중요): Approval은 "지금 보고 있는(REVIEW) 버전"이
+  // 아니라 "승인 결과로 확정될 다음 버전(APPROVED/ACTION_REQUIRED)"의 hash에
+  // 서명해야 한다. 순서를 반대로 하면(서명 먼저 → 전이 나중) 서명 직후
+  // Snapshot이 교체되면서 approval.snapshotHash가 가리키는 버전이 case에서
+  // 사라져 "승인은 됐는데 최종 상태에는 승인 기록이 없는" 상태가 된다.
+  const _buildAdvancedSnapshot = (nextState, comment) => {
+    const wfDec = computeWorkflowState(snapshot, equipment, dischargeSystem);
+    const newSnap = createSnapshot({
+      caseId:           caseData.id,
+      valveTag:         caseData.valveTag,
+      deviceType,
+      inputs:           snapshot.inputs,
+      engineResult:     snapshot.result,
+      equipment,
+      dischargeSystem,
+      workflowDecision: { ...wfDec, state: nextState },
+    });
+    // lastComment는 hash 계산 대상 아님 (승인/반려 사유 메모, 결정 내용 아님)
+    return comment ? Object.freeze({ ...newSnap, lastComment: comment }) : newSnap;
+  };
+
+  const _commitSnapshot = (snap) => {
+    setSnapshot(snap);
+    onSnapshotCreate(caseData.id, snap);
+  };
+
+  const handleWorkflowAdvance = (nextState, comment) => {
+    _commitSnapshot(_buildAdvancedSnapshot(nextState, comment));
+  };
+
+  // ApprovalForm → 여기 하나만 거쳐서 처리한다.
+  // 1) "승인 후 확정될 다음 버전(Snapshot)"을 먼저 만든다 (아직 커밋 안 함)
+  // 2) 그 Snapshot의 hash에 서명한다 (submitApproval)
+  // 3) 서명 성공한 경우에만 그 Snapshot을 실제로 커밋한다
+  //    → case의 "현재/최종" Snapshot이 항상 서명 대상과 정확히 일치한다.
+  const handleApprovalSubmit = async ({ decision, comment, signer, role }) => {
+    if (!snapshot || snapshot.workflow !== "REVIEW") {
+      alert("승인 대기(REVIEW) 상태에서만 서명할 수 있습니다.");
+      return { ok: false, reason: "not in REVIEW state" };
+    }
+    const nextState = decision === "approve" ? "APPROVED" : "ACTION_REQUIRED";
+    const nextSnap  = _buildAdvancedSnapshot(nextState, comment);
+
+    const result = await submitApproval(
+      { snapshot: nextSnap, decision, comment, signer, role },
+      approvals
+    );
+    if (!result.ok) {
+      alert(`승인 처리 실패 [${result.contract}]: ${result.reason}`);
+      return result;
+    }
+    setApprovals(result.history);
+    onApprovalUpdate(caseData.id, result.history);
+    _commitSnapshot(nextSnap);
+    return result;
+  };
+
+  const wfColor = WF_COLOR[snapshot?.workflow ?? caseData.workflow];
+  const wfLabel = WF_LABEL[snapshot?.workflow ?? caseData.workflow];
+
+  // Engine이 결정한 workflow 상태 — UI는 읽기만 함
+  const wfDecision = computeWorkflowState(snapshot, equipment, dischargeSystem);
+
+  // MOC 결과는 wfDecision.reasons에서 추출 (Engine 결과 projection)
+  const mocResult = {
+    changed: wfDecision.reasons.length > 0,
+    diffs:   wfDecision.reasons,  // { field, from, to, unit, type }
+  };
+
+  // Snapshot workflow와 Engine 결정값이 다르면 Snapshot 갱신
+  // (Engine이 상태를 결정하면 Snapshot이 그것을 반영 — UI는 트리거만)
+  useEffect(() => {
+    if (!snapshot) return;
+    if (wfDecision.state === snapshot.workflow) return;
+    const locked = ["APPROVED","CLOSED"];
+    if (locked.includes(snapshot.workflow)) return;
+    handleWorkflowAdvance(
+      wfDecision.state,
+      wfDecision.reasons.map(r=>`${r.type}: ${r.field} ${r.from}→${r.to}`).join(", ")
+    );
+  }, [wfDecision.state]);
+
+  const tabs = [
+    { id:"info",   label:"정보" },
+    { id:"input",  label:"사양 결정" },
+    ...(snapshot ? [{ id:"report", label:"검토 결과" }] : []),
+  ];
+
+  return (
+    <div>
+      {/* 헤더 */}
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+        <button onClick={onBack}
+          style={{padding:"8px 12px",background:T.bg,border:`1px solid ${T.border}`,
+            borderRadius:9,fontSize:13,fontWeight:700,color:T.sub,
+            fontFamily:font.mono,cursor:"pointer",flexShrink:0}}>←</button>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:17,fontWeight:900,color:T.navy,
+            fontFamily:font.mono,overflow:"hidden",
+            textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+            {caseData.valveTag}
+          </div>
+          <div style={{fontSize:10,color:T.sub,fontFamily:font.mono}}>
+            {equipment?.location || caseData.location || ""}
+            {dischargeSystem ? ` → ${dischargeSystem.name}` : ""}
+          </div>
+        </div>
+        <div style={{padding:"5px 11px",borderRadius:20,
+          background:wfColor+"18",border:`1.5px solid ${wfColor}`,
+          fontSize:10,fontWeight:700,color:wfColor,fontFamily:font.mono,flexShrink:0}}>
+          {wfLabel}
+        </div>
+      </div>
+
+      {/* 탭 */}
+      <div style={{display:"flex",gap:6,marginBottom:14,
+        borderBottom:`1px solid ${T.border}`,paddingBottom:10}}>
+        {tabs.map(({id,label})=>(
+          <button key={id} onClick={()=>setScreen(id)}
+            style={{padding:"8px 16px",border:"none",borderRadius:9,cursor:"pointer",
+              fontSize:12,fontWeight:700,fontFamily:font.mono,
+              background:screen===id?T.navyLight:T.bg,
+              color:screen===id?T.white:T.sub,
+              boxShadow:screen===id?`0 3px 0 ${T.navy}`:"0 2px 0 #ccc"}}>
+            {label}
+            {id==="report" && snapshot && (
+              <span style={{marginLeft:4,fontSize:9,
+                color:screen===id?"#AED6F1":
+                  Object.values(snapshot.result?.checklist||{}).every(Boolean)
+                  ?T.green:T.red}}>●</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* MOC 감지 배너 */}
+      {mocResult.changed && (
+        <div style={{background:"#FFF8E1",border:`2px solid ${T.orange}`,
+          borderRadius:12,padding:"12px 14px",marginBottom:12}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+            <span style={{fontSize:18}}>⚠</span>
+            <div>
+              <div style={{fontSize:12,fontWeight:900,color:"#7A4F00",fontFamily:font.sans}}>
+                설비가 변경되었습니다 — 재검토 필요
+              </div>
+              <div style={{fontSize:10,color:"#7A4F00",fontFamily:font.sans,marginTop:1}}>
+                이 검토는 아래 조건으로 수행됐습니다. 현재 설비 조건과 다릅니다.
+              </div>
+            </div>
+          </div>
+
+          {/* Revision 비교 */}
+          <div style={{display:"flex",gap:8,marginBottom:8}}>
+            {[
+              ["Equipment",
+               snapshot?.assetRefs?.equipmentRevision,
+               equipment?.revision,
+               equipment?.mocId],
+              ["Discharge Sys.",
+               snapshot?.assetRefs?.dischargeRevision,
+               dischargeSystem?.revision,
+               dischargeSystem?.mocId],
+            ].filter(([,sv]) => sv != null).map(([label, snapRev, curRev, mocId]) => (
+              <div key={label} style={{flex:1,background:"#FFFDE7",borderRadius:9,
+                padding:"8px 10px",border:`1px solid #FFD54F`}}>
+                <div style={{fontSize:9,color:T.sub,fontFamily:font.mono,marginBottom:3}}>{label}</div>
+                <div style={{fontSize:12,fontFamily:font.mono,color:"#7A4F00"}}>
+                  Rev.{snapRev}
+                  {snapRev !== curRev && (
+                    <span style={{color:T.green,fontWeight:700}}> → Rev.{curRev}</span>
+                  )}
+                </div>
+                {mocId && (
+                  <div style={{fontSize:9,color:T.blue,fontFamily:font.mono,marginTop:2}}>
+                    {mocId}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* 변경 필드 목록 */}
+          {mocResult.diffs.map((d,i) => (
+            <div key={i} style={{display:"flex",alignItems:"center",gap:8,
+              padding:"4px 0",borderTop:`1px solid #FFD54F`,
+              fontSize:11,fontFamily:font.mono}}>
+              <span style={{color:T.sub,minWidth:110}}>{d.field}</span>
+              <span style={{color:T.red,textDecoration:"line-through"}}>
+                {d.from}{d.unit}
+              </span>
+              <span style={{color:T.sub}}>→</span>
+              <span style={{color:T.green,fontWeight:700}}>
+                {d.to}{d.unit}
+              </span>
+            </div>
+          ))}
+
+          <button onClick={()=>setScreen("input")}
+            style={{marginTop:10,width:"100%",padding:"10px",
+              background:T.orange,color:T.white,border:"none",borderRadius:9,
+              fontSize:12,fontWeight:700,fontFamily:font.sans,cursor:"pointer",
+              boxShadow:`0 3px 0 #CC7000`}}>
+            변경된 조건으로 재검토 →
+          </button>
+        </div>
+      )}
+
+      {/* 정보 탭 */}
+      {screen === "info" && (
+        <div>
+          {/* Equipment */}
+          {equipment && (
+            <div style={{background:T.cardBg,borderRadius:14,padding:14,
+              marginBottom:10,border:`1px solid ${T.border}`}}>
+              <div style={{fontSize:10,fontWeight:700,color:T.sub,
+                fontFamily:font.mono,marginBottom:8,letterSpacing:1}}>EQUIPMENT</div>
+              {[
+                ["Tag", equipment.tag],
+                ["위치", equipment.location],
+                ["제조사/모델", `${equipment.manufacturer} ${equipment.model}`.trim()||"-"],
+                ["MAWP / SET", `${equipment.mawp} / ${equipment.setPressure} barg`],
+                ["오리피스", equipment.orifice||"-"],
+                ["IN / OUT", `${equipment.inletSize} / ${equipment.outletSize}`],
+              ].map(([k,v])=>(
+                <div key={k} style={{display:"flex",justifyContent:"space-between",
+                  padding:"6px 0",borderBottom:`1px solid ${T.border}`,fontSize:12}}>
+                  <span style={{color:T.sub,fontFamily:font.mono}}>{k}</span>
+                  <span style={{color:T.text,fontWeight:700,fontFamily:font.mono}}>{v}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {/* DischargeSystem */}
+          {dischargeSystem && (
+            <div style={{background:T.cardBg,borderRadius:14,padding:14,
+              marginBottom:10,border:`1px solid ${T.border}`}}>
+              <div style={{fontSize:10,fontWeight:700,color:T.sub,
+                fontFamily:font.mono,marginBottom:8,letterSpacing:1}}>DISCHARGE SYSTEM</div>
+              {[
+                ["계통명", dischargeSystem.name],
+                ["배출 목적지", DESTINATION_LABEL[dischargeSystem.destination]],
+                ["L / D", `${dischargeSystem.L}m / Ø${Math.round(dischargeSystem.D*1000)}mm`],
+                ["Fittings ΣK", dischargeSystem.fittingsK],
+                ["Header 압력", `${dischargeSystem.headerPressure} barg`],
+              ].map(([k,v])=>(
+                <div key={k} style={{display:"flex",justifyContent:"space-between",
+                  padding:"6px 0",borderBottom:`1px solid ${T.border}`,fontSize:12}}>
+                  <span style={{color:T.sub,fontFamily:font.mono}}>{k}</span>
+                  <span style={{color:T.text,fontWeight:700,fontFamily:font.mono}}>{v}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          <button onClick={()=>setScreen("input")}
+            style={{width:"100%",padding:"14px",background:T.navyLight,color:T.white,
+              border:"none",borderRadius:14,fontSize:14,fontWeight:900,
+              fontFamily:font.sans,cursor:"pointer",boxShadow:`0 5px 0 ${T.navy}`}}>
+            {snapshot?"사양 재결정 →":"사양 결정 시작 →"}
+          </button>
+        </div>
+      )}
+
+      {screen === "input" && (
+        <InputView inputs={inputs} deviceType={deviceType}
+          dischargeSystem={dischargeSystem}
+          onChange={handleInputChange} onDeviceChange={setDeviceType}
+          onSubmit={handleCalculate}/>
+      )}
+
+      {screen === "report" && snapshot && (
+        <ReportView snap={snapshot} approvals={approvals}
+                    caseSnapshotHistory={caseData.snapshotHistory}
+                    onWorkflowAdvance={handleWorkflowAdvance}
+                    onApprovalSubmit={handleApprovalSubmit}/>
+      )}
+
+      {screen === "report" && !snapshot && (
+        <div style={{textAlign:"center",padding:"40px 20px",color:T.sub}}>
+          <div style={{fontSize:32,marginBottom:12}}>📋</div>
+          <div style={{fontSize:14,fontWeight:700,color:T.navy,marginBottom:8}}>
+            아직 계산 결과가 없습니다
+          </div>
+          <button onClick={()=>setScreen("input")}
+            style={{padding:"12px 24px",background:T.navyLight,color:T.white,
+              border:"none",borderRadius:11,fontSize:13,fontWeight:700,
+              fontFamily:font.sans,cursor:"pointer"}}>
+            사양 결정 시작 →
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ── components/Dashboard.jsx ──────────────────────────
+//  DASHBOARD
+// ════════════════════════════════════════════════════════════════
+const INITIAL_CASES = [];  // 설비대장에서 선택 후 생성
+
+function CaseCard({ c, onOpen }) {
+  const hasSnap = !!c.latestSnap;
+  const allOK   = hasSnap && c.latestSnap.result?.checklist &&
+                  Object.values(c.latestSnap.result.checklist).every(Boolean);
+  return (
+    <button onClick={()=>onOpen(c)}
+      style={{display:"block",width:"100%",textAlign:"left",background:T.cardBg,
+        borderRadius:14,padding:"14px 16px",marginBottom:10,
+        border:`1.5px solid ${T.border}`,cursor:"pointer",
+        boxShadow:"0 2px 8px #0001",
+        WebkitTapHighlightColor:"rgba(26,63,111,0.15)",
+        fontFamily:font.sans,appearance:"none",WebkitAppearance:"none"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+        <div>
+          <div style={{fontSize:15,fontWeight:900,color:T.navy,fontFamily:font.mono}}>{c.valveTag}</div>
+          {c.asset && (
+            <div style={{fontSize:10,color:T.sub,fontFamily:font.mono,marginTop:1}}>
+              {c.asset.location} · SET {c.asset.setPressure}b
+            </div>
+          )}
+        </div>
+        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+          {hasSnap && (
+            <span style={{padding:"3px 9px",borderRadius:12,
+              background:allOK?T.greenBg:T.redBg,
+              border:`1px solid ${allOK?T.green:T.red}`,
+              fontSize:10,fontWeight:700,color:allOK?T.green:T.red,fontFamily:font.mono}}>
+              {allOK?"PASS":"FAIL"}
+            </span>
+          )}
+          <span style={{padding:"3px 9px",borderRadius:12,
+            background:WF_COLOR[c.workflow]+"18",
+            border:`1px solid ${WF_COLOR[c.workflow]}`,
+            fontSize:10,fontWeight:700,color:WF_COLOR[c.workflow],fontFamily:font.mono}}>
+            {WF_LABEL[c.workflow]}
+          </span>
+        </div>
+      </div>
+      <div style={{display:"flex",gap:12,fontSize:11,color:T.sub,fontFamily:font.mono}}>
+        <span>{c.fluid}</span><span>·</span><span>{c.reviewType}</span>
+      </div>
+      {hasSnap && (
+        <div style={{marginTop:8,display:"flex",gap:8}}>
+          {[
+            ["오리피스", c.latestSnap.result.selected?.letter],
+            ["여유율",   `${c.latestSnap.result.margin?.toFixed(2)}×`],
+            ["면적",     `${c.latestSnap.result.areaCm2?.toFixed(1)} cm²`],
+          ].map(([k,v])=>(
+            <div key={k} style={{background:T.bg,borderRadius:7,padding:"4px 8px",flex:1,textAlign:"center"}}>
+              <div style={{fontSize:8,color:T.gray,fontFamily:font.mono}}>{k}</div>
+              <div style={{fontSize:12,fontWeight:900,color:T.navyLight,fontFamily:font.mono}}>{v}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{marginTop:8,textAlign:"right",fontSize:10,color:T.blue,fontFamily:font.mono,fontWeight:700}}>
+        {hasSnap ? "결과 보기 →" : "검토 시작 →"}
+      </div>
+    </button>
+  );
+}
+
+function Dashboard({ cases, onOpenCase, onNewCase, onOpenAssetMaster }) {
+  const [reviewType, setReviewType] = useState("정기 PSM 검토");
+  const REVIEW_OPTIONS = ["정기 PSM 검토","최초 설치 검토","변경 검토 (MOC)","사고 후 검토"];
+
+  return (
+    <div>
+      {/* 메인 CTA — 설비대장에서 선택 */}
+      <button onClick={onOpenAssetMaster}
+        style={{width:"100%",padding:"16px",background:T.navyLight,color:T.white,
+          border:"none",borderRadius:14,fontSize:15,fontWeight:900,
+          fontFamily:font.sans,cursor:"pointer",
+          boxShadow:`0 5px 0 ${T.navy}`,marginBottom:8,
+          WebkitTapHighlightColor:"rgba(255,255,255,0.2)"}}>
+        + 설비 선택 → 새 검토 시작
+      </button>
+      <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,textAlign:"center",marginBottom:16}}>
+        설비대장에서 PSV를 선택하면 사양이 자동으로 채워집니다
+      </div>
+
+      {/* 진행 중인 검토 */}
+      {cases.length > 0 && (
+        <>
+          <div style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono,marginBottom:10,letterSpacing:1}}>
+            진행 중인 검토 ({cases.length})
+          </div>
+          {cases.map(c => <CaseCard key={c.id} c={c} onOpen={onOpenCase}/>)}
+        </>
+      )}
+
+      {cases.length === 0 && (
+        <div style={{textAlign:"center",padding:"40px 20px",color:T.gray,fontFamily:font.sans}}>
+          <div style={{fontSize:40,marginBottom:10}}>📋</div>
+          <div style={{fontSize:13,color:T.sub,fontWeight:700}}>진행 중인 검토가 없습니다</div>
+          <div style={{fontSize:11,color:T.gray,marginTop:4}}>위 버튼으로 설비를 선택해 검토를 시작하세요</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ── ArcSafe.jsx ──────────────────────────
+//  ROOT — ArcSafe App (v0.2.0-asset-master)
+// ════════════════════════════════════════════════════════════════
+function ArcSafe() {
+  const [equipments, setEquipments] = useState(() =>
+    SAMPLE_EQUIPMENT.map(e => createEquipment(e))
+  );
+  const [dischargeSystems, setDischargeSystems] = useState(() =>
+    SAMPLE_DISCHARGE_SYSTEMS.map(d => createDischargeSystem(d))
+  );
+  const [cases,      setCases]      = useState([]);
+  const [activeCase, setActiveCase] = useState(null);
+  const [screen,     setScreen]     = useState("dashboard");
+
+  const handleOpenCase = (c) => setActiveCase(c);
+  const handleBack = () => setActiveCase(null);
+
+  // Equipment 선택 → Case 생성 → CaseView 진입
+  const handleEquipmentSelect = (equipment) => {
+    const ds = dischargeSystems.find(
+      d => d.connectedTags.includes(equipment.tag)
+    ) || null;
+    const newCase = {
+      id:               `C-${new Date().getFullYear()}-${String(cases.length+1).padStart(3,"0")}`,
+      valveTag:         equipment.tag,
+      equipment:        equipment,
+      dischargeSystemId:ds?.id || null,
+      fluid:            "CO₂ (고압)",
+      reviewType:       "정기 PSM 검토",
+      workflow:         "DRAFT",
+      latestSnap:       null,   // pointer only — 검증에 사용 금지
+      snapshotHistory:  [],     // source of truth (append-only)
+      approvals:        [],     // ApprovalRecord[] (append-only, service.js를 통해서만 갱신)
+    };
+    setCases(prev => [...prev, newCase]);
+    setActiveCase(newCase);
+    setScreen("dashboard");
+  };
+
+  const handleAddEquipment = (eq) =>
+    setEquipments(prev => [...prev, eq]);
+
+  // EQUIPMENT-MOC: DischargeSystem과 동일 계약 — id 유지, revision만 교체
+  const handleReviseEquipment = (revisedEq) =>
+    setEquipments(prev => prev.map(e => e.id === revisedEq.id ? revisedEq : e));
+
+  const handleAddDischargeSystem = (ds) =>
+    setDischargeSystems(prev => [...prev, ds]);
+
+  // GEOMETRY-002: id는 그대로, revision만 올라간 새 객체로 교체.
+  // Asset은 Snapshot이 아니라 "현재 상태" — 교체 자체는 허용(append-only 아님).
+  // MOC 감지는 이 교체 이후 케이스 재진입 시 assetFingerprint 비교로 자동 발동.
+  const handleReviseDischargeSystem = (revisedDs) =>
+    setDischargeSystems(prev => prev.map(d => d.id === revisedDs.id ? revisedDs : d));
+
+  // HISTORY-001과 동일 원칙: overwrite 금지, service.js가 만든 새 배열만 반영
+  const handleApprovalUpdate = (caseId, approvals) => {
+    setCases(prev => prev.map(c =>
+      c.id !== caseId ? c : { ...c, approvals }
+    ));
+    setActiveCase(prev =>
+      prev && prev.id === caseId ? { ...prev, approvals } : prev
+    );
+  };
+
+  // HISTORY-001: overwrite 금지 — 항상 appendSnapshot()으로 history에 추가
+  const handleSnapshotCreate = (caseId, snap) => {
+    setCases(prev => prev.map(c =>
+      c.id !== caseId ? c : appendSnapshot(c, snap)
+    ));
+    setActiveCase(prev =>
+      prev && prev.id === caseId ? appendSnapshot(prev, snap) : prev
+    );
+  };
+
+  const curScreen = activeCase ? "case"
+    : screen === "assets" ? "assets"
+    : "dashboard";
+
+  return (
+    <div style={{minHeight:"100vh",background:T.bg,fontFamily:font.sans}}>
+      {/* 글로벌 헤더 */}
+      <div style={{background:T.navy,padding:"11px 16px",display:"flex",
+        alignItems:"center",justifyContent:"space-between",
+        position:"sticky",top:0,zIndex:100}}>
+        <div>
+          <div style={{fontSize:16,fontWeight:900,color:T.white,
+            fontFamily:font.mono,letterSpacing:1}}>ArcSafe</div>
+          <div style={{fontSize:9,color:"#7B9EC0",fontFamily:font.mono}}>
+            PSM 안전밸브 관리 시스템
+          </div>
+          <div style={{fontSize:8,color:"#4A6FA5",fontFamily:font.mono,marginTop:1}}>
+            v0.2.0 · {typeof __BUILD_HASH__ !== "undefined" ? __BUILD_HASH__ : "dev"}
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          {activeCase && (
+            <div style={{fontSize:11,color:"#7B9EC0",fontFamily:font.mono}}>
+              {activeCase.valveTag}
+            </div>
+          )}
+          {!activeCase && (
+            <button
+              onClick={()=>setScreen(screen==="assets"?"dashboard":"assets")}
+              style={{padding:"6px 11px",
+                background:screen==="assets"?T.blue:"none",
+                border:`1px solid ${screen==="assets"?T.blue:"#4A6FA5"}`,
+                borderRadius:8,fontSize:10,
+                color:screen==="assets"?T.white:"#7B9EC0",
+                fontFamily:font.mono,cursor:"pointer"}}>
+              🔧 설비대장
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* 컨텐츠 */}
+      <div style={{padding:"14px 14px 40px",maxWidth:640,margin:"0 auto"}}>
+        {curScreen === "case" && activeCase && (
+          <CaseView
+            caseData={activeCase}
+            dischargeSystems={dischargeSystems}
+            onBack={handleBack}
+            onSnapshotCreate={handleSnapshotCreate}
+            onApprovalUpdate={handleApprovalUpdate}
+          />
+        )}
+        {curScreen === "assets" && (
+          <AssetMaster
+            equipments={equipments}
+            dischargeSystems={dischargeSystems}
+            onSelectEquipment={handleEquipmentSelect}
+            onAddEquipment={handleAddEquipment}
+            onReviseEquipment={handleReviseEquipment}
+            onAddDischargeSystem={handleAddDischargeSystem}
+            onReviseDischargeSystem={handleReviseDischargeSystem}
+            onBack={()=>setScreen("dashboard")}
+          />
+        )}
+        {curScreen === "dashboard" && (
+          <Dashboard
+            cases={cases}
+            onOpenCase={handleOpenCase}
+            onNewCase={()=>setScreen("assets")}
+            onOpenAssetMaster={()=>setScreen("assets")}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<ArcSafe />);
+</script>
+</body>
+</html>
