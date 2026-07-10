@@ -64,18 +64,24 @@ function computeBackpressure(inp, geometry) {
   const { L, D, fittingsK, headerPressure } = geometry;
 
   // ── 1. 밀도 (방출 조건 기준, P1 절대압 근사) ──
-  const P1_abs = P1 + 1.01325; // barg → bara 근사
+  // UNIT-PRESSURE-002: 대기압 상수는 api520.js API_CONST.ATM_PRESSURE_BAR
+  // 단일 출처 — 이 파일에서 값을 별도로 하드코딩하지 않는다. build.py
+  // BUILD_ORDER상 api520.js가 이 파일보다 먼저 로드되어 전역에서 참조 가능.
+  // 주의: 여기서는 OP(overpressure)를 더하지 않는다 — api520.js의 relieving
+  // pressure(P1abs, sizing용)와는 다른 값이다. 배관 유속/밀도 계산은 밸브가
+  // 막 열리는 시점(overpressure 이전) 기준 근사이므로 의도적으로 별개.
+  const P1_abs = P1 + API_CONST.ATM_PRESSURE_BAR; // barg → bara 근사 (OP 미포함, 의도적)
   const rho = gasDensity(P1_abs, T, M); // kg/m³
 
   // ── 2. 유속 ──
-  const W_kgs = W / 3600;               // kg/h → kg/s
+  const W_kgs = W / 3600;               // kg/h → kg/s (이 파일 유일한 변환 지점)
   const A = Math.PI * (D * D) / 4;      // m²
   const v = A > 0 ? W_kgs / (rho * A) : 0; // m/s
 
   // ── 3. Choked flow 판정 ──
   // 임계압력비 = (2/(k+1))^(k/(k-1))
   const criticalRatio = Math.pow(2/(k+1), k/(k-1));
-  const pressureRatio = headerPressure > 0 ? (headerPressure + 1.01325) / P1_abs : 0;
+  const pressureRatio = headerPressure > 0 ? (headerPressure + API_CONST.ATM_PRESSURE_BAR) / P1_abs : 0;
   const choked = pressureRatio <= criticalRatio;
 
   // ── 4. 동적 배압 (Darcy-Weisbach + fittings + exit) ──

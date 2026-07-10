@@ -14,7 +14,7 @@ PSM 현장 시나리오 기반 결정론 검증.
 실행: python3 tests/contract_test.py
 """
 
-import math, json, sys, time, hashlib, subprocess, shutil
+import math, json, sys, time, hashlib, subprocess, shutil, re
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -551,8 +551,119 @@ def test_moc_detection() -> TestResult:
     return tr
 
 # ════════════════════════════════════════════════════════════════
-#  SNAPSHOT SCHEMA TEST (독립 — 소스 파일 직접 검사)
+#  UNIT BOUNDARY TEST — 단위/기준상태(Reference State) 경계 검증
+#  Sprint A에서 발견된 두 CRITICAL 버그(SI 변환상수 누락, P1 절대압
+#  환산 누락)가 모두 "단위 변환이 어디서 몇 번 일어나는가"의 문제였다.
+#  이 스위트는 계산값이 아니라 변환의 위치·횟수·일관성을 고정한다:
+#    - 각 변환은 정확히 한 곳(Single Source of Truth)에서만 일어나야 한다
+#    - 같은 이름의 물리량이 서로 다른 파일에서 다른 정의로 쓰이면
+#      (예: api520.js의 P1abs vs backpressure.js의 P1_abs) 그 차이가
+#      "의도적 문서화"돼 있어야 한다 — 우연한 드리프트를 차단한다.
 # ════════════════════════════════════════════════════════════════
+def test_unit_boundaries() -> TestResult:
+    tr = TestResult("UNIT-BOUNDARY-001", "단위/기준상태 경계 변환 — 위치·횟수·수치 검증")
+
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+    bp_src     = (SRC / "engine" / "backpressure.js").read_text()
+    input_src  = (SRC / "components" / "InputView.jsx").read_text()
+
+    # trace 설명 문자열/주석에는 "OP/100", "A_mm2/100" 같은 식이 문서화
+    # 목적으로 다시 등장한다 — 실제 연산 코드만 세려면 문자열·주석을
+    # 제거한 버전으로 카운트해야 "exactly once" 계약이 의미가 있다.
+    def _code_only(src):
+        src = re.sub(r'"(?:[^"\\]|\\.)*"', '""', src)
+        src = re.sub(r'`(?:[^`\\]|\\.)*`', '``', src)
+        src = re.sub(r'//.*', '', src)
+        return src
+    api520_code = _code_only(api520_src)
+    bp_code     = _code_only(bp_src)
+
+    # ── UNIT-PRESSURE-001: 대기압 상수(1.01325) 단일 출처 ──────────
+    # api520.js에 정확히 1회(정의부)만 리터럴로 존재해야 하고,
+    # backpressure.js는 리터럴을 갖지 않고 API_CONST를 참조해야 한다.
+    api520_atm_literals = len(re.findall(r"1\.01325", api520_src))
+    bp_atm_literals      = len(re.findall(r"1\.01325", bp_src))
+    tr.check("UNIT_PRESSURE_001_atm_const_single_source_in_api520",
+             api520_atm_literals == 1,
+             f"api520.js 내 1.01325 리터럴 개수={api520_atm_literals} (기대: 1, ATM_PRESSURE_BAR 정의부만)")
+    tr.check("UNIT_PRESSURE_001_backpressure_no_duplicate_literal",
+             bp_atm_literals == 0,
+             f"backpressure.js 내 1.01325 리터럴 개수={bp_atm_literals} (기대: 0 — API_CONST.ATM_PRESSURE_BAR 참조로 대체)")
+    tr.check("UNIT_PRESSURE_001_backpressure_references_shared_const",
+             "API_CONST.ATM_PRESSURE_BAR" in bp_src,
+             "backpressure.js가 api520.js의 공유 상수를 참조하지 않음")
+
+    # ── UNIT-PRESSURE-002: bar → kPa (×100) 는 api520.js에서만, 1회 ──
+    tr.check("UNIT_PRESSURE_002_kPa_conversion_only_in_api520",
+             "P1_kPa" in api520_src and "P1_kPa" not in bp_src,
+             "kPa 변환(P1_kPa)이 api520.js 밖에서도 발생함 — 경계 위반")
+    tr.check("UNIT_PRESSURE_002_kPa_conversion_exactly_once",
+             len(re.findall(r"P1_kPa\s*=\s*P1abs\s*\*\s*100", api520_src)) == 1,
+             "P1abs*100 변환이 정확히 1회가 아님")
+
+    # ── UNIT-PRESSURE-003: overpressure(%) 는 api520.js 전용 개념 ────
+    # backpressure.js는 OP를 입력받지 않는다 — relieving pressure(sizing용,
+    # OP 포함)와 배관 유속용 근사압력(OP 미포함)은 의도적으로 다른 값이며,
+    # 이 차이가 backpressure.js 주석에 명시돼 있어야 한다 (우연한 차이 아님).
+    tr.check("UNIT_PRESSURE_003_OP_not_referenced_in_backpressure",
+             re.search(r"\bOP\b", bp_code) is None,
+             "backpressure.js '코드'(주석 제외)가 OP(overpressure)를 참조함 — sizing 전용 개념이 유출됨")
+    tr.check("UNIT_PRESSURE_003_divergence_documented",
+             "의도적" in bp_src and "P1abs" in bp_src,
+             "backpressure.js의 P1_abs가 api520.js의 P1abs와 다른 이유가 주석으로 문서화돼 있지 않음")
+    tr.check("UNIT_PRESSURE_003_OP_divided_by_100_exactly_once",
+             len(re.findall(r"OP\s*/\s*100", api520_code)) == 1,
+             "OP/100 변환(코드)이 api520.js에서 정확히 1회가 아님")
+
+    # ── UNIT-FLOW-001: kg/h → kg/s (÷3600) 는 backpressure.js 전용 ──
+    # api520.js의 SI 면적식은 13160 상수가 W[kg/h] 기준으로 이미 보정돼
+    # 있으므로 W를 kg/s로 바꾸면 안 된다 — 이 자체가 또 다른 잠재 버그원.
+    tr.check("UNIT_FLOW_001_no_kgs_conversion_in_api520",
+             re.search(r"/\s*3600", api520_src) is None,
+             "api520.js가 W를 kg/s로 변환함 — 13160 상수는 kg/h 기준이므로 이중변환 위험")
+    tr.check("UNIT_FLOW_001_kgs_conversion_in_backpressure_once",
+             len(re.findall(r"/\s*3600", bp_src)) == 1,
+             "kg/h→kg/s 변환이 backpressure.js에서 정확히 1회가 아님")
+
+    # ── UNIT-AREA-001: mm² → cm² (÷100) 는 api520.js에서만, 1회 ─────
+    tr.check("UNIT_AREA_001_mm2_to_cm2_exactly_once",
+             len(re.findall(r"A_mm2\s*/\s*100", api520_code)) == 1,
+             "A_mm2/100(mm²→cm², 코드)이 정확히 1회가 아님")
+    tr.check("UNIT_AREA_001_no_area_reconversion_in_evidence",
+             re.search(r"areaCm2\s*[*/]\s*100", (SRC/"engine"/"evidence.js").read_text()) is None,
+             "evidence.js가 areaCm2를 다시 단위 변환하고 있음 — Engine 경계 밖 재변환")
+
+    # ── UNIT-TEMP-001: °C↔K 변환은 InputView.jsx(UI)에서만 ─────────
+    # 273.15가 engine 파일 어디에도 나타나면 안 된다 — engine은 항상
+    # Kelvin만 받는다는 계약이 깨진 것.
+    for fname, src in [("api520.js", api520_src), ("backpressure.js", bp_src),
+                        ("workflow_engine.js", (SRC/"engine"/"workflow_engine.js").read_text()),
+                        ("evidence.js", (SRC/"engine"/"evidence.js").read_text())]:
+        tr.check(f"UNIT_TEMP_001_no_celsius_conversion_in_{fname}",
+                 "273.15" not in src,
+                 f"{fname}에 273.15(°C↔K 변환)가 있음 — Engine은 K만 받아야 함")
+    tr.check("UNIT_TEMP_001_celsius_conversion_confined_to_InputView",
+             "273.15" in input_src,
+             "InputView.jsx에 273.15 변환이 없음 — °C 입력 모드가 깨졌을 가능성")
+
+    # ── 수치 회귀: 변환 계수 자체의 산술 정확성 (엔진과 무관한 순수 검증) ──
+    tr.check("UNIT_NUMERIC_pressure_bar_to_kPa",
+             abs(5.5 * 100 - 550) < 1e-9, "bar→kPa 계수(×100) 오류")
+    tr.check("UNIT_NUMERIC_area_mm2_to_cm2",
+             abs(1000 / 100 - 10) < 1e-9, "mm²→cm² 계수(÷100) 오류")
+    tr.check("UNIT_NUMERIC_area_cm2_to_m2",
+             abs(39120.177446 / 10000 - 3.9120177446) < 1e-9, "cm²→m² 계수(÷10000) 오류")
+    tr.check("UNIT_NUMERIC_flow_kgh_to_kgs",
+             abs(2500 / 3600 - 0.6944444444444444) < 1e-9, "kg/h→kg/s 계수(÷3600) 오류")
+    tr.check("UNIT_NUMERIC_temp_C_to_K",
+             abs((25 + 273.15) - 298.15) < 1e-9, "°C→K 변환(+273.15) 오류")
+    tr.check("UNIT_NUMERIC_relieving_pressure_roundtrip",
+             abs((5.5 * (1 + 10/100) + 1.01325) - 7.06325) < 1e-9,
+             "P1abs = Pset×(1+OP/100)+Patm 산술 오류")
+
+    return tr
+
+
 def test_snapshot_schema() -> TestResult:
     tr = TestResult("SCHEMA-001", "Snapshot schema 필수 필드 검사")
     snap_src = (SRC / "snapshot" / "create.js").read_text()
@@ -1767,6 +1878,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [BOUNDARY-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── Unit Boundary test ───────────────────────────────────────
+    print("\n── UNIT BOUNDARY ─────────────────────────────────────")
+    tr = test_unit_boundaries()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [UNIT-BOUNDARY-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"
