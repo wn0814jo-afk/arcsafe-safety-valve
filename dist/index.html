@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:7b43f6ce134f\n\n' +
+    box.textContent = '[ERROR] BUILD:ac69b86ff580\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:7b43f6ce134f\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:ac69b86ff580\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -49,9 +49,9 @@
 <script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:7b43f6ce134f | 2026-07-10T10:32:02Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:ac69b86ff580 | 2026-07-10T10:42:19Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "7b43f6ce134f";
+const __BUILD_HASH__ = "ac69b86ff580";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -78,7 +78,7 @@ const font = { mono: "'JetBrains Mono','Courier New',monospace", sans: "'Noto Sa
 // R-201 CO2 반응기 — engine input 기본값
 // InputView, CaseView 양쪽에서 사용 (constants에 위치해 BUILD_ORDER 최상단 보장)
 const R201_DEFAULTS = {
-  W:2500, P1:5.5, P2:0.3, T:373, M:44, k:1.3, Kd:0.975, Kb:1.0, mawp:6.0, OP:10
+  W:2500, P1:5.5, P2:0.3, T:373, M:44, k:1.3, Kd:0.975, Kb:1.0, mawp:6.0, OP:10, Z:1.0
 };
 
 
@@ -93,7 +93,12 @@ const R201_DEFAULTS = {
 //   13160 상수(W kg/h, P1 kPa 기준) 적용 시 오차 0.09% 이내로 확인.
 //   [BUG FIX] P1을 설정압력(barg)에서 relieving pressure(절대압)로
 //   변환하는 과정이 누락 — Pset*(1+OP/100)+대기압 미적용.
-const ENGINE_VERSION = "1.2.0";
+// ENGINE_VERSION 1.3.0 — COMPRESSIBILITY-001
+//   Z(압축계수)를 하드코딩(1.0)에서 Calculation Input으로 승격.
+//   Asset이 아니라 Case 소유 — 유체·운전조건에 따라 케이스마다 달라짐.
+//   기본값 1.00은 UI가 명시적으로 대입하며 Engine은 몰래 채우지 않는다.
+//   validateInputs가 Z 누락을 거부하므로 이 필드는 계약 변경이다.
+const ENGINE_VERSION = "1.3.0";
 
 const API_CONST = {
   C_BASE:              520,
@@ -122,7 +127,9 @@ const API526_ORIFICES = [
 function validateInputs(inp) {
   // OP(overpressure %)는 Equipment(Asset) 소유 필드 — Case가 임의 기본값을
   // 대입하지 않는다. 없으면 계산 자체를 막는다 (PRESSURE-001 계약).
-  const fields = ["W","P1","P2","T","M","k","Kd","Kb","mawp","OP"];
+  // Z(압축계수)는 반대로 Calculation Input(Case 소유) — 기본값 1.00은
+  // UI가 명시적으로 대입하며, Engine은 몰래 채우지 않는다 (COMPRESSIBILITY-001).
+  const fields = ["W","P1","P2","T","M","k","Kd","Kb","mawp","OP","Z"];
   for (const f of fields) {
     const v = Number(inp[f]);
     if (isNaN(v) || !isFinite(v)) return { ok: false, field: f, reason: "not_a_number" };
@@ -134,6 +141,7 @@ function validateInputs(inp) {
   if (inp.Kd <= 0) return { ok: false, field:"Kd", reason:"must_be_positive" };
   if (inp.Kb <= 0) return { ok: false, field:"Kb", reason:"must_be_positive" };
   if (inp.OP <  0) return { ok: false, field:"OP", reason:"must_be_non_negative" };
+  if (inp.Z  <= 0) return { ok: false, field:"Z",  reason:"must_be_positive" };
   return { ok: true };
 }
 
@@ -142,11 +150,15 @@ function api520Engine(inp, deviceType) {
   const valid = validateInputs(inp);
   if (!valid.ok) return { valid: false, error: valid };
 
-  const { W, P1, P2, T, M, k, Kd, Kb, mawp, OP } = Object.fromEntries(
+  const { W, P1, P2, T, M, k, Kd, Kb, mawp, OP, Z } = Object.fromEntries(
     Object.entries(inp).map(([key, v]) => [key, Number(v)])
   );
 
-  const Z     = 1.0;
+  // ── COMPRESSIBILITY-001: Z는 Asset이 아니라 Calculation Input ──
+  // 설비 속성이 아니라 유체·운전조건에 따라 케이스마다 달라지는 계산
+  // 조건이므로 Equipment/DischargeSystem이 아닌 Case 입력값으로 취급한다.
+  // 기본값 1.0(이상기체 가정)은 UI에서 명시적으로 노출하며, Engine은
+  // 몰래 대입하지 않는다 — validateInputs에서 누락 시 계산을 막는다.
 
   // ── PRESSURE-001: relieving pressure(절대압) 산정 ──────────────
   // P1(입력) = 설정압력(barg, Equipment.setPressure). 이것 자체는
@@ -183,6 +195,8 @@ function api520Engine(inp, deviceType) {
 
   // ── Calculation Trace — 감사/Report Evidence 전용, UI 표시용 아님 ──
   const trace = [
+    { step: "COMPRESSIBILITY_Z", value: Z, unit: "",
+      formula: Z === 1.0 ? "User Input (default 1.00)" : "User Input", inputs: { Z } },
     { step: "SET_PRESSURE",     value: Pset,   unit: "barg", formula: "Equipment.setPressure" },
     { step: "RELIEVING_PRESSURE", value: P1abs, unit: "bara",
       formula: "P1abs = Pset×(1+OP/100) + Patm", inputs: { Pset, OP, Patm: API_CONST.ATM_PRESSURE_BAR } },
@@ -194,7 +208,7 @@ function api520Engine(inp, deviceType) {
   ];
 
   const stepData = {
-    fluid:     { M, T, k, criticalPressRatio },
+    fluid:     { M, T, k, Z, criticalPressRatio },
     cCoeff:    { C, k },
     pressure:  { Pset, OP, P1abs, atm: API_CONST.ATM_PRESSURE_BAR },
     orifice:   { areaCm2, W, P1abs, KdEff, Kb, isRD: deviceType === "ruptureDisk" },
@@ -356,9 +370,9 @@ function buildEvidence(sd) {
   return [
     {
       id:1, title:"유체 물성 확인",
-      formula:"M, T, k 입력값 확인",
-      result:`M = ${fluid.M} g/mol | T = ${fluid.T} K | k = ${fluid.k}`,
-      detail:`비열비 k=${fluid.k} 기준 임계압력비 = (2/(k+1))^(k/(k-1)) = ${fluid.criticalPressRatio.toFixed(4)}`,
+      formula:"M, T, k, Z 입력값 확인",
+      result:`M = ${fluid.M} g/mol | T = ${fluid.T} K | k = ${fluid.k} | Z = ${fluid.Z}`,
+      detail:`비열비 k=${fluid.k} 기준 임계압력비 = (2/(k+1))^(k/(k-1)) = ${fluid.criticalPressRatio.toFixed(4)}. 압축계수 Z=${fluid.Z}${fluid.Z===1 ? " (기본값, 이상기체 가정)" : " (사용자 입력값)"} — Case 소유 계산 조건, Asset 속성 아님.`,
       ok:true,
     },
     {
@@ -436,7 +450,7 @@ function _assetHash(equipment, dischargeSystem) {
   return (h >>> 0).toString(16).padStart(8, '0');
 }
 
-const SNAPSHOT_ENGINE_VERSION = "1.2.0";
+const SNAPSHOT_ENGINE_VERSION = "1.3.0";
 
 // Snapshot이 기록하는 trigger fields — 감사 시 "어떤 규칙으로 판단했는지" 재현용
 const WORKFLOW_TRIGGER_FIELDS_SNAPSHOT = [
@@ -1548,6 +1562,8 @@ function buildPDFHtml(reportPackage) {
   const calcBody =
     _pdfRow("Fluid", _pdfFluidLabel(pkg.calculation.inputs)) +
     _pdfRow("Engine", `API520 v${pkg.calculation.engineVersion}`) +
+    _pdfRow("Compressibility Z", pkg.calculation.inputs?.Z != null ? `${pkg.calculation.inputs.Z}${pkg.calculation.inputs.Z===1 ? " (default)" : ""}` : "—") +
+    _pdfRow("Relieving Pressure (abs)", pkg.calculation.result?.P1abs ? `${pkg.calculation.result.P1abs.toFixed(3)} bara` : "—") +
     _pdfRow("Selected Orifice", pkg.calculation.result?.selected?.letter || "—") +
     _pdfRow("Required Area", pkg.calculation.result?.areaCm2 ? `${pkg.calculation.result.areaCm2.toFixed(2)} cm²` : "—") +
     `<div style="margin-top:6px;font-size:9px;font-weight:700;color:#64748b;letter-spacing:0.5px;">BACKPRESSURE BASIS</div>` +
@@ -2185,6 +2201,15 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         onChange={v=>onChange("P2",v)}
         basis={`플레어 헤더 또는 방출 배관 압력. 현재 P2/P1 = ${bpRatio}%.${bpRatio>10?" 10% 초과 → Kb 1.0 미만 적용 필요.":""}${bpRatio>30?" 30% 초과 → 스프링식 부적합, 파일럿식 전환 검토.":""}`}
         warning={bpWarning}
+      />
+      {/* COMPRESSIBILITY-001: Z는 Asset이 아니라 Calculation Input —
+          설비 속성이 아니라 유체·운전조건에 따라 케이스마다 달라지므로
+          Case가 직접 소유하고 편집 가능해야 한다 (OP와는 반대). */}
+      <DecisionSlider
+        param="Z" label="압축계수 (Compressibility Z)" unit=""
+        value={inputs.Z} min={0.5} max={1.2} step={0.01}
+        onChange={v=>onChange("Z",v)}
+        basis="실측 P-V-T 데이터 또는 상태방정식(SRK, PR 등)에서 산정. 기본값 1.00은 이상기체 가정 — 고압·저온 조건에서 실제 유체는 1.00과 벗어날 수 있으며, 벗어날수록 소요 면적 산정 오차가 커진다."
       />
 
       {/* ── 5. 방출계수 결정 ── */}

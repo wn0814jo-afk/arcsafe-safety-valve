@@ -34,7 +34,9 @@ RD_KD_FACTOR       = 0.9
 KD_MIN             = 0.9
 MARGIN_MIN         = 1.0
 
-ENGINE_VERSION     = "1.2.0"   # engine/api520.js와 반드시 일치해야 함
+ENGINE_VERSION     = "1.3.0"   # engine/api520.js와 반드시 일치해야 함
+# v1.3.0: COMPRESSIBILITY-001 — Z를 Calculation Input으로 승격 (기존
+# 하드코딩 1.0 제거). Case 소유, Asset 아님. inputs에 Z 필드 필수화.
 # v1.2.0: [BUG FIX] SI 변환상수(13160) 누락 수정, [BUG FIX] P1 절대압 환산
 # (Pset*(1+OP/100)+대기압) 누락 수정. 기준값 전면 재계산 (2026-07-10).
 
@@ -49,7 +51,7 @@ def _py_engine(inp, device="safetyValve"):
     T  = float(inp["T"]);  M  = float(inp["M"]);  k  = float(inp["k"])
     Kd = float(inp["Kd"]); Kb = float(inp["Kb"]); mawp = float(inp["mawp"])
     OP = float(inp["OP"])
-    Z = 1.0
+    Z  = float(inp["Z"])   # COMPRESSIBILITY-001: Calculation Input, 기본값 1.00
 
     # PRESSURE-001: Pset(barg) → P1abs(bara) 환산
     Pset  = P1
@@ -196,7 +198,7 @@ FIXTURES = [
         "device":       "safetyValve",
         "inputs": {
             "W":2500, "P1":5.5, "P2":0.3, "T":373,
-            "M":44,   "k":1.30, "Kd":0.975, "Kb":1.0, "mawp":6.0, "OP":10
+            "M":44,   "k":1.30, "Kd":0.975, "Kb":1.0, "mawp":6.0, "OP":10, "Z":1.0
         },
         # ── 기준값 (고정) ──────────────────────────────────────
         # v1.2.0 재계산 (2026-07-10): SI 변환상수(13160) + P1abs 절대압
@@ -207,7 +209,7 @@ FIXTURES = [
         "expect_areaCm2":4.008804,
         "expect_C":      346.9764,
         "expect_bpRatio":0.0545,
-        "expect_hash":   "aeb15662",
+        "expect_hash":   "15563539",
         # ── PSM 판단 근거 ──────────────────────────────────────
         "psm_note":      "CO₂ 고압 반응기 기본 케이스. 모든 체크리스트 PASS 기준.",
         "api_ref":       "API 520 Part I, API 526",
@@ -219,7 +221,7 @@ FIXTURES = [
         "device":       "safetyValve",
         "inputs": {
             "W":800,  "P1":12.0, "P2":0.5, "T":320,
-            "M":28,   "k":1.40,  "Kd":0.975, "Kb":1.0, "mawp":13.0, "OP":10
+            "M":28,   "k":1.40,  "Kd":0.975, "Kb":1.0, "mawp":13.0, "OP":10, "Z":1.0
         },
         # v1.2.0 재계산 (2026-07-10) — 위 SC-001과 동일 사유
         "expect_pass":   True,
@@ -227,7 +229,7 @@ FIXTURES = [
         "expect_areaCm2":0.721307,
         "expect_C":      356.0604,
         "expect_bpRatio":0.0417,
-        "expect_hash":   "1cd841ab",
+        "expect_hash":   "826ef9f4",
         "psm_note":      "N₂ 불활성 고압 라인. 배압 4.2% — 스프링식 적합.",
         "api_ref":       "API 520 Part I Sec. 3",
     },
@@ -238,7 +240,7 @@ FIXTURES = [
         "device":       "safetyValve",
         "inputs": {
             "W":5000, "P1":8.0, "P2":1.2, "T":453,
-            "M":18,   "k":1.33, "Kd":0.975, "Kb":0.96, "mawp":9.0, "OP":10
+            "M":18,   "k":1.33, "Kd":0.975, "Kb":0.96, "mawp":9.0, "OP":10, "Z":1.0
         },
         # v1.2.0 재계산 (2026-07-10) — 위 SC-001과 동일 사유
         "expect_pass":   False,
@@ -246,7 +248,7 @@ FIXTURES = [
         "expect_areaCm2":10.274755,
         "expect_C":      349.7668,
         "expect_bpRatio":0.1500,
-        "expect_hash":   "d15ed746",
+        "expect_hash":   "d31e1a0f",
         "expect_fail_keys": ["backPressureOK"],   # 정확히 이 항목만 FAIL이어야 함
         "psm_note":      "Steam 배압 15% — backPressureOK FAIL. 파일럿식 또는 Kb 재산정 필요.",
         "api_ref":       "API 520 Part I Fig. 31 (Kb correction)",
@@ -258,7 +260,7 @@ FIXTURES = [
         "device":       "ruptureDisk",
         "inputs": {
             "W":3200, "P1":6.0, "P2":0.2, "T":373,
-            "M":44,   "k":1.30, "Kd":0.975, "Kb":1.0, "mawp":6.5, "OP":10
+            "M":44,   "k":1.30, "Kd":0.975, "Kb":1.0, "mawp":6.5, "OP":10, "Z":1.0
         },
         # v1.2.0 재계산 (2026-07-10) — 위 SC-001과 동일 사유
         "expect_pass":   True,
@@ -266,7 +268,7 @@ FIXTURES = [
         "expect_areaCm2":5.289526,
         "expect_C":      346.9764,
         "expect_bpRatio":0.0333,
-        "expect_hash":   "954704b0",
+        "expect_hash":   "fa9caa47",
         "psm_note":      "럽처디스크 병용 Kd×0.9=0.8775 보정 확인. ALL PASS.",
         "api_ref":       "API 520 Part I Annex C (rupture disk combination)",
     },
@@ -277,7 +279,7 @@ FIXTURES = [
         "device":       "safetyValve",
         "inputs": {
             "W":1500, "P1":5.0, "P2":0.8, "T":350,
-            "M":44,   "k":1.30, "Kd":0.975, "Kb":1.0, "mawp":5.0, "OP":10
+            "M":44,   "k":1.30, "Kd":0.975, "Kb":1.0, "mawp":5.0, "OP":10, "Z":1.0
         },
         # v1.2.0 재계산 (2026-07-10) — 위 SC-001과 동일 사유
         "expect_pass":   False,
@@ -285,7 +287,7 @@ FIXTURES = [
         "expect_areaCm2":2.526693,
         "expect_C":      346.9764,
         "expect_bpRatio":0.1600,
-        "expect_hash":   "4cb9f382",
+        "expect_hash":   "97c27259",
         "expect_fail_keys": ["backPressureOK"],
         "psm_note":      "배압 16% 초과 + P1=MAWP 경계. PSM 제출 불가 상태.",
         "api_ref":       "API 521 Sec. 5.4 (back pressure limit)",
@@ -309,14 +311,14 @@ FIXTURES = [
         # Pset은 P1abs=6.7bara(670kPa)가 되도록 역산 (OP=0으로 직접 대입).
         "inputs": {
             "W":24270, "P1":6.7-1.01325, "P2":0, "T":348,
-            "M":51,    "k":1.11, "Kd":0.975, "Kb":1.0, "mawp":999, "OP":0
+            "M":51,    "k":1.11, "Kd":0.975, "Kb":1.0, "mawp":999, "OP":0, "Z":1.0
         },
         "expect_pass":   True,
         "expect_orifice":"P",
         "expect_areaCm2":38.958136,
         "expect_C":      327.8330,
         "expect_bpRatio":0.0,
-        "expect_hash":   "181c01de",
+        "expect_hash":   "73c6fb67",
         "psm_note":      "SI 변환상수 검증 전용 fixture — PSM 실제 케이스 아님. Z=1.0 가정 하 기준값 고정.",
         "api_ref":       "API 520 Part I Annex (SI 예제), fluids.safety_valve.API520_A_g 대조",
     },
@@ -660,6 +662,71 @@ def test_unit_boundaries() -> TestResult:
     tr.check("UNIT_NUMERIC_relieving_pressure_roundtrip",
              abs((5.5 * (1 + 10/100) + 1.01325) - 7.06325) < 1e-9,
              "P1abs = Pset×(1+OP/100)+Patm 산술 오류")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
+#  COMPRESSIBILITY (Z) CONTRACT — Z를 Calculation Input으로 승격
+#  Z는 Asset이 아니라 Case 소유 계산 조건 (OP와 반대 방향의 소유권).
+# ════════════════════════════════════════════════════════════════
+def test_compressibility_contract() -> TestResult:
+    tr = TestResult("COMPRESSIBILITY-001", "Z(압축계수) Calculation Input 계약")
+
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+    snap_src   = (SRC / "snapshot" / "create.js").read_text()
+    pkg_src    = (SRC / "report" / "createPackage.js").read_text()
+    pdf_src    = (SRC / "report" / "renderer" / "pdf" / "template.js").read_text()
+    evid_src   = (SRC / "engine" / "evidence.js").read_text()
+    schema_src = (SRC / "asset" / "schema.js").read_text()
+
+    # ── API520-Z-001: Z=1.0과 Z=0.97 결과 차이 확인 (√Z 비례) ──────
+    base = dict(W=2500, P1=5.5, P2=0.3, T=373, M=44, k=1.30,
+                Kd=0.975, Kb=1.0, mawp=6.0, OP=10)
+    r1 = _py_engine({**base, "Z":1.0},  "safetyValve")
+    r2 = _py_engine({**base, "Z":0.97}, "safetyValve")
+    tr.check("API520_Z_001_area_differs_with_Z",
+             r1["areaCm2"] != r2["areaCm2"],
+             "Z를 바꿔도 areaCm2가 그대로임 — Z가 계산에 반영되지 않음")
+    expected_ratio = math.sqrt(0.97/1.0)
+    actual_ratio = r2["areaCm2"] / r1["areaCm2"]
+    tr.check("API520_Z_001_area_scales_by_sqrtZ",
+             abs(actual_ratio - expected_ratio) < 1e-6,
+             f"면적 비율={actual_ratio:.6f}, 기대(√(Z2/Z1))={expected_ratio:.6f}")
+
+    # ── Z가 Asset(Equipment) 스키마에는 없어야 함 — Case 소유 확인 ──
+    tr.check("API520_Z_001_Z_not_in_equipment_schema",
+             "overpressure" in schema_src and re.search(r"\bZ\b\s*:", schema_src) is None,
+             "Z가 Equipment 스키마에 있음 — Z는 Asset이 아니라 Case 소유여야 함")
+
+    # ── validateInputs가 Z 필수 필드로 요구하는지 (Engine 계약) ─────
+    tr.check("API520_Z_001_Z_required_in_validateInputs",
+             '"Z"' in api520_src and "must_be_positive" in api520_src,
+             "validateInputs가 Z를 필수 필드로 요구하지 않음")
+
+    # ── SNAPSHOT-Z-001: Snapshot이 inputs를 통째로 보존(필드 화이트리스트 없음) ──
+    tr.check("SNAPSHOT_Z_001_inputs_stored_as_full_copy",
+             "inputs:          Object.freeze({ ...inputs })" in snap_src,
+             "snapshot이 inputs를 부분 필드만 재구성해 저장함 — Z 같은 신규 필드가 누락될 위험")
+
+    # ── REPORT-Z-001: ReportPackage/PDF가 동일한 Z를 표시 ──────────
+    tr.check("REPORT_Z_001_package_inputs_full_copy",
+             "inputs:        Object.freeze({ ...snapshot.inputs })" in pkg_src,
+             "ReportPackage가 inputs를 재계산/부분 복사함 — Z 누락 위험")
+    tr.check("REPORT_Z_001_pdf_shows_Z",
+             "Compressibility Z" in pdf_src and "inputs?.Z" in pdf_src,
+             "PDF 템플릿에 Compressibility Z 표시가 없음")
+    tr.check("REPORT_Z_001_evidence_shows_Z",
+             "fluid.Z" in evid_src,
+             "화면 Evidence(evidence.js)에 Z 표시가 없음 — PDF와 화면 근거 불일치 위험")
+
+    # ── TRACE-Z-001: Calculation Trace에 Z 단계 존재 ───────────────
+    tr.check("TRACE_Z_001_step_in_trace",
+             'step: "COMPRESSIBILITY_Z"' in api520_src,
+             "Calculation Trace에 COMPRESSIBILITY_Z 단계가 없음")
+    tr.check("TRACE_Z_001_default_source_labeled",
+             "User Input (default 1.00)" in api520_src,
+             "Z 기본값 출처(User Input, default 1.00) 라벨이 trace formula에 없음")
 
     return tr
 
@@ -1889,6 +1956,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [UNIT-BOUNDARY-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── Compressibility(Z) contract ──────────────────────────────
+    print("\n── COMPRESSIBILITY (Z) ───────────────────────────────")
+    tr = test_compressibility_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [COMPRESSIBILITY-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"

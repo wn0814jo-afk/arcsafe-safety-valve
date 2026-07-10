@@ -8,7 +8,12 @@
 //   13160 상수(W kg/h, P1 kPa 기준) 적용 시 오차 0.09% 이내로 확인.
 //   [BUG FIX] P1을 설정압력(barg)에서 relieving pressure(절대압)로
 //   변환하는 과정이 누락 — Pset*(1+OP/100)+대기압 미적용.
-const ENGINE_VERSION = "1.2.0";
+// ENGINE_VERSION 1.3.0 — COMPRESSIBILITY-001
+//   Z(압축계수)를 하드코딩(1.0)에서 Calculation Input으로 승격.
+//   Asset이 아니라 Case 소유 — 유체·운전조건에 따라 케이스마다 달라짐.
+//   기본값 1.00은 UI가 명시적으로 대입하며 Engine은 몰래 채우지 않는다.
+//   validateInputs가 Z 누락을 거부하므로 이 필드는 계약 변경이다.
+const ENGINE_VERSION = "1.3.0";
 
 const API_CONST = {
   C_BASE:              520,
@@ -37,7 +42,9 @@ const API526_ORIFICES = [
 function validateInputs(inp) {
   // OP(overpressure %)는 Equipment(Asset) 소유 필드 — Case가 임의 기본값을
   // 대입하지 않는다. 없으면 계산 자체를 막는다 (PRESSURE-001 계약).
-  const fields = ["W","P1","P2","T","M","k","Kd","Kb","mawp","OP"];
+  // Z(압축계수)는 반대로 Calculation Input(Case 소유) — 기본값 1.00은
+  // UI가 명시적으로 대입하며, Engine은 몰래 채우지 않는다 (COMPRESSIBILITY-001).
+  const fields = ["W","P1","P2","T","M","k","Kd","Kb","mawp","OP","Z"];
   for (const f of fields) {
     const v = Number(inp[f]);
     if (isNaN(v) || !isFinite(v)) return { ok: false, field: f, reason: "not_a_number" };
@@ -49,6 +56,7 @@ function validateInputs(inp) {
   if (inp.Kd <= 0) return { ok: false, field:"Kd", reason:"must_be_positive" };
   if (inp.Kb <= 0) return { ok: false, field:"Kb", reason:"must_be_positive" };
   if (inp.OP <  0) return { ok: false, field:"OP", reason:"must_be_non_negative" };
+  if (inp.Z  <= 0) return { ok: false, field:"Z",  reason:"must_be_positive" };
   return { ok: true };
 }
 
@@ -57,11 +65,15 @@ function api520Engine(inp, deviceType) {
   const valid = validateInputs(inp);
   if (!valid.ok) return { valid: false, error: valid };
 
-  const { W, P1, P2, T, M, k, Kd, Kb, mawp, OP } = Object.fromEntries(
+  const { W, P1, P2, T, M, k, Kd, Kb, mawp, OP, Z } = Object.fromEntries(
     Object.entries(inp).map(([key, v]) => [key, Number(v)])
   );
 
-  const Z     = 1.0;
+  // ── COMPRESSIBILITY-001: Z는 Asset이 아니라 Calculation Input ──
+  // 설비 속성이 아니라 유체·운전조건에 따라 케이스마다 달라지는 계산
+  // 조건이므로 Equipment/DischargeSystem이 아닌 Case 입력값으로 취급한다.
+  // 기본값 1.0(이상기체 가정)은 UI에서 명시적으로 노출하며, Engine은
+  // 몰래 대입하지 않는다 — validateInputs에서 누락 시 계산을 막는다.
 
   // ── PRESSURE-001: relieving pressure(절대압) 산정 ──────────────
   // P1(입력) = 설정압력(barg, Equipment.setPressure). 이것 자체는
@@ -98,6 +110,8 @@ function api520Engine(inp, deviceType) {
 
   // ── Calculation Trace — 감사/Report Evidence 전용, UI 표시용 아님 ──
   const trace = [
+    { step: "COMPRESSIBILITY_Z", value: Z, unit: "",
+      formula: Z === 1.0 ? "User Input (default 1.00)" : "User Input", inputs: { Z } },
     { step: "SET_PRESSURE",     value: Pset,   unit: "barg", formula: "Equipment.setPressure" },
     { step: "RELIEVING_PRESSURE", value: P1abs, unit: "bara",
       formula: "P1abs = Pset×(1+OP/100) + Patm", inputs: { Pset, OP, Patm: API_CONST.ATM_PRESSURE_BAR } },
@@ -109,7 +123,7 @@ function api520Engine(inp, deviceType) {
   ];
 
   const stepData = {
-    fluid:     { M, T, k, criticalPressRatio },
+    fluid:     { M, T, k, Z, criticalPressRatio },
     cCoeff:    { C, k },
     pressure:  { Pset, OP, P1abs, atm: API_CONST.ATM_PRESSURE_BAR },
     orifice:   { areaCm2, W, P1abs, KdEff, Kb, isRD: deviceType === "ruptureDisk" },

@@ -328,6 +328,15 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         basis={`플레어 헤더 또는 방출 배관 압력. 현재 P2/P1 = ${bpRatio}%.${bpRatio>10?" 10% 초과 → Kb 1.0 미만 적용 필요.":""}${bpRatio>30?" 30% 초과 → 스프링식 부적합, 파일럿식 전환 검토.":""}`}
         warning={bpWarning}
       />
+      {/* COMPRESSIBILITY-001: Z는 Asset이 아니라 Calculation Input —
+          설비 속성이 아니라 유체·운전조건에 따라 케이스마다 달라지므로
+          Case가 직접 소유하고 편집 가능해야 한다 (OP와는 반대). */}
+      <DecisionSlider
+        param="Z" label="압축계수 (Compressibility Z)" unit=""
+        value={inputs.Z} min={0.5} max={1.2} step={0.01}
+        onChange={v=>onChange("Z",v)}
+        basis="실측 P-V-T 데이터 또는 상태방정식(SRK, PR 등)에서 산정. 기본값 1.00은 이상기체 가정 — 고압·저온 조건에서 실제 유체는 1.00과 벗어날 수 있으며, 벗어날수록 소요 면적 산정 오차가 커진다."
+      />
 
       {/* ── 5. 방출계수 결정 ── */}
       <SectionHeader step="5" title="방출계수 Kd" sub="어떤 근거로 이 계수를 적용하는가"/>

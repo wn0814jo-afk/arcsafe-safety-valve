@@ -65,6 +65,8 @@ function buildPDFHtml(reportPackage) {
   const calcBody =
     _pdfRow("Fluid", _pdfFluidLabel(pkg.calculation.inputs)) +
     _pdfRow("Engine", `API520 v${pkg.calculation.engineVersion}`) +
+    _pdfRow("Compressibility Z", pkg.calculation.inputs?.Z != null ? `${pkg.calculation.inputs.Z}${pkg.calculation.inputs.Z===1 ? " (default)" : ""}` : "—") +
+    _pdfRow("Relieving Pressure (abs)", pkg.calculation.result?.P1abs ? `${pkg.calculation.result.P1abs.toFixed(3)} bara` : "—") +
     _pdfRow("Selected Orifice", pkg.calculation.result?.selected?.letter || "—") +
     _pdfRow("Required Area", pkg.calculation.result?.areaCm2 ? `${pkg.calculation.result.areaCm2.toFixed(2)} cm²` : "—") +
     `<div style="margin-top:6px;font-size:9px;font-weight:700;color:#64748b;letter-spacing:0.5px;">BACKPRESSURE BASIS</div>` +

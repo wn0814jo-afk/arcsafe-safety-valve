@@ -6,9 +6,9 @@ function buildEvidence(sd) {
   return [
     {
       id:1, title:"유체 물성 확인",
-      formula:"M, T, k 입력값 확인",
-      result:`M = ${fluid.M} g/mol | T = ${fluid.T} K | k = ${fluid.k}`,
-      detail:`비열비 k=${fluid.k} 기준 임계압력비 = (2/(k+1))^(k/(k-1)) = ${fluid.criticalPressRatio.toFixed(4)}`,
+      formula:"M, T, k, Z 입력값 확인",
+      result:`M = ${fluid.M} g/mol | T = ${fluid.T} K | k = ${fluid.k} | Z = ${fluid.Z}`,
+      detail:`비열비 k=${fluid.k} 기준 임계압력비 = (2/(k+1))^(k/(k-1)) = ${fluid.criticalPressRatio.toFixed(4)}. 압축계수 Z=${fluid.Z}${fluid.Z===1 ? " (기본값, 이상기체 가정)" : " (사용자 입력값)"} — Case 소유 계산 조건, Asset 속성 아님.`,
       ok:true,
     },
     {
