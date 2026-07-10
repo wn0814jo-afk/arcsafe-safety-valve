@@ -26,13 +26,17 @@ SRC  = ROOT / 'src'
 #  (engine/api520.js 코드를 그대로 포팅 — 동일 계산식 보장)
 # ════════════════════════════════════════════════════════════════
 C_BASE             = 520
+SI_AREA_CONST      = 13160     # API520-SI-001 — SI 단위 필수 변환상수 (누락 시 ~7600배 오차)
+ATM_PRESSURE_BAR   = 1.01325   # API520-PRESSURE-001 — relieving pressure 절대압 환산용
 BACKPRESSURE_SPRING= 0.10
 BACKPRESSURE_PILOT = 0.30
 RD_KD_FACTOR       = 0.9
 KD_MIN             = 0.9
 MARGIN_MIN         = 1.0
 
-ENGINE_VERSION     = "1.1.0"   # engine/api520.js와 반드시 일치해야 함
+ENGINE_VERSION     = "1.2.0"   # engine/api520.js와 반드시 일치해야 함
+# v1.2.0: [BUG FIX] SI 변환상수(13160) 누락 수정, [BUG FIX] P1 절대압 환산
+# (Pset*(1+OP/100)+대기압) 누락 수정. 기준값 전면 재계산 (2026-07-10).
 
 ORIFICES = [
     ("D",0.71),("E",1.27),("F",1.98),("G",3.24),("H",5.07),
@@ -44,24 +48,35 @@ def _py_engine(inp, device="safetyValve"):
     W  = float(inp["W"]);  P1 = float(inp["P1"]); P2 = float(inp["P2"])
     T  = float(inp["T"]);  M  = float(inp["M"]);  k  = float(inp["k"])
     Kd = float(inp["Kd"]); Kb = float(inp["Kb"]); mawp = float(inp["mawp"])
+    OP = float(inp["OP"])
     Z = 1.0
+
+    # PRESSURE-001: Pset(barg) → P1abs(bara) 환산
+    Pset  = P1
+    P1abs = Pset * (1 + OP/100) + ATM_PRESSURE_BAR
+    P1_kPa = P1abs * 100
+
     C = C_BASE * math.sqrt(k * (2/(k+1))**((k+1)/(k-1)))
     KdEff = Kd * RD_KD_FACTOR if device == "ruptureDisk" else Kd
-    A_m2 = (W / (C * KdEff * Kb)) * math.sqrt((T * Z) / (M * P1 * P1))
-    areaCm2 = A_m2 * 1e4
+
+    # API520-SI-001: SI 변환상수(13160) 적용, A[mm²]=13160·W/(C·Kd·P1[kPa]·Kb)·√(TZ/M)
+    A_mm2 = (SI_AREA_CONST * W / (C * KdEff * P1_kPa * Kb)) * math.sqrt((T * Z) / M)
+    areaCm2 = A_mm2 / 100
+
     sel = next((o for o in ORIFICES if o[1] >= areaCm2), ("P+", areaCm2))
     margin = sel[1] / areaCm2
-    bpRatio = P2 / P1
+    bpRatio = P2 / Pset
     return {
         "areaCm2":  areaCm2,
         "orifice":  sel[0],
         "margin":   margin,
         "C":        C,
         "bpRatio":  bpRatio,
+        "P1abs":    P1abs,
         "checklist": {
             "capacityOK":     sel[1] >= areaCm2,
             "backPressureOK": bpRatio < BACKPRESSURE_SPRING,
-            "mawpOK":         P1 <= mawp,
+            "mawpOK":         Pset <= mawp,
             "kdOK":           Kd >= KD_MIN,
             "marginOK":       margin >= MARGIN_MIN,
         }
@@ -181,15 +196,18 @@ FIXTURES = [
         "device":       "safetyValve",
         "inputs": {
             "W":2500, "P1":5.5, "P2":0.3, "T":373,
-            "M":44,   "k":1.30, "Kd":0.975, "Kb":1.0, "mawp":6.0
+            "M":44,   "k":1.30, "Kd":0.975, "Kb":1.0, "mawp":6.0, "OP":10
         },
         # ── 기준값 (고정) ──────────────────────────────────────
+        # v1.2.0 재계산 (2026-07-10): SI 변환상수(13160) + P1abs 절대압
+        # 환산 버그 수정 반영. 이전 기준값(areaCm2=39120.18, hash=6b7e3910)은
+        # 검증된 오류였음 — API 520 공식 예제 역산 검증(오차 0.09%)으로 확인.
         "expect_pass":   True,
-        "expect_orifice":"P+",
-        "expect_areaCm2":39120.177446,   # 소수점 6자리까지 고정
+        "expect_orifice":"H",
+        "expect_areaCm2":4.008804,
         "expect_C":      346.9764,
         "expect_bpRatio":0.0545,
-        "expect_hash":   "6b7e3910",
+        "expect_hash":   "aeb15662",
         # ── PSM 판단 근거 ──────────────────────────────────────
         "psm_note":      "CO₂ 고압 반응기 기본 케이스. 모든 체크리스트 PASS 기준.",
         "api_ref":       "API 520 Part I, API 526",
@@ -201,14 +219,15 @@ FIXTURES = [
         "device":       "safetyValve",
         "inputs": {
             "W":800,  "P1":12.0, "P2":0.5, "T":320,
-            "M":28,   "k":1.40,  "Kd":0.975, "Kb":1.0, "mawp":13.0
+            "M":28,   "k":1.40,  "Kd":0.975, "Kb":1.0, "mawp":13.0, "OP":10
         },
+        # v1.2.0 재계산 (2026-07-10) — 위 SC-001과 동일 사유
         "expect_pass":   True,
-        "expect_orifice":"P+",
-        "expect_areaCm2":6491.969569,
+        "expect_orifice":"E",
+        "expect_areaCm2":0.721307,
         "expect_C":      356.0604,
         "expect_bpRatio":0.0417,
-        "expect_hash":   "c5dff44e",
+        "expect_hash":   "1cd841ab",
         "psm_note":      "N₂ 불활성 고압 라인. 배압 4.2% — 스프링식 적합.",
         "api_ref":       "API 520 Part I Sec. 3",
     },
@@ -219,14 +238,15 @@ FIXTURES = [
         "device":       "safetyValve",
         "inputs": {
             "W":5000, "P1":8.0, "P2":1.2, "T":453,
-            "M":18,   "k":1.33, "Kd":0.975, "Kb":0.96, "mawp":9.0
+            "M":18,   "k":1.33, "Kd":0.975, "Kb":0.96, "mawp":9.0, "OP":10
         },
+        # v1.2.0 재계산 (2026-07-10) — 위 SC-001과 동일 사유
         "expect_pass":   False,
-        "expect_orifice":"P+",
-        "expect_areaCm2":95771.980457,
+        "expect_orifice":"K",
+        "expect_areaCm2":10.274755,
         "expect_C":      349.7668,
         "expect_bpRatio":0.1500,
-        "expect_hash":   "8aae31c7",
+        "expect_hash":   "d15ed746",
         "expect_fail_keys": ["backPressureOK"],   # 정확히 이 항목만 FAIL이어야 함
         "psm_note":      "Steam 배압 15% — backPressureOK FAIL. 파일럿식 또는 Kb 재산정 필요.",
         "api_ref":       "API 520 Part I Fig. 31 (Kb correction)",
@@ -238,14 +258,15 @@ FIXTURES = [
         "device":       "ruptureDisk",
         "inputs": {
             "W":3200, "P1":6.0, "P2":0.2, "T":373,
-            "M":44,   "k":1.30, "Kd":0.975, "Kb":1.0, "mawp":6.5
+            "M":44,   "k":1.30, "Kd":0.975, "Kb":1.0, "mawp":6.5, "OP":10
         },
+        # v1.2.0 재계산 (2026-07-10) — 위 SC-001과 동일 사유
         "expect_pass":   True,
-        "expect_orifice":"P+",
-        "expect_areaCm2":51001.120225,
+        "expect_orifice":"J",
+        "expect_areaCm2":5.289526,
         "expect_C":      346.9764,
         "expect_bpRatio":0.0333,
-        "expect_hash":   "585cd0a5",
+        "expect_hash":   "954704b0",
         "psm_note":      "럽처디스크 병용 Kd×0.9=0.8775 보정 확인. ALL PASS.",
         "api_ref":       "API 520 Part I Annex C (rupture disk combination)",
     },
@@ -256,17 +277,48 @@ FIXTURES = [
         "device":       "safetyValve",
         "inputs": {
             "W":1500, "P1":5.0, "P2":0.8, "T":350,
-            "M":44,   "k":1.30, "Kd":0.975, "Kb":1.0, "mawp":5.0
+            "M":44,   "k":1.30, "Kd":0.975, "Kb":1.0, "mawp":5.0, "OP":10
         },
+        # v1.2.0 재계산 (2026-07-10) — 위 SC-001과 동일 사유
         "expect_pass":   False,
-        "expect_orifice":"P+",
-        "expect_areaCm2":25010.614245,
+        "expect_orifice":"G",
+        "expect_areaCm2":2.526693,
         "expect_C":      346.9764,
         "expect_bpRatio":0.1600,
-        "expect_hash":   "a4617467",
+        "expect_hash":   "4cb9f382",
         "expect_fail_keys": ["backPressureOK"],
         "psm_note":      "배압 16% 초과 + P1=MAWP 경계. PSM 제출 불가 상태.",
         "api_ref":       "API 521 Sec. 5.4 (back pressure limit)",
+    },
+    {
+        "id":           "API520-SI-001",
+        "label":        "SI 단위 변환상수(13160) 외부 검증 — API 520 공식 예제 역산",
+        "tag":          "REFERENCE",
+        "device":       "safetyValve",
+        # 원 예제(fluids 0.66.x, Caleb Bell — API 520 공식 example 1 재현,
+        # PyPI 공개 라이브러리로 API 520 Part I Annex 예제와 대조 검증됨):
+        #   m=24270 kg/h, T=348K, Z=0.90, MW=51, k=1.11, P1=670kPa(abs) →
+        #   A = 0.0036990460646834 m² = 3699.046 mm²
+        # 본 엔진은 Z를 1.0으로 고정하는 기존 단순화가 있어(별도 개선 필요
+        # 항목, ENGINE-Z-001) Z=0.90 조건을 그대로 재현하지 못한다.
+        # 따라서 "13160 상수 자체"의 정합성은 Z=1.0 가정 하에 별도 검증:
+        #   Z=1.0 대입 시 목표값 3699.046×√(1/0.90)=3899.15 부근이어야 함
+        #   (Z가 sqrt 안에서 단순 배율로만 작용하므로) — 본 엔진 실측값
+        #   3895.81mm²는 그 근사 범위 내에 있음 (기존 fluids 비교는
+        #   Kb/Kc/반올림 차이로 완전 일치는 아니고 0.09% 이내로 확인됨).
+        # Pset은 P1abs=6.7bara(670kPa)가 되도록 역산 (OP=0으로 직접 대입).
+        "inputs": {
+            "W":24270, "P1":6.7-1.01325, "P2":0, "T":348,
+            "M":51,    "k":1.11, "Kd":0.975, "Kb":1.0, "mawp":999, "OP":0
+        },
+        "expect_pass":   True,
+        "expect_orifice":"P",
+        "expect_areaCm2":38.958136,
+        "expect_C":      327.8330,
+        "expect_bpRatio":0.0,
+        "expect_hash":   "181c01de",
+        "psm_note":      "SI 변환상수 검증 전용 fixture — PSM 실제 케이스 아님. Z=1.0 가정 하 기준값 고정.",
+        "api_ref":       "API 520 Part I Annex (SI 예제), fluids.safety_valve.API520_A_g 대조",
     },
 ]
 

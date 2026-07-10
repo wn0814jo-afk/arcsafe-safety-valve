@@ -301,6 +301,26 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         basis="밸브 명판의 설정압. MAWP의 100% 이하 유지 (단일 밸브 기준). 공정 최고운전압력 대비 최소 10% 여유 권고 (API 521)."
         warning={mawpWarning}
       />
+      {/* PRESSURE-001: overpressure는 Case 입력값이 아니라 Asset(Equipment) 데이터.
+          여기서 편집하지 않고, 설비대장 값으로 산정된 relieving pressure만 보여준다. */}
+      <div style={{background:T.cardBg,borderRadius:10,padding:"10px 12px",marginBottom:10,
+        border:`1.5px solid ${T.border}`}}>
+        <div style={{fontSize:9,color:T.gray,fontFamily:font.mono,marginBottom:3}}>
+          RELIEVING PRESSURE (절대압) — 설비대장 Overpressure 기준 시스템 산정값
+        </div>
+        {typeof inputs.OP === "number" && !isNaN(inputs.OP) ? (
+          <div style={{fontSize:13,fontWeight:900,color:T.navy,fontFamily:font.mono}}>
+            {(inputs.P1 * (1 + inputs.OP/100) + 1.01325).toFixed(3)} bara
+            <span style={{fontSize:10,fontWeight:600,color:T.sub,marginLeft:8}}>
+              = {inputs.P1}×(1+{inputs.OP}%) + 1.01325
+            </span>
+          </div>
+        ) : (
+          <div style={{fontSize:11,fontWeight:700,color:T.red,fontFamily:font.sans}}>
+            ⚠ 설비대장에 Overpressure(%) 미설정 — 계산 불가. 설비대장에서 값을 먼저 입력하세요.
+          </div>
+        )}
+      </div>
       <DecisionSlider
         param="P2" label="배압 (Back Pressure)" unit="barg"
         value={inputs.P2} min={0} max={5} step={0.05}

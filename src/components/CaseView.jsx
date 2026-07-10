@@ -16,6 +16,10 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
     ...(equipment ? {
       P1:   equipment.setPressure,
       mawp: equipment.mawp,
+      // PRESSURE-001: overpressure는 Case 입력값이 아니라 Asset(Equipment)
+      // 데이터. Equipment에 없으면 계산을 막아야 하므로 여기서 임의
+      // 기본값을 몰래 대입하지 않는다 (누락 시 validateInputs에서 거부).
+      OP:   equipment.overpressure,
       P2:   dischargeSystem?.headerPressure ?? R201_DEFAULTS.P2,
     } : {}),
   };

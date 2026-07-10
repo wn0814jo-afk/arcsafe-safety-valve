@@ -13,6 +13,13 @@ function validateEquipment(eq) {
     return { ok:false, field:"setPressure", reason:"must_be_positive" };
   if (Number(eq.setPressure) > Number(eq.mawp))
     return { ok:false, field:"setPressure", reason:"exceeds_mawp" };
+  // PRESSURE-001: overpressure는 relieving pressure(절대압) 산정에 쓰이는
+  // Design Basis — Case가 아니라 Asset(Equipment)이 소유. 계산 신뢰성
+  // 계약이므로 누락/음수를 허용하지 않는다.
+  if (eq.overpressure === undefined || eq.overpressure === null || isNaN(Number(eq.overpressure)))
+    return { ok:false, field:"overpressure", reason:"required" };
+  if (Number(eq.overpressure) < 0)
+    return { ok:false, field:"overpressure", reason:"must_be_non_negative" };
   return { ok:true };
 }
 
@@ -31,6 +38,7 @@ function createEquipment(fields) {
     deviceType:   fields.deviceType || "safetyValve",
     mawp:         Number(fields.mawp),
     setPressure:  Number(fields.setPressure),
+    overpressure: Number(fields.overpressure),
     orifice:      fields.orifice || "",
     inletSize:    fields.inletSize || "",
     outletSize:   fields.outletSize || "",
@@ -60,6 +68,7 @@ function reviseEquipment(existing, fields) {
       mocId:        fields.mocId.trim(),
       mawp:         Number(fields.mawp),
       setPressure:  Number(fields.setPressure),
+      overpressure: Number(fields.overpressure),
       registeredAt: existing.registeredAt,     // 최초 등록일 유지
       revisedAt:    new Date().toISOString(),
     }),
@@ -146,19 +155,19 @@ const DESTINATION_NOTE = {
 const SAMPLE_EQUIPMENT = [
   {
     tag:"PSV-R201",  location:"반응기 R-201 상부",
-    deviceType:"safetyValve", mawp:6.0, setPressure:5.5, orifice:"P",
+    deviceType:"safetyValve", mawp:6.0, setPressure:5.5, overpressure:10, orifice:"P",
     inletSize:"3\"", outletSize:"4\"",
     manufacturer:"Crosby", model:"JOS-E",
   },
   {
     tag:"PSV-R302",  location:"N₂ 퍼지 헤더",
-    deviceType:"safetyValve", mawp:13.0, setPressure:12.0, orifice:"J",
+    deviceType:"safetyValve", mawp:13.0, setPressure:12.0, overpressure:10, orifice:"J",
     inletSize:"2\"", outletSize:"3\"",
     manufacturer:"Anderson Greenwood", model:"Series 81",
   },
   {
     tag:"PSV-S12",   location:"스팀 트레이싱 헤더",
-    deviceType:"safetyValve", mawp:9.0, setPressure:8.0, orifice:"P",
+    deviceType:"safetyValve", mawp:9.0, setPressure:8.0, overpressure:10, orifice:"P",
     inletSize:"3\"", outletSize:"4\"",
     manufacturer:"Crosby", model:"HB-BP",
   },

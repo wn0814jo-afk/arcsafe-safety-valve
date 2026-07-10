@@ -13,8 +13,8 @@
 function _wfAssetHash(equipment, dischargeSystem) {
   const eq = equipment ? {
     tag: equipment.tag, mawp: equipment.mawp,
-    setPressure: equipment.setPressure, orifice: equipment.orifice,
-    deviceType: equipment.deviceType,
+    setPressure: equipment.setPressure, overpressure: equipment.overpressure,
+    orifice: equipment.orifice, deviceType: equipment.deviceType,
   } : null;
   const ds = dischargeSystem ? {
     name: dischargeSystem.name, L: dischargeSystem.L,
@@ -51,6 +51,7 @@ function detectMOC(snap, currentEquipment, currentDischargeSystem) {
   if (eq && ceq) {
     if (eq.mawp        !== ceq.mawp)        diffs.push({ field:"mawp",        from:eq.mawp,        to:ceq.mawp,        unit:"barg" });
     if (eq.setPressure !== ceq.setPressure) diffs.push({ field:"setPressure", from:eq.setPressure, to:ceq.setPressure, unit:"barg" });
+    if (eq.overpressure !== ceq.overpressure) diffs.push({ field:"overpressure", from:eq.overpressure, to:ceq.overpressure, unit:"%" });
     if (eq.orifice     !== ceq.orifice)     diffs.push({ field:"orifice",     from:eq.orifice,     to:ceq.orifice,     unit:"" });
     if (eq.deviceType  !== ceq.deviceType)  diffs.push({ field:"deviceType",  from:eq.deviceType,  to:ceq.deviceType,  unit:"" });
   }
@@ -71,7 +72,7 @@ function detectMOC(snap, currentEquipment, currentDischargeSystem) {
 // 반환값: { requiresReview: boolean, triggerDiffs: diff[] }
 const WORKFLOW_TRIGGER_FIELDS = [
   "headerPressure", "L", "D", "fittingsK", "destination",
-  "setPressure", "mawp", "orifice", "deviceType",
+  "setPressure", "mawp", "overpressure", "orifice", "deviceType",
 ];
 
 function evaluateSafetyImpact(diffs) {

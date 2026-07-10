@@ -44,21 +44,23 @@ function EquipmentForm({ onSave, onCancel, editing }) {
   const isRevision = !!editing;
   const [f, setF] = useState(editing ? {
     tag: editing.tag, location: editing.location, deviceType: editing.deviceType,
-    mawp: editing.mawp, setPressure: editing.setPressure, orifice: editing.orifice,
+    mawp: editing.mawp, setPressure: editing.setPressure,
+    overpressure: editing.overpressure, orifice: editing.orifice,
     inletSize: editing.inletSize, outletSize: editing.outletSize,
     manufacturer: editing.manufacturer, model: editing.model,
     serialNo: editing.serialNo, installedAt: editing.installedAt,
     mocId: "",
   } : {
     tag:"", location:"", deviceType:"safetyValve",
-    mawp:6.0, setPressure:5.5, orifice:"",
-    inletSize:"3\"", outletSize:"4\"",
+    mawp:6.0, setPressure:5.5, overpressure:10,
+    inletSize:"3\"", outletSize:"4\"", orifice:"",
     manufacturer:"", model:"", serialNo:"", installedAt:"",
     mocId:"",
   });
   const upd = (k,v) => setF(p=>({...p,[k]:v}));
   const psetErr = f.setPressure > f.mawp;
   const valid = f.tag.trim() && f.mawp>0 && f.setPressure>0 && !psetErr &&
+    f.overpressure !== "" && f.overpressure !== null && !isNaN(Number(f.overpressure)) && Number(f.overpressure) >= 0 &&
     (!isRevision || f.mocId.trim().length > 0);
 
   const handleSave = () => {
@@ -142,6 +144,16 @@ function EquipmentForm({ onSave, onCancel, editing }) {
               style={iS({border:`1.5px solid ${psetErr?T.red:T.border}`})}/>
             {psetErr && <div style={{fontSize:9,color:T.red,marginTop:3}}>MAWP 초과</div>}
           </Field>}
+        />
+        <Row2
+          a={<Field label="초과압력 Overpressure (%)" req>
+            <input type="number" value={f.overpressure} step={1} min={0} max={50}
+              onChange={e=>upd("overpressure",+e.target.value)} style={iS()}/>
+            <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:3}}>
+              relieving pressure 절대압 산정에 사용 (API 520): P1abs=Pset×(1+OP%)+대기압. 단일밸브 기본 10%.
+            </div>
+          </Field>}
+          b={<div/>}
         />
         <Row2
           a={<Field label="오리피스">
@@ -380,6 +392,7 @@ function EquipmentCard({ eq, dischargeSystem, onSelect, onEdit }) {
       <div style={{display:"flex",gap:6,marginBottom:ds?6:0}}>
         {[
           ["SET",  `${eq.setPressure}b`],
+          ["OP",   `${eq.overpressure}%`],
           ["MAWP", `${eq.mawp}b`],
           ["IN/OUT",`${eq.inletSize}/${eq.outletSize}`],
         ].map(([k,v])=>(
