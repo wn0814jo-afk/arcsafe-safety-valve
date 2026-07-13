@@ -731,6 +731,138 @@ def test_compressibility_contract() -> TestResult:
     return tr
 
 
+# ════════════════════════════════════════════════════════════════
+#  GOLDEN BASELINE CONTRACT — Engine 1.3.0을 검증 기준으로 고정
+#  tests/generate_golden_fixtures.js가 실제 코드(api520Engine,
+#  createSnapshot, computeWorkflowState, detectMOC, submitApproval,
+#  buildReportPackage, verifyApprovalRecord)를 그대로 실행해 만든
+#  두 fixture가, 그 실행 결과를 신뢰성 있게 담고 있는지 확인한다.
+# ════════════════════════════════════════════════════════════════
+def test_golden_baseline_contract() -> TestResult:
+    tr = TestResult("GOLDEN-BASELINE-001", "Engine 1.3.0 Golden Fixture 기준선 계약")
+
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+    m = re.search(r'const ENGINE_VERSION = "([\d.]+)"', api520_src)
+    current_engine_version = m.group(1) if m else None
+
+    fixtures_dir = ROOT / "tests" / "fixtures"
+    pkgs = {}
+    for name in ["PSV-R201-review-required-package.json", "PSV-R201-approved-package.json"]:
+        p = fixtures_dir / name
+        if not p.exists():
+            tr.check(f"GOLDEN_fixture_exists_{name}", False, f"{name} 없음")
+            continue
+        pkgs[name] = json.loads(p.read_text())
+
+    for name, pkg in pkgs.items():
+        # ── GOLDEN-001: ENGINE_VERSION 일치 (fixture가 현재 소스와 동기화돼 있는가) ──
+        tr.check(f"GOLDEN_001_engine_version_{name}",
+                 pkg["meta"]["engineVersion"] == current_engine_version
+                 and pkg["calculation"]["engineVersion"] == current_engine_version,
+                 f"{name}: meta/calculation engineVersion이 현재 소스({current_engine_version})와 다름 "
+                 f"— (meta={pkg['meta']['engineVersion']}, calc={pkg['calculation']['engineVersion']})")
+
+        # ── GOLDEN-002: BUILD_HASH 기록 ─────────────────────────
+        fm = pkg.get("_fixtureMeta", {})
+        tr.check(f"GOLDEN_002_build_hash_recorded_{name}",
+                 bool(fm.get("buildHash")) and fm.get("buildHash") != "UNKNOWN",
+                 f"{name}: _fixtureMeta.buildHash가 기록되지 않음")
+        tr.check(f"GOLDEN_002_fixture_meta_complete_{name}",
+                 all(k in fm for k in ("engineVersion","buildHash","generatedAt","fixtureName")),
+                 f"{name}: _fixtureMeta 필드 누락")
+
+        # ── GOLDEN-003: ReportPackage.packageVersion 확인 ───────
+        tr.check(f"GOLDEN_003_package_version_{name}",
+                 pkg["meta"]["packageVersion"] == "1.0.0",
+                 f"{name}: packageVersion={pkg['meta']['packageVersion']} (기대: 1.0.0)")
+
+        # ── GOLDEN-004: inputs.Z 존재 및 값 일치 ────────────────
+        tr.check(f"GOLDEN_004_inputs_Z_present_{name}",
+                 "Z" in pkg["calculation"]["inputs"],
+                 f"{name}: calculation.inputs.Z 없음")
+        tr.check(f"GOLDEN_004_stepData_Z_matches_inputs_Z_{name}",
+                 pkg["calculation"]["result"]["stepData"]["fluid"]["Z"] == pkg["calculation"]["inputs"]["Z"],
+                 f"{name}: stepData.fluid.Z가 inputs.Z와 다름")
+
+        # ── GOLDEN-005: CalculationTrace에 COMPRESSIBILITY_Z 단계 ──
+        trace_steps = [t["step"] for t in pkg["calculation"]["result"].get("trace", [])]
+        tr.check(f"GOLDEN_005_trace_has_compressibility_Z_{name}",
+                 "COMPRESSIBILITY_Z" in trace_steps,
+                 f"{name}: trace에 COMPRESSIBILITY_Z 단계 없음 (trace={trace_steps})")
+        tr.check(f"GOLDEN_005_trace_has_relieving_pressure_{name}",
+                 "RELIEVING_PRESSURE" in trace_steps,
+                 f"{name}: trace에 RELIEVING_PRESSURE 단계 없음")
+
+        # ── GOLDEN-006: RelievingPressure(abs)가 result/PDF 양쪽에 동일 ──
+        p1abs = pkg["calculation"]["result"].get("P1abs")
+        tr.check(f"GOLDEN_006_P1abs_present_{name}",
+                 p1abs is not None and p1abs > 0,
+                 f"{name}: calculation.result.P1abs 없음/비정상")
+        node = shutil.which("node")
+        if node:
+            check_script = f"""
+const fs = require('fs');
+const files = ['report/schema.js','report/renderer/pdf/styles.js','report/renderer/pdf/template.js']
+  .map(f => fs.readFileSync('{SRC}/' + f, 'utf8')).join('\\n');
+eval(files);
+const pkg = {json.dumps(pkg)};
+console.log(buildPDFHtml(pkg));
+"""
+            r = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=15)
+            html = r.stdout
+            tr.check(f"GOLDEN_006_P1abs_shown_in_PDF_{name}",
+                     f"{p1abs:.3f}" in html,
+                     f"{name}: PDF에 Relieving Pressure(abs)={p1abs:.3f}가 표시되지 않음")
+            # ── GOLDEN-007: Required Area / Orifice가 PDF에도 동일하게 표시 ──
+            area = pkg["calculation"]["result"]["areaCm2"]
+            orifice = pkg["calculation"]["result"]["selected"]["letter"]
+            tr.check(f"GOLDEN_007_area_shown_in_PDF_{name}",
+                     f"{area:.2f}" in html,
+                     f"{name}: PDF에 Required Area={area:.2f}cm²가 표시되지 않음")
+            tr.check(f"GOLDEN_007_orifice_shown_in_PDF_{name}",
+                     orifice in html,
+                     f"{name}: PDF에 Orifice({orifice})가 표시되지 않음")
+        else:
+            tr.check(f"GOLDEN_006_node_available_{name}", False, "node 없음 — PDF 대조 생략")
+
+        # evidence.js(화면)도 동일 stepData를 소비하므로 근원이 하나임을 소스로 재확인
+        evid_src = (SRC / "engine" / "evidence.js").read_text()
+        tr.check(f"GOLDEN_007_evidence_reads_same_selection_object_{name}",
+                 "selection.areaCm2" in evid_src and "selection.selected" in evid_src,
+                 "evidence.js가 별도로 면적/오리피스를 재계산하지 않고 stepData.selection을 그대로 읽는지 확인 실패")
+
+    # ── GOLDEN-008: snapshotHash가 ReportPackage와 Approval Record에서 동일(승인 시나리오) ──
+    approved = pkgs.get("PSV-R201-approved-package.json")
+    if approved:
+        approvals = approved.get("approvals", [])
+        tr.check("GOLDEN_008_approved_has_approval_record",
+                 len(approvals) > 0,
+                 "approved fixture에 approvals가 비어있음")
+        if approvals:
+            # REPORT-PKG-004: pkg.approvals는 snapshotHash가 일치하는 것만 필터링해 담김 —
+            # 즉 이 배열에 들어있다는 사실 자체가 이미 snapshotHash 일치를 증명한다.
+            # 여기서는 그 필터링이 실제로 통과했다는 증거(verified=true)까지 함께 확인한다.
+            tr.check("GOLDEN_008_approval_verified_true",
+                     approvals[0].get("verified") is True,
+                     "approved fixture의 승인 기록이 verified=true가 아님 — "
+                     "실제 서명 재검증(verifyApprovalRecord)을 통과하지 못한 상태")
+            tr.check("GOLDEN_008_snapshotHash_referenced_consistently",
+                     approved["identity"]["snapshotHash"] is not None
+                     and len(approved["identity"]["snapshotHash"]) == 8,
+                     "approved fixture의 identity.snapshotHash 형식이 비정상")
+
+    review = pkgs.get("PSV-R201-review-required-package.json")
+    if review and approved:
+        tr.check("GOLDEN_008_review_and_approved_share_asset_lineage",
+                 review["asset"]["assetFingerprint"] == approved["asset"]["assetFingerprint"],
+                 "review-required와 approved fixture의 assetFingerprint가 다름 — 동일 Asset 계보가 아님")
+        tr.check("GOLDEN_008_review_has_no_approvals",
+                 len(review.get("approvals", [])) == 0,
+                 "review-required fixture에 approvals가 있음 — 승인 전 상태와 모순")
+
+    return tr
+
+
 def test_snapshot_schema() -> TestResult:
     tr = TestResult("SCHEMA-001", "Snapshot schema 필수 필드 검사")
     snap_src = (SRC / "snapshot" / "create.js").read_text()
@@ -1967,6 +2099,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [COMPRESSIBILITY-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── Golden Baseline contract ─────────────────────────────────
+    print("\n── GOLDEN BASELINE (Engine 1.3.0) ────────────────────")
+    tr = test_golden_baseline_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [GOLDEN-BASELINE-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"

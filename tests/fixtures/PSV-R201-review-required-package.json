@@ -1,23 +1,23 @@
 {
   "meta": {
     "packageVersion": "1.0.0",
-    "generatedAt": "2026-07-07T09:00:00.000Z",
-    "engineVersion": "1.1.0"
+    "generatedAt": "2026-07-10T10:05:00.000Z",
+    "engineVersion": "1.3.0"
   },
   "identity": {
     "caseId": "C-2026-001",
-    "snapshotId": "SNAP-C-2026-001-1783474119382",
-    "snapshotHash": "bf22d00c"
+    "snapshotId": "SNAP-C-2026-001-1783921472187",
+    "snapshotHash": "4d153741"
   },
   "asset": {
     "equipment": {
-      "id": "EQ-PSVR201-1783474119375",
+      "id": "EQ-PSVR201-GOLDEN",
       "tag": "PSV-R201",
       "revision": 1,
       "mocId": null
     },
     "dischargeSystem": {
-      "id": "DS-LPFLARE01-1783474119375",
+      "id": "DS-LPFLARE01-GOLDEN",
       "name": "LP-FLARE-01",
       "revision": 2,
       "mocId": "MOC-2026-017",
@@ -30,29 +30,31 @@
     "assetFingerprint": "fb2bb5d0"
   },
   "calculation": {
-    "engineVersion": "1.1.0",
+    "engineVersion": "1.3.0",
     "inputs": {
       "W": 2500,
       "P1": 5.5,
-      "P2": 0.5,
+      "P2": 0.3,
       "T": 373,
       "M": 44,
       "k": 1.3,
       "Kd": 0.975,
       "Kb": 1,
-      "mawp": 6
+      "mawp": 6,
+      "OP": 10,
+      "Z": 1
     },
     "result": {
       "valid": true,
-      "areaCm2": 39120.177445641835,
+      "areaCm2": 4.0088039408424665,
       "selected": {
-        "letter": "P+",
-        "area": 39120.177445641835,
-        "nonStandard": true
+        "letter": "H",
+        "area": 5.07
       },
-      "margin": 1,
+      "margin": 1.2647163779564932,
       "C": 346.9764226452482,
-      "backPressureRatio": 0.09090909090909091,
+      "P1abs": 7.063250000000001,
+      "backPressureRatio": 0.05454545454545454,
       "checklist": {
         "capacityOK": true,
         "backPressureOK": true,
@@ -65,35 +67,109 @@
           "M": 44,
           "T": 373,
           "k": 1.3,
+          "Z": 1,
           "criticalPressRatio": 0.545727733814065
         },
         "cCoeff": {
           "C": 346.9764226452482,
           "k": 1.3
         },
+        "pressure": {
+          "Pset": 5.5,
+          "OP": 10,
+          "P1abs": 7.063250000000001,
+          "atm": 1.01325
+        },
         "orifice": {
-          "areaCm2": 39120.177445641835,
+          "areaCm2": 4.0088039408424665,
           "W": 2500,
-          "P1": 5.5,
+          "P1abs": 7.063250000000001,
           "KdEff": 0.975,
           "Kb": 1,
           "isRD": false
         },
         "selection": {
           "selected": {
-            "letter": "P+",
-            "area": 39120.177445641835,
-            "nonStandard": true
+            "letter": "H",
+            "area": 5.07
           },
-          "areaCm2": 39120.177445641835,
-          "margin": 1
+          "areaCm2": 4.0088039408424665,
+          "margin": 1.2647163779564932
         },
         "backpress": {
-          "ratio": 0.09090909090909091,
+          "ratio": 0.05454545454545454,
           "limitSpring": 0.1,
           "limitPilot": 0.3
         }
-      }
+      },
+      "trace": [
+        {
+          "step": "COMPRESSIBILITY_Z",
+          "value": 1,
+          "unit": "",
+          "formula": "User Input (default 1.00)",
+          "inputs": {
+            "Z": 1
+          }
+        },
+        {
+          "step": "SET_PRESSURE",
+          "value": 5.5,
+          "unit": "barg",
+          "formula": "Equipment.setPressure"
+        },
+        {
+          "step": "RELIEVING_PRESSURE",
+          "value": 7.063250000000001,
+          "unit": "bara",
+          "formula": "P1abs = Pset×(1+OP/100) + Patm",
+          "inputs": {
+            "Pset": 5.5,
+            "OP": 10,
+            "Patm": 1.01325
+          }
+        },
+        {
+          "step": "C_COEFFICIENT",
+          "value": 346.9764226452482,
+          "unit": "",
+          "formula": "C = 520·√(k·(2/(k+1))^((k+1)/(k-1)))",
+          "inputs": {
+            "k": 1.3
+          }
+        },
+        {
+          "step": "MASS_FLUX_AREA",
+          "value": 400.8803940842467,
+          "unit": "mm²",
+          "formula": "A = 13160·W/(C·Kd·P1[kPa]·Kb)·√(TZ/M)",
+          "inputs": {
+            "W": 2500,
+            "KdEff": 0.975,
+            "P1_kPa": 706.325,
+            "Kb": 1,
+            "T": 373,
+            "Z": 1,
+            "M": 44
+          }
+        },
+        {
+          "step": "REQUIRED_AREA",
+          "value": 4.0088039408424665,
+          "unit": "cm²",
+          "formula": "areaCm2 = A_mm2 / 100"
+        },
+        {
+          "step": "ORIFICE_SELECTION",
+          "value": "H",
+          "unit": "",
+          "formula": "next API526 orifice ≥ areaCm2",
+          "inputs": {
+            "areaCm2": 4.0088039408424665,
+            "selectedArea": 5.07
+          }
+        }
+      ]
     }
   },
   "workflow": {
@@ -107,9 +183,15 @@
           "unit": "barg"
         }
       ],
-      "evaluatedAt": "2026-07-08T01:28:39.382Z",
-      "engineVersion": "1.1.0"
+      "evaluatedAt": "2026-07-13T05:44:32.187Z",
+      "engineVersion": "1.3.0"
     }
   },
-  "approvals": []
+  "approvals": [],
+  "_fixtureMeta": {
+    "engineVersion": "1.3.0",
+    "buildHash": "ac69b86ff580",
+    "generatedAt": "2026-07-10T10:05:00.000Z",
+    "fixtureName": "PSV-R201-review-required"
+  }
 }
