@@ -51,6 +51,7 @@ BUILD_ORDER = [
     SRC / 'approval' / 'service.js',
     SRC / 'sim' / 'step.js',
     SRC / 'asset' / 'schema.js',
+    SRC / 'asset' / 'history.js',
     SRC / 'case' / 'history.js',
     SRC / 'approval' / 'validator.js',
     SRC / 'report' / 'schema.js',
@@ -251,6 +252,11 @@ REQUIRED_SYMBOLS = [
                                    'reviseDischargeSystem',
                                    'DESTINATION_LABEL', 'SAMPLE_EQUIPMENT',
                                    'SAMPLE_DISCHARGE_SYSTEMS']),  # revision/mocId는 필드, 함수 아님
+    ('asset/history.js',          ['function appendRevision', 'function resolveRevision',
+                                   'function getLatestRevision', 'function getAllLatestRevisions',
+                                   'function getRevisionsFor', 'function hasDuplicateRevision',
+                                   'ASSET-HISTORY-001', 'ASSET-HISTORY-002',
+                                   'ASSET-HISTORY-003', 'ASSET-HISTORY-004']),
     ('engine/evidence.js',        ['buildEvidence']),
     # snapshot
     ('snapshot/create.js',        ['createSnapshot', 'Object.freeze', 'engine_version',

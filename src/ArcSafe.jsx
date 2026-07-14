@@ -1,11 +1,21 @@
 //  ROOT — ArcSafe App (v0.2.0-asset-master)
 // ════════════════════════════════════════════════════════════════
 function ArcSafe() {
-  const [equipments, setEquipments] = useState(() =>
-    SAMPLE_EQUIPMENT.map(e => createEquipment(e))
+  // ASSET-HISTORY-001~004: Asset Repository는 append-only history만 저장하고,
+  // "현재 상태" 목록(equipments/dischargeSystems)은 항상 파생값이다.
+  // 저장하는 것: equipmentHistory / dischargeHistory
+  // 계산하는 것: equipments / dischargeSystems (아래 useMemo)
+  const [equipmentHistory, setEquipmentHistory] = useState(() =>
+    Object.freeze(SAMPLE_EQUIPMENT.map(e => createEquipment(e)))
   );
-  const [dischargeSystems, setDischargeSystems] = useState(() =>
-    SAMPLE_DISCHARGE_SYSTEMS.map(d => createDischargeSystem(d))
+  const [dischargeHistory, setDischargeHistory] = useState(() =>
+    Object.freeze(SAMPLE_DISCHARGE_SYSTEMS.map(d => createDischargeSystem(d)))
+  );
+  const equipments = useMemo(
+    () => getAllLatestRevisions(equipmentHistory), [equipmentHistory]
+  );
+  const dischargeSystems = useMemo(
+    () => getAllLatestRevisions(dischargeHistory), [dischargeHistory]
   );
   const [cases,      setCases]      = useState([]);
   const [activeCase, setActiveCase] = useState(null);
@@ -36,21 +46,25 @@ function ArcSafe() {
     setScreen("dashboard");
   };
 
+  // ASSET-HISTORY-001: append만 허용, 기존 revision을 교체·삭제하지 않는다.
   const handleAddEquipment = (eq) =>
-    setEquipments(prev => [...prev, eq]);
+    setEquipmentHistory(prev => appendRevision(prev, eq));
 
-  // EQUIPMENT-MOC: DischargeSystem과 동일 계약 — id 유지, revision만 교체
+  // EQUIPMENT-MOC + ASSET-HISTORY-001: id는 유지, revision은 append.
+  // 이전 revision은 overwrite되지 않고 history에 그대로 남는다 —
+  // 한 번도 Case에서 참조되지 않은 revision도 소실되지 않음.
   const handleReviseEquipment = (revisedEq) =>
-    setEquipments(prev => prev.map(e => e.id === revisedEq.id ? revisedEq : e));
+    setEquipmentHistory(prev => appendRevision(prev, revisedEq));
 
   const handleAddDischargeSystem = (ds) =>
-    setDischargeSystems(prev => [...prev, ds]);
+    setDischargeHistory(prev => appendRevision(prev, ds));
 
-  // GEOMETRY-002: id는 그대로, revision만 올라간 새 객체로 교체.
-  // Asset은 Snapshot이 아니라 "현재 상태" — 교체 자체는 허용(append-only 아님).
-  // MOC 감지는 이 교체 이후 케이스 재진입 시 assetFingerprint 비교로 자동 발동.
+  // GEOMETRY-002 + ASSET-HISTORY-001: id는 그대로, revision은 append.
+  // Asset도 Snapshot과 동일하게 append-only history로 관리하고,
+  // "현재 상태"는 저장하지 않고 history로부터 파생시킨다(equipments/dischargeSystems useMemo).
+  // MOC 감지는 이 append 이후 케이스 재진입 시 assetFingerprint 비교로 자동 발동.
   const handleReviseDischargeSystem = (revisedDs) =>
-    setDischargeSystems(prev => prev.map(d => d.id === revisedDs.id ? revisedDs : d));
+    setDischargeHistory(prev => appendRevision(prev, revisedDs));
 
   // HISTORY-001과 동일 원칙: overwrite 금지, service.js가 만든 새 배열만 반영
   const handleApprovalUpdate = (caseId, approvals) => {

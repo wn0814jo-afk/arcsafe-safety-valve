@@ -1413,6 +1413,121 @@ def test_case_history_contract() -> TestResult:
     return tr
 
 # ════════════════════════════════════════════════════════════════
+#  ASSET-HISTORY-001 — appendRevision()은 항상 새 배열 반환, overwrite 없음
+#  ASSET-HISTORY-002 — resolveRevision(id, revision)은 history에서만 조회
+#  ASSET-HISTORY-003 — latest는 저장하지 않고 revision 최댓값으로 파생
+#  ASSET-HISTORY-004 — 같은 id 안 revision 중복 금지
+# ════════════════════════════════════════════════════════════════
+def test_asset_history_contract() -> TestResult:
+    tr = TestResult("ASSET-HISTORY-001/002/003/004", "Asset Revision History 계약 검증")
+    history_src = (SRC / "asset" / "history.js").read_text()
+
+    for sym, desc in [
+        ("function appendRevision",        "appendRevision 정의"),
+        ("function resolveRevision",       "resolveRevision 정의"),
+        ("function getLatestRevision",     "getLatestRevision 정의"),
+        ("function getAllLatestRevisions", "getAllLatestRevisions 정의"),
+        ("function getRevisionsFor",       "getRevisionsFor 정의"),
+        ("function hasDuplicateRevision",  "hasDuplicateRevision 정의"),
+        ("ASSET-HISTORY-001",              "ASSET-HISTORY-001 계약 주석"),
+        ("ASSET-HISTORY-002",              "ASSET-HISTORY-002 계약 주석"),
+        ("ASSET-HISTORY-003",              "ASSET-HISTORY-003 계약 주석"),
+        ("ASSET-HISTORY-004",              "ASSET-HISTORY-004 계약 주석"),
+    ]:
+        tr.check(f"src_{sym.replace(' ','_')[:30]}", sym in history_src, f"{desc} 없음")
+
+    # ── resolveRevision이 "현재 상태" 별도 필드를 참조하지 않는지 (소스 검사) ──
+    resolve_body = history_src.split("function resolveRevision")[1].split("}")[0]
+    tr.check("resolveRevision_no_current_state_reference",
+             "equipments" not in resolve_body and "dischargeSystems" not in resolve_body,
+             "resolveRevision이 별도 저장된 현재 상태를 참조함 — ASSET-HISTORY-002 위반")
+
+    # ── ASSET-HISTORY-001: append 시뮬레이션 (Python 재현) ────────────
+    def py_append(history, rev):
+        prev = history or []
+        return prev + [rev]
+
+    h0 = []
+    rev1 = {"id": "EQ-001", "revision": 1, "tag": "PSV-R201"}
+    rev2 = {"id": "EQ-001", "revision": 2, "tag": "PSV-R201", "mocId": "MOC-1"}
+
+    h1 = py_append(h0, rev1)
+    h2 = py_append(h1, rev2)
+
+    tr.check("ASSET_HISTORY_001_history_grows",
+             len(h2) == 2,
+             "revise 후 history가 2개여야 함")
+    tr.check("ASSET_HISTORY_001_no_overwrite",
+             h2[0]["revision"] == 1 and h2[1]["revision"] == 2,
+             "이전 revision이 history에서 사라짐 — overwrite 발생, ASSET-HISTORY-001 위반")
+    tr.check("ASSET_HISTORY_001_original_not_mutated",
+             h0 == [],
+             "원본 history 배열이 mutate됨 — ASSET-HISTORY-001 위반")
+
+    # ── ASSET-HISTORY-002: revise 이후에도 옛 revision을 id+revision으로 조회 가능 ──
+    def py_resolve(history, id_, revision):
+        return next((r for r in history if r["id"] == id_ and r["revision"] == revision), None)
+
+    tr.check("ASSET_HISTORY_002_resolve_old_revision_after_revise",
+             py_resolve(h2, "EQ-001", 1) is not None,
+             "최신 revision이 2로 넘어간 뒤에도 revision 1을 조회할 수 있어야 함 — "
+             "한 번도 Case에서 참조되지 않은 revision도 소실되면 안 됨")
+    tr.check("ASSET_HISTORY_002_resolve_latest",
+             py_resolve(h2, "EQ-001", 2) is not None,
+             "최신 revision도 동일한 방식으로 조회 가능해야 함")
+    tr.check("ASSET_HISTORY_002_resolve_unknown_returns_none",
+             py_resolve(h2, "EQ-001", 99) is None,
+             "존재하지 않는 revision 조회 시 None이 아닌 값 반환")
+
+    # ── ASSET-HISTORY-003: latest는 저장값이 아니라 revision 최댓값으로 파생 ──
+    def py_latest(history, id_):
+        matches = [r for r in history if r["id"] == id_]
+        if not matches:
+            return None
+        return max(matches, key=lambda r: r["revision"])
+
+    tr.check("ASSET_HISTORY_003_latest_is_max_revision",
+             py_latest(h2, "EQ-001")["revision"] == 2,
+             "getLatestRevision이 revision 최댓값을 반환하지 않음")
+
+    # latest를 별도 state로 저장하지 않는지 — history.js 소스 자체에 latest를
+    # 캐시/저장하는 필드가 없어야 한다 (매번 history로부터 재계산).
+    tr.check("ASSET_HISTORY_003_no_stored_latest_field",
+             "let latest" not in history_src and "this.latest" not in history_src,
+             "history.js가 latest를 저장된 필드로 캐싱함 — ASSET-HISTORY-003 위반 "
+             "(latest는 항상 history로부터 파생되어야 함)")
+
+    # ── ASSET-HISTORY-004: 중복 revision 감지 ──────────────────────
+    h_dup = py_append(h1, {"id": "EQ-001", "revision": 1, "tag": "PSV-R201-DUP"})
+    keys = [f"{r['id']}::{r['revision']}" for r in h_dup]
+    tr.check("ASSET_HISTORY_004_duplicate_detected",
+             len(set(keys)) != len(keys),
+             "중복 id+revision 조합이 감지되지 않음")
+
+    # ── ArcSafe.jsx가 appendRevision을 통해서만 equipment/dischargeSystem을 갱신하는지 ──
+    arcsafe_src = (SRC.parent / "src" / "ArcSafe.jsx").read_text()
+    tr.check("ArcSafe_no_direct_equipment_map_overwrite",
+             "setEquipments(prev => prev.map(" not in arcsafe_src and
+             "setEquipmentHistory(prev => prev.map(" not in arcsafe_src,
+             "handleReviseEquipment이 여전히 prev.map()으로 in-place 교체함 — "
+             "ASSET-HISTORY-001 위반 (append 대신 overwrite)")
+    tr.check("ArcSafe_no_direct_discharge_map_overwrite",
+             "setDischargeSystems(prev => prev.map(" not in arcsafe_src and
+             "setDischargeHistory(prev => prev.map(" not in arcsafe_src,
+             "handleReviseDischargeSystem이 여전히 prev.map()으로 in-place 교체함 — "
+             "ASSET-HISTORY-001 위반 (append 대신 overwrite)")
+    tr.check("ArcSafe_uses_appendRevision_for_equipment",
+             "appendRevision(prev" in arcsafe_src,
+             "ArcSafe.jsx가 appendRevision()을 사용하지 않음")
+    tr.check("ArcSafe_derives_latest_via_getAllLatestRevisions",
+             "getAllLatestRevisions(equipmentHistory)" in arcsafe_src and
+             "getAllLatestRevisions(dischargeHistory)" in arcsafe_src,
+             "equipments/dischargeSystems가 getAllLatestRevisions()로 파생되지 않음 — "
+             "latest를 별도 state로 저장하고 있을 위험")
+
+    return tr
+
+# ════════════════════════════════════════════════════════════════
 #  APPROVAL-SIGN-TARGET-001
 #  Approval은 "지금 보고 있는 버전"이 아니라 "승인 결과로 확정될 다음 버전"의
 #  hash에 서명해야 한다. 순서가 반대면(서명 먼저, 전이 나중) 서명 직후
@@ -2265,6 +2380,7 @@ def main():
                       (test_workflow_decision_trace,"WFDECISION_001"),
                       (test_approval_contracts,     "APPROVAL-001/002/003"),
                       (test_case_history_contract,  "HISTORY-001/002/003"),
+                      (test_asset_history_contract, "ASSET-HISTORY-001~004"),
                       (test_approval_crypto_contract, "CRYPTO/SERVICE/VALIDATOR"),
                       (test_geometry_contract,       "GEOMETRY-001/002"),
                       (test_equipment_moc_contract,  "EQUIPMENT-MOC-001~004"),

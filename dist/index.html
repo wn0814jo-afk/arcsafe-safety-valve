@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:81e941cfa94d\n\n' +
+    box.textContent = '[ERROR] BUILD:622f14e70cb8\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:81e941cfa94d\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:622f14e70cb8\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -49,9 +49,9 @@
 <script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:81e941cfa94d | 2026-07-14T07:22:06Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:622f14e70cb8 | 2026-07-14T09:03:30Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "81e941cfa94d";
+const __BUILD_HASH__ = "622f14e70cb8";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -1207,6 +1207,86 @@ const SAMPLE_DISCHARGE_SYSTEMS = [
     connectedTags:["PSV-S12"],
   },
 ];
+
+
+// ── asset/history.js ──────────────────────────
+// ════════════════════════════════════════════════════════════════
+//  ASSET REVISION HISTORY
+//  equipmentHistory[] / dischargeHistory[] = source of truth (append-only)
+//  "latest"는 저장하지 않고 항상 revision 최댓값으로부터 파생시킨다.
+//
+//  case/history.js(HISTORY-001/002/003)와 동일한 원칙을 Asset Repository에
+//  적용한다. Snapshot은 "그 시점의 상태"라 pointer(latestSnap)를 저장하는
+//  것이 맞지만, Asset Repository는 history만 저장하고 latest는 계산값으로
+//  둔다 — 저장된 pointer와 history가 어긋나는 상태 불일치 자체를 없앤다.
+//
+//  계약:
+//    ASSET-HISTORY-001: appendRevision()은 항상 새 배열을 반환한다.
+//                        기존 history 항목은 교체·삭제되지 않는다.
+//                        (한 번도 Case에서 참조되지 않은 revision도 보존됨)
+//    ASSET-HISTORY-002: resolveRevision(id, revision)은 history에서만 조회한다.
+//                        별도로 저장된 "현재 상태" 필드를 신뢰 기준으로 삼지 않는다.
+//    ASSET-HISTORY-003: getLatestRevision(id)은 history 중 해당 id의
+//                        revision 최댓값을 반환한다 — latest는 저장하지 않고
+//                        항상 파생시킨다.
+//    ASSET-HISTORY-004: 같은 id 안에서 revision이 중복되면 안 된다.
+//                        (중복 시 "최신"이 어느 것인지 특정할 수 없다.)
+// ════════════════════════════════════════════════════════════════
+
+// ── appendRevision ─────────────────────────────────────────────
+// history를 직접 수정하지 않고 새 배열을 반환.
+// rev는 이미 Object.freeze()된 EquipmentRevision/DischargeSystemRevision
+// (createEquipment/reviseEquipment 또는 createDischargeSystem/reviseDischargeSystem의 결과)이어야 한다.
+function appendRevision(history, rev) {
+  const prev = history || [];
+  return Object.freeze([...prev, rev]);
+}
+
+// ── resolveRevision ────────────────────────────────────────────
+// id + revision 조합으로 특정 revision을 조회. history에서만 조회하며
+// "현재 상태"를 별도로 참조하지 않는다.
+function resolveRevision(history, id, revision) {
+  if (!history || !id) return null;
+  return history.find(r => r.id === id && r.revision === revision) || null;
+}
+
+// ── getLatestRevision ──────────────────────────────────────────
+// 저장된 pointer가 아니라, history 중 해당 id의 revision 최댓값을 계산해서 반환.
+function getLatestRevision(history, id) {
+  if (!history || !id) return null;
+  const list = history.filter(r => r.id === id);
+  if (list.length === 0) return null;
+  return list.reduce((a, b) => (Number(b.revision) > Number(a.revision) ? b : a));
+}
+
+// ── getAllLatestRevisions ────────────────────────────────────────
+// history 전체에서 id별 최신 revision만 뽑아 "현재 목록"을 파생시킨다.
+// AssetMaster 등 UI가 소비하는 리스트는 이 함수의 결과여야 하며,
+// history 배열 자체를 그대로 렌더링해서는 안 된다.
+function getAllLatestRevisions(history) {
+  if (!history) return [];
+  const ids = [...new Set(history.map(r => r.id))];
+  return ids
+    .map(id => getLatestRevision(history, id))
+    .filter(Boolean);
+}
+
+// ── getRevisionsFor ───────────────────────────────────────────
+// 특정 id의 전체 revision 이력을 revision 오름차순으로 반환 (Revision History View용).
+function getRevisionsFor(history, id) {
+  if (!history || !id) return [];
+  return history
+    .filter(r => r.id === id)
+    .sort((a, b) => Number(a.revision) - Number(b.revision));
+}
+
+// ── hasDuplicateRevision ──────────────────────────────────────
+// ASSET-HISTORY-004 검증용. 같은 id+revision 조합이 두 번 이상 나오면 true.
+function hasDuplicateRevision(history) {
+  const h = history || [];
+  const keys = h.map(r => `${r.id}::${r.revision}`);
+  return new Set(keys).size !== keys.length;
+}
 
 
 // ── case/history.js ──────────────────────────
@@ -4129,11 +4209,21 @@ function Dashboard({ cases, onOpenCase, onNewCase, onOpenAssetMaster }) {
 //  ROOT — ArcSafe App (v0.2.0-asset-master)
 // ════════════════════════════════════════════════════════════════
 function ArcSafe() {
-  const [equipments, setEquipments] = useState(() =>
-    SAMPLE_EQUIPMENT.map(e => createEquipment(e))
+  // ASSET-HISTORY-001~004: Asset Repository는 append-only history만 저장하고,
+  // "현재 상태" 목록(equipments/dischargeSystems)은 항상 파생값이다.
+  // 저장하는 것: equipmentHistory / dischargeHistory
+  // 계산하는 것: equipments / dischargeSystems (아래 useMemo)
+  const [equipmentHistory, setEquipmentHistory] = useState(() =>
+    Object.freeze(SAMPLE_EQUIPMENT.map(e => createEquipment(e)))
   );
-  const [dischargeSystems, setDischargeSystems] = useState(() =>
-    SAMPLE_DISCHARGE_SYSTEMS.map(d => createDischargeSystem(d))
+  const [dischargeHistory, setDischargeHistory] = useState(() =>
+    Object.freeze(SAMPLE_DISCHARGE_SYSTEMS.map(d => createDischargeSystem(d)))
+  );
+  const equipments = useMemo(
+    () => getAllLatestRevisions(equipmentHistory), [equipmentHistory]
+  );
+  const dischargeSystems = useMemo(
+    () => getAllLatestRevisions(dischargeHistory), [dischargeHistory]
   );
   const [cases,      setCases]      = useState([]);
   const [activeCase, setActiveCase] = useState(null);
@@ -4164,21 +4254,25 @@ function ArcSafe() {
     setScreen("dashboard");
   };
 
+  // ASSET-HISTORY-001: append만 허용, 기존 revision을 교체·삭제하지 않는다.
   const handleAddEquipment = (eq) =>
-    setEquipments(prev => [...prev, eq]);
+    setEquipmentHistory(prev => appendRevision(prev, eq));
 
-  // EQUIPMENT-MOC: DischargeSystem과 동일 계약 — id 유지, revision만 교체
+  // EQUIPMENT-MOC + ASSET-HISTORY-001: id는 유지, revision은 append.
+  // 이전 revision은 overwrite되지 않고 history에 그대로 남는다 —
+  // 한 번도 Case에서 참조되지 않은 revision도 소실되지 않음.
   const handleReviseEquipment = (revisedEq) =>
-    setEquipments(prev => prev.map(e => e.id === revisedEq.id ? revisedEq : e));
+    setEquipmentHistory(prev => appendRevision(prev, revisedEq));
 
   const handleAddDischargeSystem = (ds) =>
-    setDischargeSystems(prev => [...prev, ds]);
+    setDischargeHistory(prev => appendRevision(prev, ds));
 
-  // GEOMETRY-002: id는 그대로, revision만 올라간 새 객체로 교체.
-  // Asset은 Snapshot이 아니라 "현재 상태" — 교체 자체는 허용(append-only 아님).
-  // MOC 감지는 이 교체 이후 케이스 재진입 시 assetFingerprint 비교로 자동 발동.
+  // GEOMETRY-002 + ASSET-HISTORY-001: id는 그대로, revision은 append.
+  // Asset도 Snapshot과 동일하게 append-only history로 관리하고,
+  // "현재 상태"는 저장하지 않고 history로부터 파생시킨다(equipments/dischargeSystems useMemo).
+  // MOC 감지는 이 append 이후 케이스 재진입 시 assetFingerprint 비교로 자동 발동.
   const handleReviseDischargeSystem = (revisedDs) =>
-    setDischargeSystems(prev => prev.map(d => d.id === revisedDs.id ? revisedDs : d));
+    setDischargeHistory(prev => appendRevision(prev, revisedDs));
 
   // HISTORY-001과 동일 원칙: overwrite 금지, service.js가 만든 새 배열만 반영
   const handleApprovalUpdate = (caseId, approvals) => {
