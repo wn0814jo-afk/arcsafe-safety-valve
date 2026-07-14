@@ -21,6 +21,15 @@
 //                        (중복 시 "최신"이 어느 것인지 특정할 수 없다.)
 // ════════════════════════════════════════════════════════════════
 
+// ── _revisionKey (내부 전용) ───────────────────────────────────
+// 외부에 노출하는 API는 resolveRevision(history, id, revision)을 그대로 유지하되,
+// 내부적으로는 `${id}@${revision}` 형태의 정규화된 키를 사용한다.
+// 이 키는 이후 Impact Analysis / Report Package / Audit Evidence / PDF 등에서
+// 공통 식별자로 재사용할 수 있도록 지금 통일해 둔다.
+function _revisionKey(id, revision) {
+  return `${id}@${revision}`;
+}
+
 // ── appendRevision ─────────────────────────────────────────────
 // history를 직접 수정하지 않고 새 배열을 반환.
 // rev는 이미 Object.freeze()된 EquipmentRevision/DischargeSystemRevision
@@ -32,10 +41,11 @@ function appendRevision(history, rev) {
 
 // ── resolveRevision ────────────────────────────────────────────
 // id + revision 조합으로 특정 revision을 조회. history에서만 조회하며
-// "현재 상태"를 별도로 참조하지 않는다.
+// "현재 상태"를 별도로 참조하지 않는다. 내부적으로 _revisionKey로 정규화해서 비교한다.
 function resolveRevision(history, id, revision) {
   if (!history || !id) return null;
-  return history.find(r => r.id === id && r.revision === revision) || null;
+  const key = _revisionKey(id, revision);
+  return history.find(r => _revisionKey(r.id, r.revision) === key) || null;
 }
 
 // ── getLatestRevision ──────────────────────────────────────────
@@ -72,6 +82,6 @@ function getRevisionsFor(history, id) {
 // ASSET-HISTORY-004 검증용. 같은 id+revision 조합이 두 번 이상 나오면 true.
 function hasDuplicateRevision(history) {
   const h = history || [];
-  const keys = h.map(r => `${r.id}::${r.revision}`);
+  const keys = h.map(r => _revisionKey(r.id, r.revision));
   return new Set(keys).size !== keys.length;
 }

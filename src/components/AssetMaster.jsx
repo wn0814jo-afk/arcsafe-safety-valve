@@ -352,8 +352,110 @@ function DischargeSystemForm({ onSave, onCancel, editing }) {
   );
 }
 
+// ── RevisionHistoryPanel ────────────────────────────────────────
+// B1: Asset Revision History — 100% 읽기 전용(Read-only).
+// 책임: Revision 목록 표시 / Rev·MOC ID 배지 / 현재(최신) 표시 / 선택 / 상세 표시.
+// 의도적으로 하지 않는 것: Diff(B2), Impact Analysis(B3), 되돌리기, 수정.
+// 이 컴포넌트는 onSave/onRevise류 콜백을 전혀 받지 않는다 — 구조적으로 쓰기 경로가 없다.
+function RevisionHistoryPanel({ title, history, id, kind, onClose }) {
+  const revisions = getRevisionsFor(history, id);           // 오름차순
+  const latest    = getLatestRevision(history, id);
+  const [selected, setSelected] = useState(latest);
+
+  if (revisions.length === 0) return null;
+
+  const EQ_FIELDS = [
+    ["tag","Tag No."], ["location","설치 위치"],
+    ["mawp","MAWP (barg)"], ["setPressure","설정압 (barg)"],
+    ["overpressure","Overpressure (%)"], ["orifice","오리피스"],
+    ["inletSize","입구 Size"], ["outletSize","출구 Size"],
+    ["manufacturer","제조사"], ["model","모델"],
+    ["serialNo","Serial No."], ["installedAt","설치일"],
+  ];
+  const DS_FIELDS = [
+    ["name","계통 명칭"], ["destination","배출 목적지"],
+    ["L","배관 길이 L (m)"], ["D","배관 내경 D (m)"],
+    ["fittingsK","Fittings ΣK"], ["headerPressure","Header 압력 (barg)"],
+    ["connectedTags","연결 PSV Tag"],
+  ];
+  const fields = kind === "equipment" ? EQ_FIELDS : DS_FIELDS;
+
+  return (
+    <div style={{background:T.cardBg,borderRadius:16,padding:16,
+      border:`1.5px solid ${T.border}`,boxShadow:"0 4px 16px #0002",marginBottom:12}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+        <div style={{fontSize:13,fontWeight:900,color:T.navy,fontFamily:font.mono}}>
+          Revision 이력 — {title}
+        </div>
+        <button onClick={onClose}
+          style={{padding:"5px 12px",background:T.bg,color:T.sub,
+            border:`1px solid ${T.border}`,borderRadius:8,
+            fontSize:10,fontWeight:700,fontFamily:font.mono,cursor:"pointer"}}>
+          닫기
+        </button>
+      </div>
+
+      {/* Revision 목록: 최신이 위로 오도록 내림차순 표시 */}
+      <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:14}}>
+        {[...revisions].reverse().map(rev => {
+          const isLatest   = latest && rev.revision === latest.revision;
+          const isSelected = selected && rev.revision === selected.revision;
+          return (
+            <div key={`${rev.id}@${rev.revision}`} onClick={()=>setSelected(rev)}
+              style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                padding:"8px 12px",borderRadius:9,cursor:"pointer",
+                border:`1.5px solid ${isSelected?T.navyLight:T.border}`,
+                background:isSelected?T.navy+"0D":T.white}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:11,fontWeight:900,color:T.navy,fontFamily:font.mono}}>
+                  Rev.{rev.revision}
+                </span>
+                {isLatest && (
+                  <span style={{fontSize:9,padding:"2px 7px",borderRadius:10,
+                    background:T.blueBg,color:T.blue,border:`1px solid ${T.blue}`,
+                    fontFamily:font.mono,fontWeight:700}}>현재</span>
+                )}
+                {rev.mocId && (
+                  <span style={{fontSize:9,padding:"2px 7px",borderRadius:10,
+                    background:T.bg,color:T.sub,border:`1px solid ${T.border}`,
+                    fontFamily:font.mono}}>MOC {rev.mocId}</span>
+                )}
+              </div>
+              <span style={{fontSize:9,color:T.gray,fontFamily:font.mono}}>
+                {rev.revision === 1 ? "최초 등록" : "개정"}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* 선택된 Revision 상세 (읽기 전용) */}
+      {selected && (
+        <div style={{background:T.bg,borderRadius:12,padding:"12px 13px",
+          border:`1px solid ${T.border}`}}>
+          <div style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono,
+            marginBottom:10,letterSpacing:1}}>
+            Rev.{selected.revision} 상세
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            {fields.map(([k,label]) => (
+              <div key={k}>
+                <div style={{fontSize:9,color:T.gray,fontFamily:font.mono}}>{label}</div>
+                <div style={{fontSize:11,fontWeight:700,color:T.navyLight,fontFamily:font.mono}}>
+                  {Array.isArray(selected[k]) ? (selected[k].join(", ") || "—")
+                    : (selected[k] ?? "—") === "" ? "—" : String(selected[k] ?? "—")}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── EquipmentCard ─────────────────────────────────────────────
-function EquipmentCard({ eq, dischargeSystem, onSelect, onEdit }) {
+function EquipmentCard({ eq, dischargeSystem, onSelect, onEdit, onViewHistory }) {
   const ds = dischargeSystem;
   return (
     <div
@@ -415,6 +517,12 @@ function EquipmentCard({ eq, dischargeSystem, onSelect, onEdit }) {
       )}
 
       <div style={{marginTop:8,display:"flex",gap:8,justifyContent:"flex-end"}}>
+        <button onClick={()=>onViewHistory(eq)}
+          style={{padding:"5px 12px",background:T.white,color:T.sub,
+            border:`1px solid ${T.border}`,borderRadius:8,
+            fontSize:10,fontWeight:700,fontFamily:font.mono,cursor:"pointer"}}>
+          이력 보기
+        </button>
         <button onClick={()=>onEdit(eq)}
           style={{padding:"5px 12px",background:T.bg,color:T.navyLight,
             border:`1px solid ${T.navyLight}`,borderRadius:8,
@@ -433,7 +541,9 @@ function EquipmentCard({ eq, dischargeSystem, onSelect, onEdit }) {
 }
 
 // ── AssetMaster ───────────────────────────────────────────────
-function AssetMaster({ equipments, dischargeSystems, onSelectEquipment,
+function AssetMaster({ equipments, dischargeSystems,
+                       equipmentHistory, dischargeHistory,
+                       onSelectEquipment,
                        onAddEquipment, onReviseEquipment,
                        onAddDischargeSystem,
                        onReviseDischargeSystem, onBack }) {
@@ -442,6 +552,8 @@ function AssetMaster({ equipments, dischargeSystems, onSelectEquipment,
   const [showDsForm, setShowDsForm] = useState(false);
   const [editingEq,  setEditingEq]  = useState(null); // 개정 대상 Equipment
   const [editingDs,  setEditingDs]  = useState(null); // 개정 대상 DischargeSystem
+  const [viewingEqHistory, setViewingEqHistory] = useState(null); // B1: 이력 조회 대상 Equipment id
+  const [viewingDsHistory, setViewingDsHistory] = useState(null); // B1: 이력 조회 대상 DischargeSystem id
 
   // Equipment에 매칭되는 DischargeSystem 찾기
   const findDs = (eq) => dischargeSystems.find(
@@ -509,6 +621,14 @@ function AssetMaster({ equipments, dischargeSystems, onSelectEquipment,
                 onCancel={()=>setEditingEq(null)}/>
             </div>
           )}
+          {viewingEqHistory && (
+            <RevisionHistoryPanel
+              title={viewingEqHistory}
+              history={equipmentHistory}
+              id={viewingEqHistory}
+              kind="equipment"
+              onClose={()=>setViewingEqHistory(null)}/>
+          )}
           {equipments.length === 0 ? (
             <div style={{textAlign:"center",padding:"40px 20px",color:T.gray}}>
               <div style={{fontSize:36,marginBottom:8}}>🔧</div>
@@ -517,7 +637,8 @@ function AssetMaster({ equipments, dischargeSystems, onSelectEquipment,
           ) : (
             equipments.map(eq => (
               <EquipmentCard key={eq.id} eq={eq} dischargeSystem={findDs(eq)}
-                onSelect={onSelectEquipment} onEdit={setEditingEq}/>
+                onSelect={onSelectEquipment} onEdit={setEditingEq}
+                onViewHistory={(e)=>setViewingEqHistory(e.id)}/>
             ))
           )}
         </>
@@ -549,6 +670,14 @@ function AssetMaster({ equipments, dischargeSystems, onSelectEquipment,
                 onSave={ds=>{ onReviseDischargeSystem(ds); setEditingDs(null); }}
                 onCancel={()=>setEditingDs(null)}/>
             </div>
+          )}
+          {viewingDsHistory && (
+            <RevisionHistoryPanel
+              title={viewingDsHistory}
+              history={dischargeHistory}
+              id={viewingDsHistory}
+              kind="discharge"
+              onClose={()=>setViewingDsHistory(null)}/>
           )}
           {dischargeSystems.length === 0 ? (
             <div style={{textAlign:"center",padding:"40px 20px",color:T.gray}}>
@@ -594,7 +723,13 @@ function AssetMaster({ equipments, dischargeSystems, onSelectEquipment,
                     연결: {ds.connectedTags.join(", ")}
                   </div>
                 )}
-                <div style={{marginTop:8,textAlign:"right"}}>
+                <div style={{marginTop:8,display:"flex",gap:8,justifyContent:"flex-end"}}>
+                  <button onClick={()=>setViewingDsHistory(ds.id)}
+                    style={{padding:"5px 12px",background:T.white,color:T.sub,
+                      border:`1px solid ${T.border}`,borderRadius:8,
+                      fontSize:10,fontWeight:700,fontFamily:font.mono,cursor:"pointer"}}>
+                    이력 보기
+                  </button>
                   <button onClick={()=>setEditingDs(ds)}
                     style={{padding:"5px 12px",background:T.bg,color:T.navyLight,
                       border:`1px solid ${T.navyLight}`,borderRadius:8,

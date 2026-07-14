@@ -1528,6 +1528,62 @@ def test_asset_history_contract() -> TestResult:
     return tr
 
 # ════════════════════════════════════════════════════════════════
+#  ASSET-UI-001 — RevisionHistoryPanel(B1)은 100% 읽기 전용이어야 한다.
+#  Diff/Impact Analysis/되돌리기/수정 등 쓰기·비교 경로를 갖지 않는다.
+#  (B2/B3/B4는 별도 단계에서 이 컴포넌트를 감싸거나 대체하며 확장한다)
+# ════════════════════════════════════════════════════════════════
+def test_revision_history_ui_readonly_contract() -> TestResult:
+    tr = TestResult("ASSET-UI-001", "Revision History UI 읽기 전용 계약 검증")
+    am_src = (SRC / "components" / "AssetMaster.jsx").read_text()
+
+    tr.check("RevisionHistoryPanel_defined",
+             "function RevisionHistoryPanel" in am_src,
+             "RevisionHistoryPanel 컴포넌트 없음")
+
+    panel_body = am_src.split("function RevisionHistoryPanel")[1].split(
+        "\n// ── EquipmentCard")[0]
+
+    forbidden_write_symbols = [
+        "onReviseEquipment", "onReviseDischargeSystem",
+        "reviseEquipment(", "reviseDischargeSystem(",
+        "onSave", "onAddEquipment", "onAddDischargeSystem",
+        "EquipmentForm", "DischargeSystemForm",
+    ]
+    for sym in forbidden_write_symbols:
+        tr.check(f"no_{sym.strip('(')}_in_panel",
+                 sym not in panel_body,
+                 f"RevisionHistoryPanel이 쓰기 경로({sym})를 포함함 — "
+                 f"B1은 100% 읽기 전용이어야 함")
+
+    forbidden_scope_symbols = ["diff(", "Diff(", "ImpactAnalysis", "restore(", "Restore("]
+    for sym in forbidden_scope_symbols:
+        tr.check(f"no_{sym.strip('(')}_in_panel_yet",
+                 sym not in panel_body,
+                 f"RevisionHistoryPanel이 B2/B3 범위({sym})를 앞서 포함함 — "
+                 f"단계 분리 원칙 위반")
+
+    # ── RevisionHistoryPanel이 onClose 외에 콜백 prop을 받지 않는지 (destructure 검사) ──
+    sig_line = am_src.split("function RevisionHistoryPanel(")[1].split(")")[0]
+    tr.check("panel_props_readonly_only",
+             "on" not in sig_line.replace("onClose", ""),
+             "RevisionHistoryPanel이 onClose 이외의 콜백 prop을 받음 — 쓰기 경로 유입 위험")
+
+    # ── AssetMaster가 equipmentHistory/dischargeHistory를 그대로 넘기는지 ──
+    tr.check("AssetMaster_receives_history_props",
+             "equipmentHistory" in am_src and "dischargeHistory" in am_src,
+             "AssetMaster가 equipmentHistory/dischargeHistory props를 받지 않음")
+
+    # ── ArcSafe.jsx가 AssetMaster에 history를 전달하는지 ──
+    arcsafe_src = (SRC.parent / "src" / "ArcSafe.jsx").read_text()
+    am_call = arcsafe_src.split("<AssetMaster")[1].split("/>")[0]
+    tr.check("ArcSafe_passes_history_to_AssetMaster",
+             "equipmentHistory={equipmentHistory}" in am_call and
+             "dischargeHistory={dischargeHistory}" in am_call,
+             "ArcSafe.jsx가 AssetMaster에 equipmentHistory/dischargeHistory를 전달하지 않음")
+
+    return tr
+
+# ════════════════════════════════════════════════════════════════
 #  APPROVAL-SIGN-TARGET-001
 #  Approval은 "지금 보고 있는 버전"이 아니라 "승인 결과로 확정될 다음 버전"의
 #  hash에 서명해야 한다. 순서가 반대면(서명 먼저, 전이 나중) 서명 직후
@@ -2381,6 +2437,7 @@ def main():
                       (test_approval_contracts,     "APPROVAL-001/002/003"),
                       (test_case_history_contract,  "HISTORY-001/002/003"),
                       (test_asset_history_contract, "ASSET-HISTORY-001~004"),
+                      (test_revision_history_ui_readonly_contract, "ASSET-UI-001"),
                       (test_approval_crypto_contract, "CRYPTO/SERVICE/VALIDATOR"),
                       (test_geometry_contract,       "GEOMETRY-001/002"),
                       (test_equipment_moc_contract,  "EQUIPMENT-MOC-001~004"),

@@ -142,6 +142,8 @@ function ArcSafe() {
           <AssetMaster
             equipments={equipments}
             dischargeSystems={dischargeSystems}
+            equipmentHistory={equipmentHistory}
+            dischargeHistory={dischargeHistory}
             onSelectEquipment={handleEquipmentSelect}
             onAddEquipment={handleAddEquipment}
             onReviseEquipment={handleReviseEquipment}
