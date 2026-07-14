@@ -167,6 +167,20 @@ async function main() {
   fs.writeFileSync(path.join(OUT, "PSV-R201-approved-package.json"),
     JSON.stringify(outApproved, null, 2));
 
+  // ── GOLDEN-FIXTURE-MUTATION-GUARD-001 ───────────────────────────
+  // 이 스크립트로 생성한 파일의 sha256을 manifest에 같이 기록한다.
+  // 누군가 fixture JSON을 직접 손으로 고쳐 테스트를 통과시키려 하면,
+  // manifest의 해시와 실제 파일 해시가 어긋나 계약 테스트가 실패한다.
+  const crypto = require("crypto");
+  const manifest = {};
+  for (const [name, content] of [
+    ["PSV-R201-review-required-package.json", fs.readFileSync(path.join(OUT, "PSV-R201-review-required-package.json"))],
+    ["PSV-R201-approved-package.json",         fs.readFileSync(path.join(OUT, "PSV-R201-approved-package.json"))],
+  ]) {
+    manifest[name] = "sha256:" + crypto.createHash("sha256").update(content).digest("hex");
+  }
+  fs.writeFileSync(path.join(OUT, "hash-manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
+
   console.log("OK");
   console.log("review-required snapshotHash:", pkgReview.identity.snapshotHash);
   console.log("approved       snapshotHash:", pkgApproved.identity.snapshotHash);

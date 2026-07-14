@@ -19,6 +19,11 @@ function validateReportPackage(pkg) {
   if (!pkg || typeof pkg !== "object") {
     return { ok: false, reason: "package is not an object" };
   }
+  // ENGINE-VERSION-LOCK-001: buildReportPackage가 이미 판정해 넘긴 실패
+  // 사유를 그대로 통과시킨다 — "missing keys" 같은 일반 메시지로 뭉개지 않는다.
+  if (pkg.ok === false && pkg.contract === "ENGINE-VERSION-LOCK-001") {
+    return { ok: false, reason: pkg.detail || "INVALID_STATE: engine version mismatch", contract: pkg.contract };
+  }
   const missing = REPORT_PACKAGE_REQUIRED_KEYS.filter(k => !(k in pkg));
   if (missing.length > 0) {
     return { ok: false, reason: `missing keys: ${missing.join(", ")}` };

@@ -6,8 +6,8 @@
   },
   "identity": {
     "caseId": "C-2026-001",
-    "snapshotId": "SNAP-C-2026-001-1783921472187",
-    "snapshotHash": "4d153741"
+    "snapshotId": "SNAP-C-2026-001-1784013721042",
+    "snapshotHash": "d5e8ddd1"
   },
   "asset": {
     "equipment": {
@@ -183,14 +183,14 @@
           "unit": "barg"
         }
       ],
-      "evaluatedAt": "2026-07-13T05:44:32.187Z",
+      "evaluatedAt": "2026-07-14T07:22:01.042Z",
       "engineVersion": "1.3.0"
     }
   },
   "approvals": [],
   "_fixtureMeta": {
     "engineVersion": "1.3.0",
-    "buildHash": "ac69b86ff580",
+    "buildHash": "81e941cfa94d",
     "generatedAt": "2026-07-10T10:05:00.000Z",
     "fixtureName": "PSV-R201-review-required"
   }

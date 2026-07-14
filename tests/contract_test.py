@@ -732,7 +732,128 @@ def test_compressibility_contract() -> TestResult:
 
 
 # ════════════════════════════════════════════════════════════════
-#  GOLDEN BASELINE CONTRACT — Engine 1.3.0을 검증 기준으로 고정
+#  BASELINE LOCK CONTRACT (Sprint A.1) — Engine 1.3.0 기준선 보호 장치
+#  1) ENGINE-VERSION-LOCK-001: Snapshot/ReportPackage/Fixture 엔진버전 일치
+#  2) GOLDEN-FIXTURE-MUTATION-GUARD-001: fixture를 손으로 고치면 감지
+#  3) TRACE-SCHEMA-001: Calculation Trace 필드 스키마 고정
+# ════════════════════════════════════════════════════════════════
+def test_baseline_lock_contract() -> TestResult:
+    tr = TestResult("BASELINE-LOCK-001", "Sprint A.1 — Engine 1.3.0 Baseline 보호 장치")
+
+    node = shutil.which("node")
+    pkg_src    = (SRC / "report" / "createPackage.js").read_text()
+    schema_src = (SRC / "report" / "schema.js").read_text()
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+
+    # ── 1) ENGINE-VERSION-LOCK-001 ──────────────────────────────
+    tr.check("ENGINE_VERSION_LOCK_001_check_exists_in_createPackage",
+             "ENGINE-VERSION-LOCK-001" in pkg_src and "snapshot.engine_version !== ENGINE_VERSION" in pkg_src,
+             "createPackage.js에 ENGINE-VERSION-LOCK-001 검증이 없음")
+    tr.check("ENGINE_VERSION_LOCK_001_schema_passes_through_reason",
+             "ENGINE-VERSION-LOCK-001" in schema_src,
+             "schema.js의 validateReportPackage가 ENGINE-VERSION-LOCK-001 사유를 통과시키지 않음")
+
+    if node:
+        # 실제로 버전이 어긋난 Snapshot을 넣으면 정말 차단되는지 실행 검증
+        check_script = (
+            "const fs = require('fs');\n"
+            "const files = ['engine/api520.js','engine/backpressure.js','engine/evidence.js',\n"
+            "  'snapshot/create.js','report/schema.js','report/createPackage.js']\n"
+            "  .map(f => fs.readFileSync(SRC_DIR + '/' + f, 'utf8')).join(String.fromCharCode(10));\n"
+            "(0, eval)(files + '\\nglobalThis.__ARC = { ENGINE_VERSION, buildReportPackage, validateReportPackage };\\n');\n"
+            "const { ENGINE_VERSION, buildReportPackage, validateReportPackage } = globalThis.__ARC;\n"
+            "const staleSnap = { snapshotHash:'abc', engine_version:'0.9.0-does-not-exist',\n"
+            "  assetRefs:{}, caseId:'C', id:'S', workflow:'DRAFT' };\n"
+            "const r = buildReportPackage(staleSnap, { generatedAt:'2026-01-01T00:00:00Z' });\n"
+            "const v = validateReportPackage(r);\n"
+            "console.log(JSON.stringify({ engineVersion: ENGINE_VERSION, buildOk: r.ok, "
+            "buildContract: r.contract, validateOk: v.ok, validateReason: v.reason }));\n"
+        )
+        check_script = f"const SRC_DIR = {json.dumps(str(SRC))};\n" + check_script
+        # node -e(문자열 eval)와 node file.js(파일 실행)는 indirect eval의
+        # 스코프 처리가 달라 -e에서 "already declared" 오탐이 난다 — 파일로
+        # 써서 실행한다.
+        tmp_js = ROOT / "tests" / "_tmp_engine_version_lock_check.js"
+        tmp_js.write_text(check_script)
+        r = subprocess.run([node, str(tmp_js)], capture_output=True, text=True, timeout=15)
+        tmp_js.unlink(missing_ok=True)
+        try:
+            result = json.loads(r.stdout.strip())
+        except Exception:
+            result = None
+        tr.check("ENGINE_VERSION_LOCK_001_actually_blocks_stale_snapshot",
+                 result is not None and result.get("buildOk") is False
+                 and result.get("buildContract") == "ENGINE-VERSION-LOCK-001",
+                 f"버전이 다른 Snapshot으로 buildReportPackage 호출 시 차단되지 않음 — stdout={r.stdout!r} stderr={r.stderr!r}")
+        tr.check("ENGINE_VERSION_LOCK_001_validate_surfaces_clear_reason",
+                 result is not None and result.get("validateOk") is False
+                 and "ENGINE_VERSION" in (result.get("validateReason") or "")
+                     or (result is not None and "엔진 버전" in (result.get("validateReason") or "")),
+                 "validateReportPackage가 ENGINE-VERSION-LOCK-001 사유를 명확히 드러내지 않음")
+    else:
+        tr.check("ENGINE_VERSION_LOCK_001_node_available", False, "node 없음 — 실행 검증 생략")
+
+    # ── 2) GOLDEN-FIXTURE-MUTATION-GUARD-001 ────────────────────
+    fixtures_dir = ROOT / "tests" / "fixtures"
+    manifest_path = fixtures_dir / "hash-manifest.json"
+    tr.check("MUTATION_GUARD_001_manifest_exists", manifest_path.exists(),
+             "tests/fixtures/hash-manifest.json 없음")
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text())
+        for fname, expected in manifest.items():
+            fpath = fixtures_dir / fname
+            if not fpath.exists():
+                tr.check(f"MUTATION_GUARD_001_file_exists_{fname}", False, f"{fname} 없음(manifest엔 있음)")
+                continue
+            actual = "sha256:" + hashlib.sha256(fpath.read_bytes()).hexdigest()
+            tr.check(f"MUTATION_GUARD_001_hash_matches_{fname}",
+                     actual == expected,
+                     f"{fname}: 파일이 generate_golden_fixtures.js를 거치지 않고 직접 수정된 것으로 보임 "
+                     f"(manifest={expected}, actual={actual}) — 재생성 스크립트를 다시 실행하세요.")
+        # 생성 스크립트가 manifest도 함께 갱신하는지(수동 관리로 어긋나지 않도록) 소스로 확인
+        gen_src = (ROOT / "tests" / "generate_golden_fixtures.js").read_text()
+        tr.check("MUTATION_GUARD_001_generator_writes_manifest",
+                 "hash-manifest.json" in gen_src,
+                 "generate_golden_fixtures.js가 hash-manifest.json을 자동 갱신하지 않음 — "
+                 "수동 관리 시 fixture와 manifest가 어긋날 위험")
+
+    # ── 3) TRACE-SCHEMA-001 ──────────────────────────────────────
+    tr.check("TRACE_SCHEMA_001_validator_exists",
+             "function validateTraceSchema" in api520_src and "TRACE_REQUIRED_KEYS" in api520_src,
+             "api520.js에 validateTraceSchema/TRACE_REQUIRED_KEYS 없음")
+    if node:
+        trace_script = (
+            "const fs = require('fs');\n"
+            "const src = fs.readFileSync(SRC_DIR + '/engine/api520.js','utf8') "
+            "+ '\\nmodule.exports={ api520Engine, validateTraceSchema };';\n"
+            "fs.writeFileSync('/tmp/_trace_schema_test.js', src);\n"
+            "const { api520Engine, validateTraceSchema } = require('/tmp/_trace_schema_test.js');\n"
+            "const r = api520Engine({W:2500,P1:5.5,P2:0.3,T:373,M:44,k:1.30,Kd:0.975,Kb:1.0,"
+            "mawp:6.0,OP:10,Z:1.0}, 'safetyValve');\n"
+            "const v = validateTraceSchema(r.trace);\n"
+            "console.log(JSON.stringify({ traceLen: r.trace.length, schemaOk: v.ok, "
+            "steps: r.trace.map(t=>t.step) }));\n"
+        )
+        trace_script = f"const SRC_DIR = {json.dumps(str(SRC))};\n" + trace_script
+        cp = subprocess.run([node, "-e", trace_script], capture_output=True, text=True, timeout=15)
+        try:
+            tresult = json.loads(cp.stdout.strip())
+        except Exception:
+            tresult = None
+        tr.check("TRACE_SCHEMA_001_real_engine_output_passes_schema",
+                 tresult is not None and tresult.get("schemaOk") is True and tresult.get("traceLen", 0) >= 7,
+                 f"실제 엔진 trace 출력이 스키마 검증을 통과하지 못함 — stdout={cp.stdout!r} stderr={cp.stderr!r}")
+        expected_steps = ["COMPRESSIBILITY_Z","SET_PRESSURE","RELIEVING_PRESSURE",
+                           "C_COEFFICIENT","MASS_FLUX_AREA","REQUIRED_AREA","ORIFICE_SELECTION"]
+        tr.check("TRACE_SCHEMA_001_step_order_frozen",
+                 tresult is not None and tresult.get("steps") == expected_steps,
+                 f"trace 단계 순서/구성이 계약과 다름 — actual={tresult.get('steps') if tresult else None}")
+    else:
+        tr.check("TRACE_SCHEMA_001_node_available", False, "node 없음 — 실행 검증 생략")
+
+    return tr
+
+
 #  tests/generate_golden_fixtures.js가 실제 코드(api520Engine,
 #  createSnapshot, computeWorkflowState, detectMOC, submitApproval,
 #  buildReportPackage, verifyApprovalRecord)를 그대로 실행해 만든
@@ -2099,6 +2220,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [COMPRESSIBILITY-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── Baseline Lock contract (Sprint A.1) ──────────────────────
+    print("\n── BASELINE LOCK (Sprint A.1) ────────────────────────")
+    tr = test_baseline_lock_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [BASELINE-LOCK-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"

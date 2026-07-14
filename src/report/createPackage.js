@@ -28,6 +28,22 @@ function buildReportPackage(snapshot, opts) {
   if (!snapshot || !snapshot.snapshotHash) {
     return { ok: false, reason: "REPORT-PKG: snapshot(with snapshotHash) is required" };
   }
+  // ENGINE-VERSION-LOCK-001: 이 Snapshot이 만들어진 엔진 버전과 지금
+  // 돌고 있는 Engine의 버전이 다르면 ReportPackage를 만들지 않는다.
+  // (예: 과거 엔진 버전으로 얼어붙은 Snapshot을 새 엔진 코드 위에서
+  // 그대로 재출력하면 계산 근거와 화면/PDF 표시가 어긋날 수 있다.)
+  // Snapshot 자체는 그 시점 값 그대로 유지되는 게 맞다 — 여기서 재계산하지
+  // 않고, "지금 이 버전으로 새 ReportPackage를 만드는 것"만 차단한다.
+  if (snapshot.engine_version !== ENGINE_VERSION) {
+    return {
+      ok: false,
+      reason: "INVALID_STATE",
+      contract: "ENGINE-VERSION-LOCK-001",
+      detail: `snapshot.engine_version(${snapshot.engine_version}) !== ` +
+              `현재 ENGINE_VERSION(${ENGINE_VERSION}) — 엔진 버전이 바뀐 뒤 ` +
+              `이전 Snapshot으로 새 ReportPackage를 생성할 수 없다.`,
+    };
+  }
   const { approvalRecords, approvalVerificationResults, generatedAt } = opts || {};
   const genAt = generatedAt || new Date().toISOString();
 

@@ -15,6 +15,30 @@
 //   validateInputs가 Z 누락을 거부하므로 이 필드는 계약 변경이다.
 const ENGINE_VERSION = "1.3.0";
 
+// ── TRACE-SCHEMA-001: Calculation Trace 스키마 고정 ────────────
+// Trace는 단순 로그가 아니라 감사 증거(Report Evidence)다. 각 항목은
+// 반드시 이 4개 필드를 갖는다: step(단계 식별자), value(산출값),
+// unit(단위, 무차원이면 ""), formula(계산식 설명). inputs는 선택
+// (그 단계가 어떤 값들로부터 나왔는지 — 없는 단계도 있을 수 있음).
+// 이 스키마를 바꾸면 TRACE-SCHEMA-001 계약 테스트가 실패해야 한다.
+const TRACE_REQUIRED_KEYS = ["step", "value", "unit", "formula"];
+function validateTraceSchema(trace) {
+  if (!Array.isArray(trace)) return { ok:false, reason:"trace_not_array" };
+  for (let i = 0; i < trace.length; i++) {
+    const entry = trace[i];
+    if (!entry || typeof entry !== "object") {
+      return { ok:false, reason:"entry_not_object", index:i };
+    }
+    for (const k of TRACE_REQUIRED_KEYS) {
+      if (!(k in entry)) return { ok:false, reason:"missing_key", key:k, index:i, step:entry.step };
+    }
+    if (typeof entry.step !== "string" || entry.step.length === 0) {
+      return { ok:false, reason:"invalid_step_id", index:i };
+    }
+  }
+  return { ok:true };
+}
+
 const API_CONST = {
   C_BASE:              520,
   SI_AREA_CONST:        13160,   // API 520 SI eq.: A[mm²]=13160·W[kg/h]/(C·Kd·P1[kPa]·Kb)·√(TZ/M)

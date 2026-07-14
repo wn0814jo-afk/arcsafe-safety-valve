@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:ac69b86ff580\n\n' +
+    box.textContent = '[ERROR] BUILD:81e941cfa94d\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:ac69b86ff580\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:81e941cfa94d\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -49,9 +49,9 @@
 <script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:ac69b86ff580 | 2026-07-13T05:47:09Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:81e941cfa94d | 2026-07-14T07:22:06Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "ac69b86ff580";
+const __BUILD_HASH__ = "81e941cfa94d";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -99,6 +99,30 @@ const R201_DEFAULTS = {
 //   기본값 1.00은 UI가 명시적으로 대입하며 Engine은 몰래 채우지 않는다.
 //   validateInputs가 Z 누락을 거부하므로 이 필드는 계약 변경이다.
 const ENGINE_VERSION = "1.3.0";
+
+// ── TRACE-SCHEMA-001: Calculation Trace 스키마 고정 ────────────
+// Trace는 단순 로그가 아니라 감사 증거(Report Evidence)다. 각 항목은
+// 반드시 이 4개 필드를 갖는다: step(단계 식별자), value(산출값),
+// unit(단위, 무차원이면 ""), formula(계산식 설명). inputs는 선택
+// (그 단계가 어떤 값들로부터 나왔는지 — 없는 단계도 있을 수 있음).
+// 이 스키마를 바꾸면 TRACE-SCHEMA-001 계약 테스트가 실패해야 한다.
+const TRACE_REQUIRED_KEYS = ["step", "value", "unit", "formula"];
+function validateTraceSchema(trace) {
+  if (!Array.isArray(trace)) return { ok:false, reason:"trace_not_array" };
+  for (let i = 0; i < trace.length; i++) {
+    const entry = trace[i];
+    if (!entry || typeof entry !== "object") {
+      return { ok:false, reason:"entry_not_object", index:i };
+    }
+    for (const k of TRACE_REQUIRED_KEYS) {
+      if (!(k in entry)) return { ok:false, reason:"missing_key", key:k, index:i, step:entry.step };
+    }
+    if (typeof entry.step !== "string" || entry.step.length === 0) {
+      return { ok:false, reason:"invalid_step_id", index:i };
+    }
+  }
+  return { ok:true };
+}
 
 const API_CONST = {
   C_BASE:              520,
@@ -1329,6 +1353,11 @@ function validateReportPackage(pkg) {
   if (!pkg || typeof pkg !== "object") {
     return { ok: false, reason: "package is not an object" };
   }
+  // ENGINE-VERSION-LOCK-001: buildReportPackage가 이미 판정해 넘긴 실패
+  // 사유를 그대로 통과시킨다 — "missing keys" 같은 일반 메시지로 뭉개지 않는다.
+  if (pkg.ok === false && pkg.contract === "ENGINE-VERSION-LOCK-001") {
+    return { ok: false, reason: pkg.detail || "INVALID_STATE: engine version mismatch", contract: pkg.contract };
+  }
   const missing = REPORT_PACKAGE_REQUIRED_KEYS.filter(k => !(k in pkg));
   if (missing.length > 0) {
     return { ok: false, reason: `missing keys: ${missing.join(", ")}` };
@@ -1373,6 +1402,22 @@ function validateReportPackage(pkg) {
 function buildReportPackage(snapshot, opts) {
   if (!snapshot || !snapshot.snapshotHash) {
     return { ok: false, reason: "REPORT-PKG: snapshot(with snapshotHash) is required" };
+  }
+  // ENGINE-VERSION-LOCK-001: 이 Snapshot이 만들어진 엔진 버전과 지금
+  // 돌고 있는 Engine의 버전이 다르면 ReportPackage를 만들지 않는다.
+  // (예: 과거 엔진 버전으로 얼어붙은 Snapshot을 새 엔진 코드 위에서
+  // 그대로 재출력하면 계산 근거와 화면/PDF 표시가 어긋날 수 있다.)
+  // Snapshot 자체는 그 시점 값 그대로 유지되는 게 맞다 — 여기서 재계산하지
+  // 않고, "지금 이 버전으로 새 ReportPackage를 만드는 것"만 차단한다.
+  if (snapshot.engine_version !== ENGINE_VERSION) {
+    return {
+      ok: false,
+      reason: "INVALID_STATE",
+      contract: "ENGINE-VERSION-LOCK-001",
+      detail: `snapshot.engine_version(${snapshot.engine_version}) !== ` +
+              `현재 ENGINE_VERSION(${ENGINE_VERSION}) — 엔진 버전이 바뀐 뒤 ` +
+              `이전 Snapshot으로 새 ReportPackage를 생성할 수 없다.`,
+    };
   }
   const { approvalRecords, approvalVerificationResults, generatedAt } = opts || {};
   const genAt = generatedAt || new Date().toISOString();
