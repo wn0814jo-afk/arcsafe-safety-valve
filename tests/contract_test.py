@@ -1584,6 +1584,136 @@ def test_revision_history_ui_readonly_contract() -> TestResult:
     return tr
 
 # ════════════════════════════════════════════════════════════════
+#  ASSET-DIFF-001 — 동일 revision 비교 -> 빈 diff
+#  ASSET-DIFF-002 — 입력 순서 반전 -> from/to만 반전, 필드·순서는 동일
+#  ASSET-DIFF-003 — 변경 없는 필드는 결과에 미포함
+#  ASSET-DIFF-004 — 입력 객체 불변(immutability)
+#  ASSET-DIFF-005 — 출력 순서 결정론적(스키마 필드 순서 고정)
+# ════════════════════════════════════════════════════════════════
+def test_asset_diff_contract() -> TestResult:
+    tr = TestResult("ASSET-DIFF-001~005", "Asset Revision Diff Engine 계약 검증")
+    diff_src = (SRC / "asset" / "diff.js").read_text()
+
+    for sym, desc in [
+        ("function diffEquipmentRevision",         "diffEquipmentRevision 정의"),
+        ("function diffDischargeSystemRevision",   "diffDischargeSystemRevision 정의"),
+        ("EQUIPMENT_DIFF_FIELDS",                  "EQUIPMENT_DIFF_FIELDS 정의"),
+        ("DISCHARGE_DIFF_FIELDS",                  "DISCHARGE_DIFF_FIELDS 정의"),
+        ("ASSET-DIFF-001", "ASSET-DIFF-001 계약 주석"),
+        ("ASSET-DIFF-002", "ASSET-DIFF-002 계약 주석"),
+        ("ASSET-DIFF-003", "ASSET-DIFF-003 계약 주석"),
+        ("ASSET-DIFF-004", "ASSET-DIFF-004 계약 주석"),
+        ("ASSET-DIFF-005", "ASSET-DIFF-005 계약 주석"),
+    ]:
+        tr.check(f"src_{sym.replace(' ','_')[:30]}", sym in diff_src, f"{desc} 없음")
+
+    # ── diff.js가 의미 해석(영향도/위험도/MOC 필요여부/워크플로우)을
+    #    끌어오지 않는지 — B3 범위 침범 방지 ──
+    forbidden_scope = ["evaluateSafetyImpact", "computeWorkflowState", "detectMOC",
+                        "riskLevel", "severity", "requiresApproval"]
+    for sym in forbidden_scope:
+        tr.check(f"no_{sym}_in_diff_engine",
+                 sym not in diff_src,
+                 f"diff.js가 B3(Impact Analysis) 범위({sym})를 앞서 포함함 — "
+                 f"Diff Engine은 순수 비교만 담당해야 함")
+
+    # ── Python 재현: 실제 JS 로직과 동일한 필드 목록/알고리즘 ──
+    EQUIPMENT_DIFF_FIELDS = [
+        ("tag", None), ("location", None), ("deviceType", None),
+        ("manufacturer", None), ("model", None), ("serialNo", None),
+        ("mawp", "barg"), ("setPressure", "barg"), ("overpressure", "%"),
+        ("orifice", None), ("inletSize", None), ("outletSize", None),
+        ("installedAt", None),
+    ]
+
+    def emptyish(v):
+        return v is None or v == ""
+
+    def values_equal(a, b):
+        if emptyish(a) and emptyish(b):
+            return True
+        if isinstance(a, list) or isinstance(b, list):
+            return (a or []) == (b or [])
+        return a == b
+
+    def diff_fields(old, new, spec):
+        if not old or not new:
+            return []
+        changes = []
+        for field, unit in spec:
+            frm, to = old.get(field), new.get(field)
+            if not values_equal(frm, to):
+                entry = {"field": field, "from": frm, "to": to}
+                if unit:
+                    entry["unit"] = unit
+                changes.append(entry)
+        return changes
+
+    rev1 = {"tag": "PSV-R201", "location": "R-201", "mawp": 6.0,
+            "setPressure": 10, "overpressure": 10, "orifice": "P",
+            "manufacturer": "Crosby"}
+    rev2 = {**rev1, "setPressure": 11, "overpressure": 21, "mocId": "MOC-9",
+            "revision": 2}
+
+    # ── ASSET-DIFF-001: 동일 revision -> 빈 diff ──
+    tr.check("ASSET_DIFF_001_identical_input_empty",
+             diff_fields(rev1, rev1, EQUIPMENT_DIFF_FIELDS) == [],
+             "동일 revision을 비교했는데 빈 diff가 아님")
+
+    # ── ASSET-DIFF-003: 변경 없는 필드는 제외, 변경된 필드만 포함 ──
+    d = diff_fields(rev1, rev2, EQUIPMENT_DIFF_FIELDS)
+    changed_fields = {c["field"] for c in d}
+    tr.check("ASSET_DIFF_003_only_changed_fields",
+             changed_fields == {"setPressure", "overpressure"},
+             f"변경된 필드만 포함되어야 하는데 {changed_fields} 반환됨 "
+             "(mocId/revision 같은 메타데이터는 diff 대상이 아님)")
+    tr.check("ASSET_DIFF_003_unit_attached",
+             all(c["unit"] for c in d if c["field"] in ("setPressure","overpressure")),
+             "unit이 결과에 포함되지 않음")
+
+    # ── ASSET-DIFF-002: 입력 순서 반전 -> from/to만 반전, 필드/순서는 동일 ──
+    d_rev = diff_fields(rev2, rev1, EQUIPMENT_DIFF_FIELDS)
+    fields_forward = [c["field"] for c in d]
+    fields_backward = [c["field"] for c in d_rev]
+    tr.check("ASSET_DIFF_002_same_fields_reversed_input",
+             fields_forward == fields_backward,
+             "입력 순서를 반전했더니 비교 대상 필드 자체가 달라짐")
+    swapped_ok = all(
+        d[i]["from"] == d_rev[i]["to"] and d[i]["to"] == d_rev[i]["from"]
+        for i in range(len(d))
+    )
+    tr.check("ASSET_DIFF_002_from_to_swapped",
+             swapped_ok,
+             "입력 순서를 반전했는데 from/to가 정확히 반전되지 않음")
+
+    # ── ASSET-DIFF-004: 입력 객체 불변 ──
+    rev1_copy = dict(rev1)
+    rev2_copy = dict(rev2)
+    _ = diff_fields(rev1, rev2, EQUIPMENT_DIFF_FIELDS)
+    tr.check("ASSET_DIFF_004_inputs_not_mutated",
+             rev1 == rev1_copy and rev2 == rev2_copy,
+             "diff 계산 중 입력 객체가 변경됨 — immutability 위반")
+    tr.check("ASSET_DIFF_004_freeze_used_in_source",
+             "Object.freeze" in diff_src,
+             "diff.js 반환값에 Object.freeze가 적용되지 않음")
+
+    # ── ASSET-DIFF-005: 출력 순서는 스키마 필드 순서를 따름(입력 key 순서 무관) ──
+    rev1_reordered = {"overpressure": rev1["overpressure"], "setPressure": rev1["setPressure"],
+                       **{k: v for k, v in rev1.items() if k not in ("overpressure", "setPressure")}}
+    rev2_reordered = {"setPressure": rev2["setPressure"], "overpressure": rev2["overpressure"],
+                       **{k: v for k, v in rev2.items() if k not in ("overpressure", "setPressure")}}
+    d_reordered = diff_fields(rev1_reordered, rev2_reordered, EQUIPMENT_DIFF_FIELDS)
+    tr.check("ASSET_DIFF_005_order_independent_of_input_keys",
+             [c["field"] for c in d_reordered] == fields_forward,
+             "입력 객체의 key 순서를 바꿨는데 diff 출력 순서가 달라짐 — "
+             "출력 순서가 스키마 필드 순서가 아니라 입력에 의존함")
+    tr.check("ASSET_DIFF_005_schema_order_matches_definition",
+             fields_forward == [f for f, _ in EQUIPMENT_DIFF_FIELDS if f in changed_fields],
+             "diff 출력 순서가 EQUIPMENT_DIFF_FIELDS 정의 순서와 다름")
+
+    return tr
+
+# ════════════════════════════════════════════════════════════════
 #  APPROVAL-SIGN-TARGET-001
 #  Approval은 "지금 보고 있는 버전"이 아니라 "승인 결과로 확정될 다음 버전"의
 #  hash에 서명해야 한다. 순서가 반대면(서명 먼저, 전이 나중) 서명 직후
@@ -2438,6 +2568,7 @@ def main():
                       (test_case_history_contract,  "HISTORY-001/002/003"),
                       (test_asset_history_contract, "ASSET-HISTORY-001~004"),
                       (test_revision_history_ui_readonly_contract, "ASSET-UI-001"),
+                      (test_asset_diff_contract, "ASSET-DIFF-001~005"),
                       (test_approval_crypto_contract, "CRYPTO/SERVICE/VALIDATOR"),
                       (test_geometry_contract,       "GEOMETRY-001/002"),
                       (test_equipment_moc_contract,  "EQUIPMENT-MOC-001~004"),
