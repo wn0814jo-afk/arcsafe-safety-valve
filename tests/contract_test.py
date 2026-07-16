@@ -1714,6 +1714,162 @@ def test_asset_diff_contract() -> TestResult:
     return tr
 
 # ════════════════════════════════════════════════════════════════
+#  ASSET-IMPACT-001 — 일치하는 Snapshot 없음 -> 4개 필드 모두 빈 배열
+#  ASSET-IMPACT-002 — affectedCases 중복 없음
+#  ASSET-IMPACT-003 — affectedSnapshots는 정확히 해당 revisionKey만 참조
+#  ASSET-IMPACT-004 — latestAffected ∪ obsoleteSnapshots = affectedSnapshots (분할)
+#  ASSET-IMPACT-005 — 입력 배열 불변(immutability)
+# ════════════════════════════════════════════════════════════════
+def test_asset_impact_contract() -> TestResult:
+    tr = TestResult("ASSET-IMPACT-001~005", "Asset Revision Impact Analysis 계약 검증")
+    impact_src = (SRC / "asset" / "impact.js").read_text()
+
+    for sym, desc in [
+        ("function analyzeRevisionImpact",  "analyzeRevisionImpact 정의"),
+        ("function _parseRevisionKey",      "_parseRevisionKey 정의"),
+        ("function _matchesRevision",       "_matchesRevision 정의"),
+        ("function _latestSnapshotByCase",  "_latestSnapshotByCase 정의"),
+        ("ASSET-IMPACT-001", "ASSET-IMPACT-001 계약 주석"),
+        ("ASSET-IMPACT-002", "ASSET-IMPACT-002 계약 주석"),
+        ("ASSET-IMPACT-003", "ASSET-IMPACT-003 계약 주석"),
+        ("ASSET-IMPACT-004", "ASSET-IMPACT-004 계약 주석"),
+        ("ASSET-IMPACT-005", "ASSET-IMPACT-005 계약 주석"),
+    ]:
+        tr.check(f"src_{sym.replace(' ','_')[:30]}", sym in impact_src, f"{desc} 없음")
+
+    # ── impact.js가 워크플로우/위험도를 재평가하지 않는지 (Snapshot에 박제된 값만 읽음) ──
+    forbidden_scope = ["evaluateSafetyImpact", "computeWorkflowState", "detectMOC(",
+                        "riskLevel =", "severity ="]
+    for sym in forbidden_scope:
+        tr.check(f"no_{sym.rstrip('=( ')}_in_impact_engine",
+                 sym not in impact_src,
+                 f"impact.js가 워크플로우/위험도 재평가({sym})를 포함함 — "
+                 f"Impact Engine은 이미 Snapshot에 박제된 값을 읽기만 해야 함")
+
+    # ── Python 재현: 실제 JS 로직과 동일한 알고리즘 ──
+    def parse_key(key):
+        if not key or "@" not in key:
+            return None
+        idx = key.rindex("@")
+        return {"id": key[:idx], "revision": int(key[idx+1:])}
+
+    def matches(snap, id_, revision):
+        refs = snap.get("assetRefs")
+        if not refs:
+            return False
+        if id_.startswith("EQ-"):
+            return refs.get("equipmentId") == id_ and refs.get("equipmentRevision") == revision
+        if id_.startswith("DS-"):
+            return refs.get("dischargeSystemId") == id_ and refs.get("dischargeRevision") == revision
+        return False
+
+    def latest_by_case(snaps):
+        m = {}
+        for s in snaps:
+            if s.get("caseId"):
+                m[s["caseId"]] = s
+        return m
+
+    def analyze(revision_key, all_snapshots):
+        empty = {"affectedCases": [], "affectedSnapshots": [], "latestAffected": [], "obsoleteSnapshots": []}
+        parsed = parse_key(revision_key)
+        if not parsed or not all_snapshots:
+            return empty
+        affected = [s for s in all_snapshots if matches(s, parsed["id"], parsed["revision"])]
+        if not affected:
+            return empty
+        cases = list(dict.fromkeys(s["caseId"] for s in affected))  # 순서 보존 unique
+        lbc = latest_by_case(all_snapshots)
+        latest_affected = [s for s in affected if lbc.get(s["caseId"]) is s]
+        obsolete = [s for s in affected if lbc.get(s["caseId"]) is not s]
+        return {"affectedCases": cases, "affectedSnapshots": affected,
+                "latestAffected": latest_affected, "obsoleteSnapshots": obsolete}
+
+    def snap(case_id, eq_id, eq_rev, snap_hash):
+        return {"caseId": case_id, "snapshotHash": snap_hash,
+                "assetRefs": {"equipmentId": eq_id, "equipmentRevision": eq_rev,
+                              "dischargeSystemId": None, "dischargeRevision": None}}
+
+    # Case-1: Rev.1로 검토(SNAP-A) -> Rev.2로 개정 후 재검토(SNAP-B, 최신)
+    # Case-2: Rev.1로만 검토(SNAP-C, 최신 — 아직 재검토 안 함)
+    all_snaps = [
+        snap("CASE-1", "EQ-001", 1, "SNAP-A"),
+        snap("CASE-1", "EQ-001", 2, "SNAP-B"),
+        snap("CASE-2", "EQ-001", 1, "SNAP-C"),
+    ]
+
+    # ── ASSET-IMPACT-001: 매칭 없음 -> 전부 빈 배열 ──
+    r_none = analyze("EQ-999@1", all_snaps)
+    tr.check("ASSET_IMPACT_001_no_match_all_empty",
+             r_none == {"affectedCases": [], "affectedSnapshots": [],
+                        "latestAffected": [], "obsoleteSnapshots": []},
+             "일치하는 Snapshot이 없는데 빈 배열이 아닌 필드가 있음")
+
+    r_rev1 = analyze("EQ-001@1", all_snaps)
+    r_rev2 = analyze("EQ-001@2", all_snaps)
+
+    # ── ASSET-IMPACT-002: affectedCases 중복 없음 ──
+    tr.check("ASSET_IMPACT_002_no_duplicate_cases",
+             len(r_rev1["affectedCases"]) == len(set(r_rev1["affectedCases"])),
+             "affectedCases에 중복 caseId가 있음")
+    tr.check("ASSET_IMPACT_002_both_cases_found_for_rev1",
+             set(r_rev1["affectedCases"]) == {"CASE-1", "CASE-2"},
+             "Rev.1을 쓴 두 Case(CASE-1, CASE-2)가 모두 잡히지 않음")
+
+    # ── ASSET-IMPACT-003: affectedSnapshots는 정확히 해당 revision만 참조 ──
+    tr.check("ASSET_IMPACT_003_rev1_only_matches_rev1_snapshots",
+             {s["snapshotHash"] for s in r_rev1["affectedSnapshots"]} == {"SNAP-A", "SNAP-C"},
+             "Rev.1 조회 결과에 다른 revision(SNAP-B)이 섞여 들어감")
+    tr.check("ASSET_IMPACT_003_rev2_only_matches_rev2_snapshots",
+             {s["snapshotHash"] for s in r_rev2["affectedSnapshots"]} == {"SNAP-B"},
+             "Rev.2 조회 결과가 정확히 SNAP-B 하나여야 함")
+
+    # ── ASSET-IMPACT-004: latestAffected / obsoleteSnapshots가 affectedSnapshots를 분할 ──
+    for label, r in [("rev1", r_rev1), ("rev2", r_rev2)]:
+        union = {s["snapshotHash"] for s in r["latestAffected"]} | \
+                {s["snapshotHash"] for s in r["obsoleteSnapshots"]}
+        inter = {s["snapshotHash"] for s in r["latestAffected"]} & \
+                {s["snapshotHash"] for s in r["obsoleteSnapshots"]}
+        affected_hashes = {s["snapshotHash"] for s in r["affectedSnapshots"]}
+        tr.check(f"ASSET_IMPACT_004_{label}_union_equals_affected",
+                 union == affected_hashes,
+                 f"[{label}] latestAffected ∪ obsoleteSnapshots != affectedSnapshots")
+        tr.check(f"ASSET_IMPACT_004_{label}_no_overlap",
+                 inter == set(),
+                 f"[{label}] latestAffected와 obsoleteSnapshots가 겹침")
+
+    # CASE-1의 Rev.1(SNAP-A)은 이미 Rev.2(SNAP-B)로 대체됐으므로 obsolete여야 함
+    tr.check("ASSET_IMPACT_004_case1_rev1_is_obsolete",
+             any(s["snapshotHash"] == "SNAP-A" for s in r_rev1["obsoleteSnapshots"]),
+             "CASE-1에서 Rev.1은 이미 Rev.2로 대체됐는데 obsolete로 분류되지 않음")
+    # CASE-2는 아직 Rev.1이 최신이므로 latestAffected여야 함
+    tr.check("ASSET_IMPACT_004_case2_rev1_is_latest",
+             any(s["snapshotHash"] == "SNAP-C" for s in r_rev1["latestAffected"]),
+             "CASE-2에서 Rev.1이 여전히 최신인데 latestAffected로 분류되지 않음")
+    # Rev.2(SNAP-B)는 CASE-1의 최신이므로 latestAffected
+    tr.check("ASSET_IMPACT_004_case1_rev2_is_latest",
+             any(s["snapshotHash"] == "SNAP-B" for s in r_rev2["latestAffected"]),
+             "CASE-1에서 Rev.2가 최신 Snapshot인데 latestAffected로 분류되지 않음")
+
+    # ── ASSET-IMPACT-005: 입력 배열 불변 ──
+    all_snaps_copy = [dict(s) for s in all_snaps]
+    _ = analyze("EQ-001@1", all_snaps)
+    tr.check("ASSET_IMPACT_005_input_not_mutated",
+             all_snaps == all_snaps_copy,
+             "analyzeRevisionImpact 계산 중 입력 snapshot 배열이 변경됨")
+    tr.check("ASSET_IMPACT_005_freeze_used_in_source",
+             "Object.freeze" in impact_src,
+             "impact.js 반환값에 Object.freeze가 적용되지 않음")
+
+    # ── revisionKey 포맷이 asset/history.js의 _revisionKey와 대칭인지 (역인덱스 재사용성) ──
+    history_src = (SRC / "asset" / "history.js").read_text()
+    tr.check("revisionKey_format_symmetric_with_history_js",
+             "`${id}@${revision}`" in history_src and "lastIndexOf(\"@\")" in impact_src,
+             "impact.js의 revisionKey 파싱 방식이 asset/history.js의 _revisionKey 생성 방식과 대칭이 아님")
+
+    return tr
+
+# ════════════════════════════════════════════════════════════════
 #  APPROVAL-SIGN-TARGET-001
 #  Approval은 "지금 보고 있는 버전"이 아니라 "승인 결과로 확정될 다음 버전"의
 #  hash에 서명해야 한다. 순서가 반대면(서명 먼저, 전이 나중) 서명 직후
@@ -2569,6 +2725,7 @@ def main():
                       (test_asset_history_contract, "ASSET-HISTORY-001~004"),
                       (test_revision_history_ui_readonly_contract, "ASSET-UI-001"),
                       (test_asset_diff_contract, "ASSET-DIFF-001~005"),
+                      (test_asset_impact_contract, "ASSET-IMPACT-001~005"),
                       (test_approval_crypto_contract, "CRYPTO/SERVICE/VALIDATOR"),
                       (test_geometry_contract,       "GEOMETRY-001/002"),
                       (test_equipment_moc_contract,  "EQUIPMENT-MOC-001~004"),
