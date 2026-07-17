@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:2d8abc12c74c\n\n' +
+    box.textContent = '[ERROR] BUILD:ca490bc4fd9b\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:2d8abc12c74c\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:ca490bc4fd9b\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -49,9 +49,9 @@
 <script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:2d8abc12c74c | 2026-07-16T12:45:07Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:ca490bc4fd9b | 2026-07-17T01:59:07Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "2d8abc12c74c";
+const __BUILD_HASH__ = "ca490bc4fd9b";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -3307,10 +3307,15 @@ function DischargeSystemForm({ onSave, onCancel, editing }) {
 // 책임: Revision 목록 표시 / Rev·MOC ID 배지 / 현재(최신) 표시 / 선택 / 상세 표시.
 // 의도적으로 하지 않는 것: Diff(B2), Impact Analysis(B3), 되돌리기, 수정.
 // 이 컴포넌트는 onSave/onRevise류 콜백을 전혀 받지 않는다 — 구조적으로 쓰기 경로가 없다.
-function RevisionHistoryPanel({ title, history, id, kind, onClose }) {
+function RevisionHistoryPanel({ title, history, id, kind, allSnapshots, onClose }) {
   const revisions = getRevisionsFor(history, id);           // 오름차순
   const latest    = getLatestRevision(history, id);
   const [selected, setSelected] = useState(latest);
+  // 비교 대상 revision — 기본값은 선택된 revision의 직전(N-1). 자동 계산이며 저장하지 않는다.
+  const defaultCompareRev = selected
+    ? revisions.find(r => r.revision === selected.revision - 1) || null
+    : null;
+  const [compareRevNum, setCompareRevNum] = useState(defaultCompareRev?.revision ?? "");
 
   if (revisions.length === 0) return null;
 
@@ -3329,6 +3334,23 @@ function RevisionHistoryPanel({ title, history, id, kind, onClose }) {
     ["connectedTags","연결 PSV Tag"],
   ];
   const fields = kind === "equipment" ? EQ_FIELDS : DS_FIELDS;
+  const fieldLabel = k => (fields.find(f => f[0] === k) || [k, k])[1];
+
+  // ── B2: Diff — 선택된 revision을 compareRevNum(있으면)과 비교 ────
+  const compareRev = compareRevNum === ""
+    ? null
+    : revisions.find(r => r.revision === Number(compareRevNum)) || null;
+  const diff = (selected && compareRev)
+    ? (kind === "equipment"
+        ? diffEquipmentRevision(compareRev, selected)
+        : diffDischargeSystemRevision(compareRev, selected))
+    : [];
+
+  // ── B3: Impact — 선택된 revision이 어디에 쓰였는지 (allSnapshots 필요) ──
+  const revisionKey = selected ? `${selected.id}@${selected.revision}` : null;
+  const impact = (revisionKey && allSnapshots)
+    ? analyzeRevisionImpact(revisionKey, allSnapshots)
+    : null;
 
   return (
     <div style={{background:T.cardBg,borderRadius:16,padding:16,
@@ -3351,7 +3373,12 @@ function RevisionHistoryPanel({ title, history, id, kind, onClose }) {
           const isLatest   = latest && rev.revision === latest.revision;
           const isSelected = selected && rev.revision === selected.revision;
           return (
-            <div key={`${rev.id}@${rev.revision}`} onClick={()=>setSelected(rev)}
+            <div key={`${rev.id}@${rev.revision}`}
+              onClick={()=>{
+                setSelected(rev);
+                const prev = revisions.find(r => r.revision === rev.revision - 1);
+                setCompareRevNum(prev ? prev.revision : "");
+              }}
               style={{display:"flex",alignItems:"center",justifyContent:"space-between",
                 padding:"8px 12px",borderRadius:9,cursor:"pointer",
                 border:`1.5px solid ${isSelected?T.navyLight:T.border}`,
@@ -3382,7 +3409,7 @@ function RevisionHistoryPanel({ title, history, id, kind, onClose }) {
       {/* 선택된 Revision 상세 (읽기 전용) */}
       {selected && (
         <div style={{background:T.bg,borderRadius:12,padding:"12px 13px",
-          border:`1px solid ${T.border}`}}>
+          border:`1px solid ${T.border}`,marginBottom:12}}>
           <div style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono,
             marginBottom:10,letterSpacing:1}}>
             Rev.{selected.revision} 상세
@@ -3398,6 +3425,90 @@ function RevisionHistoryPanel({ title, history, id, kind, onClose }) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* B2: 변경사항(Diff) — 읽기 전용. 쓰기 콜백 없음, diffEquipmentRevision/
+          diffDischargeSystemRevision 결과를 그대로 표시만 한다. */}
+      {selected && revisions.length > 1 && (
+        <div style={{background:T.white,borderRadius:12,padding:"12px 13px",
+          border:`1px solid ${T.border}`,marginBottom:12}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+            marginBottom:10}}>
+            <div style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono,
+              letterSpacing:1}}>변경사항 (Diff)</div>
+            <select value={compareRevNum} onChange={e=>setCompareRevNum(e.target.value)}
+              style={{fontSize:9,fontFamily:font.mono,padding:"3px 6px",
+                borderRadius:6,border:`1px solid ${T.border}`,color:T.sub,background:T.bg}}>
+              <option value="">비교 안 함</option>
+              {revisions.filter(r=>r.revision!==selected.revision).map(r=>(
+                <option key={r.revision} value={r.revision}>Rev.{r.revision}과 비교</option>
+              ))}
+            </select>
+          </div>
+          {!compareRev ? (
+            <div style={{fontSize:10,color:T.gray,fontFamily:font.mono}}>
+              비교 대상을 선택하세요.
+            </div>
+          ) : diff.length === 0 ? (
+            <div style={{fontSize:10,color:T.gray,fontFamily:font.mono}}>
+              Rev.{compareRev.revision} → Rev.{selected.revision}: 변경된 필드 없음
+            </div>
+          ) : (
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {diff.map(c => (
+                <div key={c.field} style={{display:"flex",alignItems:"center",
+                  justifyContent:"space-between",fontSize:11,fontFamily:font.mono}}>
+                  <span style={{color:T.sub}}>{fieldLabel(c.field)}</span>
+                  <span style={{fontWeight:700,color:T.navyLight}}>
+                    {String(c.from ?? "—")} → <span style={{color:T.orange}}>{String(c.to ?? "—")}</span>
+                    {c.unit ? ` ${c.unit}` : ""}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* B3: 영향도(Impact) — 읽기 전용. analyzeRevisionImpact() 결과를 그대로 표시만 한다. */}
+      {selected && impact && (
+        <div style={{background:T.white,borderRadius:12,padding:"12px 13px",
+          border:`1px solid ${T.border}`}}>
+          <div style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono,
+            marginBottom:10,letterSpacing:1}}>영향도 (Impact) — Rev.{selected.revision}</div>
+          {impact.affectedSnapshots.length === 0 ? (
+            <div style={{fontSize:10,color:T.gray,fontFamily:font.mono}}>
+              이 Revision을 사용한 Case가 아직 없습니다.
+            </div>
+          ) : (
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              <div>
+                <div style={{fontSize:9,color:T.gray,fontFamily:font.mono}}>사용 중인 Case</div>
+                <div style={{fontSize:14,fontWeight:900,color:T.navy,fontFamily:font.mono}}>
+                  {impact.affectedCases.length}건
+                </div>
+              </div>
+              <div>
+                <div style={{fontSize:9,color:T.gray,fontFamily:font.mono}}>영향받는 Snapshot</div>
+                <div style={{fontSize:14,fontWeight:900,color:T.navy,fontFamily:font.mono}}>
+                  {impact.affectedSnapshots.length}건
+                </div>
+              </div>
+              <div>
+                <div style={{fontSize:9,color:T.gray,fontFamily:font.mono}}>현재도 최신으로 사용 중</div>
+                <div style={{fontSize:14,fontWeight:900,color:T.blue,fontFamily:font.mono}}>
+                  {impact.latestAffected.length}건
+                </div>
+              </div>
+              <div>
+                <div style={{fontSize:9,color:T.gray,fontFamily:font.mono}}>이미 대체됨(과거 이력)</div>
+                <div style={{fontSize:14,fontWeight:900,color:T.gray,fontFamily:font.mono}}>
+                  {impact.obsoleteSnapshots.length}건
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -3492,7 +3603,7 @@ function EquipmentCard({ eq, dischargeSystem, onSelect, onEdit, onViewHistory })
 
 // ── AssetMaster ───────────────────────────────────────────────
 function AssetMaster({ equipments, dischargeSystems,
-                       equipmentHistory, dischargeHistory,
+                       equipmentHistory, dischargeHistory, allSnapshots,
                        onSelectEquipment,
                        onAddEquipment, onReviseEquipment,
                        onAddDischargeSystem,
@@ -3577,6 +3688,7 @@ function AssetMaster({ equipments, dischargeSystems,
               history={equipmentHistory}
               id={viewingEqHistory}
               kind="equipment"
+              allSnapshots={allSnapshots}
               onClose={()=>setViewingEqHistory(null)}/>
           )}
           {equipments.length === 0 ? (
@@ -3627,6 +3739,7 @@ function AssetMaster({ equipments, dischargeSystems,
               history={dischargeHistory}
               id={viewingDsHistory}
               kind="discharge"
+              allSnapshots={allSnapshots}
               onClose={()=>setViewingDsHistory(null)}/>
           )}
           {dischargeSystems.length === 0 ? (
@@ -4575,6 +4688,13 @@ function ArcSafe() {
   const [activeCase, setActiveCase] = useState(null);
   const [screen,     setScreen]     = useState("dashboard");
 
+  // B3 Impact Analysis용: 모든 Case의 snapshotHistory를 이어붙인 평탄화 배열.
+  // 각 case.snapshotHistory는 append-only(순서 보존)이므로, 이를 그대로 이어붙이면
+  // caseId별 마지막 등장 원소 = 그 Case의 최신 Snapshot이 된다 (analyzeRevisionImpact 전제).
+  const allSnapshots = useMemo(
+    () => cases.flatMap(c => c.snapshotHistory || []), [cases]
+  );
+
   const handleOpenCase = (c) => setActiveCase(c);
   const handleBack = () => setActiveCase(null);
 
@@ -4698,6 +4818,7 @@ function ArcSafe() {
             dischargeSystems={dischargeSystems}
             equipmentHistory={equipmentHistory}
             dischargeHistory={dischargeHistory}
+            allSnapshots={allSnapshots}
             onSelectEquipment={handleEquipmentSelect}
             onAddEquipment={handleAddEquipment}
             onReviseEquipment={handleReviseEquipment}

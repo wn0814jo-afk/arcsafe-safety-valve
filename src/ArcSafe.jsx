@@ -21,6 +21,13 @@ function ArcSafe() {
   const [activeCase, setActiveCase] = useState(null);
   const [screen,     setScreen]     = useState("dashboard");
 
+  // B3 Impact Analysis용: 모든 Case의 snapshotHistory를 이어붙인 평탄화 배열.
+  // 각 case.snapshotHistory는 append-only(순서 보존)이므로, 이를 그대로 이어붙이면
+  // caseId별 마지막 등장 원소 = 그 Case의 최신 Snapshot이 된다 (analyzeRevisionImpact 전제).
+  const allSnapshots = useMemo(
+    () => cases.flatMap(c => c.snapshotHistory || []), [cases]
+  );
+
   const handleOpenCase = (c) => setActiveCase(c);
   const handleBack = () => setActiveCase(null);
 
@@ -144,6 +151,7 @@ function ArcSafe() {
             dischargeSystems={dischargeSystems}
             equipmentHistory={equipmentHistory}
             dischargeHistory={dischargeHistory}
+            allSnapshots={allSnapshots}
             onSelectEquipment={handleEquipmentSelect}
             onAddEquipment={handleAddEquipment}
             onReviseEquipment={handleReviseEquipment}

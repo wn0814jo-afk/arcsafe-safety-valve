@@ -1546,6 +1546,7 @@ def test_revision_history_ui_readonly_contract() -> TestResult:
     forbidden_write_symbols = [
         "onReviseEquipment", "onReviseDischargeSystem",
         "reviseEquipment(", "reviseDischargeSystem(",
+        "appendRevision(", "createEquipment(", "createDischargeSystem(",
         "onSave", "onAddEquipment", "onAddDischargeSystem",
         "EquipmentForm", "DischargeSystemForm",
     ]
@@ -1553,14 +1554,24 @@ def test_revision_history_ui_readonly_contract() -> TestResult:
         tr.check(f"no_{sym.strip('(')}_in_panel",
                  sym not in panel_body,
                  f"RevisionHistoryPanel이 쓰기 경로({sym})를 포함함 — "
-                 f"B1은 100% 읽기 전용이어야 함")
+                 f"Comparison UI로 확장된 뒤에도 100% 읽기 전용이어야 함")
 
-    forbidden_scope_symbols = ["diff(", "Diff(", "ImpactAnalysis", "restore(", "Restore("]
-    for sym in forbidden_scope_symbols:
-        tr.check(f"no_{sym.strip('(')}_in_panel_yet",
+    # Comparison UI 통합(B1+B2+B3) 확인: diff/impact 엔진 결과를 "표시"하는지.
+    # 계산 함수 자체가 아니라 계산 *결과를 그대로 렌더링*하는지가 핵심이므로,
+    # 엔진 호출 존재 + 위의 쓰기 심볼 부재를 함께 만족해야 "읽기 전용 조합"이 성립한다.
+    tr.check("panel_integrates_diff_engine",
+             "diffEquipmentRevision(" in panel_body and "diffDischargeSystemRevision(" in panel_body,
+             "RevisionHistoryPanel이 B2 Diff Engine을 통합하지 않음")
+    tr.check("panel_integrates_impact_engine",
+             "analyzeRevisionImpact(" in panel_body,
+             "RevisionHistoryPanel이 B3 Impact Analysis Engine을 통합하지 않음")
+    # B4(Inspection/Certificate)는 스키마 확장 전이므로 아직 끌어오면 안 된다.
+    forbidden_future_scope = ["inspectionDue", "InspectionDue", "certificate", "Certificate"]
+    for sym in forbidden_future_scope:
+        tr.check(f"no_{sym}_in_panel_yet",
                  sym not in panel_body,
-                 f"RevisionHistoryPanel이 B2/B3 범위({sym})를 앞서 포함함 — "
-                 f"단계 분리 원칙 위반")
+                 f"RevisionHistoryPanel이 B4 범위({sym})를 앞서 포함함 — "
+                 f"스키마 확장 전에는 필드가 존재할 수 없음")
 
     # ── RevisionHistoryPanel이 onClose 외에 콜백 prop을 받지 않는지 (destructure 검사) ──
     sig_line = am_src.split("function RevisionHistoryPanel(")[1].split(")")[0]
@@ -1568,10 +1579,13 @@ def test_revision_history_ui_readonly_contract() -> TestResult:
              "on" not in sig_line.replace("onClose", ""),
              "RevisionHistoryPanel이 onClose 이외의 콜백 prop을 받음 — 쓰기 경로 유입 위험")
 
-    # ── AssetMaster가 equipmentHistory/dischargeHistory를 그대로 넘기는지 ──
+    # ── AssetMaster가 equipmentHistory/dischargeHistory/allSnapshots를 그대로 넘기는지 ──
     tr.check("AssetMaster_receives_history_props",
              "equipmentHistory" in am_src and "dischargeHistory" in am_src,
              "AssetMaster가 equipmentHistory/dischargeHistory props를 받지 않음")
+    tr.check("AssetMaster_receives_allSnapshots_prop",
+             "allSnapshots" in am_src,
+             "AssetMaster가 allSnapshots props를 받지 않음 — Impact Analysis에 필요")
 
     # ── ArcSafe.jsx가 AssetMaster에 history를 전달하는지 ──
     arcsafe_src = (SRC.parent / "src" / "ArcSafe.jsx").read_text()
@@ -1580,6 +1594,9 @@ def test_revision_history_ui_readonly_contract() -> TestResult:
              "equipmentHistory={equipmentHistory}" in am_call and
              "dischargeHistory={dischargeHistory}" in am_call,
              "ArcSafe.jsx가 AssetMaster에 equipmentHistory/dischargeHistory를 전달하지 않음")
+    tr.check("ArcSafe_passes_allSnapshots_to_AssetMaster",
+             "allSnapshots={allSnapshots}" in am_call,
+             "ArcSafe.jsx가 AssetMaster에 allSnapshots를 전달하지 않음 — Impact Analysis 비활성화됨")
 
     return tr
 
