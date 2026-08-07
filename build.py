@@ -639,6 +639,7 @@ HTML_HEAD = '''\
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] ReactDOM 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
+<script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
 /* ArcSafe | BUILD_HASH:{hash} | {ts} | v0.2.0-asset-master */
 const {{ useState, useEffect, useRef, useMemo, useCallback }} = React;

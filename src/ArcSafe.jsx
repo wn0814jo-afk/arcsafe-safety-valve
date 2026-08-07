@@ -21,6 +21,28 @@ function ArcSafe() {
   const [activeCase, setActiveCase] = useState(null);
   const [screen,     setScreen]     = useState("dashboard");
 
+  // AUTH — auth.archsafe.co.kr SDK 연동 (AUTH_INTEGRATION_STANDARD.md 표준)
+  // 절대 규칙: /auth/me 등을 직접 fetch하지 않고 AuthClient SDK만 통해 접근.
+  // JWT 직접 decode 금지, 세션은 auth-worker의 HttpOnly 쿠키만 사용.
+  // Engine 입력에는 identity를 절대 넘기지 않음 — 아래 authUser는 헤더 UI 표시 전용.
+  const [authUser,  setAuthUser]  = useState(null);
+  const [authState, setAuthState] = useState("loading"); // loading | authenticated | unauthenticated | unavailable
+  useEffect(() => {
+    if (typeof AuthClient === "undefined") { setAuthState("unavailable"); return; }
+    const auth = new AuthClient({ baseUrl: "https://auth.archsafe.co.kr" });
+    auth.onChange((state, user) => {
+      setAuthState(state);
+      setAuthUser(state === "authenticated" ? user : null);
+    });
+    auth.init();
+    window.__archsafeAuth = auth; // logout 버튼에서 참조
+  }, []);
+  const handleLogin = () => {
+    window.location.href = "https://auth.archsafe.co.kr/auth/login?return_to=" +
+      encodeURIComponent(window.location.href);
+  };
+  const handleLogout = () => { if (window.__archsafeAuth) window.__archsafeAuth.logout(); };
+
   // B3 Impact Analysis용: 모든 Case의 snapshotHistory를 이어붙인 평탄화 배열.
   // 각 case.snapshotHistory는 append-only(순서 보존)이므로, 이를 그대로 이어붙이면
   // caseId별 마지막 등장 원소 = 그 Case의 최신 Snapshot이 된다 (analyzeRevisionImpact 전제).
@@ -129,6 +151,25 @@ function ArcSafe() {
                 color:screen==="assets"?T.white:"#7B9EC0",
                 fontFamily:font.mono,cursor:"pointer"}}>
               🔧 설비대장
+            </button>
+          )}
+          {authState === "authenticated" && authUser && (
+            <div
+              onClick={handleLogout}
+              title="클릭하여 로그아웃"
+              style={{fontSize:10,color:"#7B9EC0",fontFamily:font.mono,
+                cursor:"pointer",maxWidth:120,overflow:"hidden",
+                textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+              {authUser.email}
+            </div>
+          )}
+          {authState === "unauthenticated" && (
+            <button
+              onClick={handleLogin}
+              style={{padding:"6px 11px",background:"none",
+                border:"1px solid #4A6FA5",borderRadius:8,fontSize:10,
+                color:"#7B9EC0",fontFamily:font.mono,cursor:"pointer"}}>
+              로그인
             </button>
           )}
         </div>

@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:ca490bc4fd9b\n\n' +
+    box.textContent = '[ERROR] BUILD:4aad4ef0348c\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:ca490bc4fd9b\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:4aad4ef0348c\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -48,10 +48,11 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] ReactDOM 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
+<script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:ca490bc4fd9b | 2026-07-17T01:59:07Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:4aad4ef0348c | 2026-08-07T07:18:58Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "ca490bc4fd9b";
+const __BUILD_HASH__ = "4aad4ef0348c";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -4688,6 +4689,28 @@ function ArcSafe() {
   const [activeCase, setActiveCase] = useState(null);
   const [screen,     setScreen]     = useState("dashboard");
 
+  // AUTH — auth.archsafe.co.kr SDK 연동 (AUTH_INTEGRATION_STANDARD.md 표준)
+  // 절대 규칙: /auth/me 등을 직접 fetch하지 않고 AuthClient SDK만 통해 접근.
+  // JWT 직접 decode 금지, 세션은 auth-worker의 HttpOnly 쿠키만 사용.
+  // Engine 입력에는 identity를 절대 넘기지 않음 — 아래 authUser는 헤더 UI 표시 전용.
+  const [authUser,  setAuthUser]  = useState(null);
+  const [authState, setAuthState] = useState("loading"); // loading | authenticated | unauthenticated | unavailable
+  useEffect(() => {
+    if (typeof AuthClient === "undefined") { setAuthState("unavailable"); return; }
+    const auth = new AuthClient({ baseUrl: "https://auth.archsafe.co.kr" });
+    auth.onChange((state, user) => {
+      setAuthState(state);
+      setAuthUser(state === "authenticated" ? user : null);
+    });
+    auth.init();
+    window.__archsafeAuth = auth; // logout 버튼에서 참조
+  }, []);
+  const handleLogin = () => {
+    window.location.href = "https://auth.archsafe.co.kr/auth/login?return_to=" +
+      encodeURIComponent(window.location.href);
+  };
+  const handleLogout = () => { if (window.__archsafeAuth) window.__archsafeAuth.logout(); };
+
   // B3 Impact Analysis용: 모든 Case의 snapshotHistory를 이어붙인 평탄화 배열.
   // 각 case.snapshotHistory는 append-only(순서 보존)이므로, 이를 그대로 이어붙이면
   // caseId별 마지막 등장 원소 = 그 Case의 최신 Snapshot이 된다 (analyzeRevisionImpact 전제).
@@ -4796,6 +4819,25 @@ function ArcSafe() {
                 color:screen==="assets"?T.white:"#7B9EC0",
                 fontFamily:font.mono,cursor:"pointer"}}>
               🔧 설비대장
+            </button>
+          )}
+          {authState === "authenticated" && authUser && (
+            <div
+              onClick={handleLogout}
+              title="클릭하여 로그아웃"
+              style={{fontSize:10,color:"#7B9EC0",fontFamily:font.mono,
+                cursor:"pointer",maxWidth:120,overflow:"hidden",
+                textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+              {authUser.email}
+            </div>
+          )}
+          {authState === "unauthenticated" && (
+            <button
+              onClick={handleLogin}
+              style={{padding:"6px 11px",background:"none",
+                border:"1px solid #4A6FA5",borderRadius:8,fontSize:10,
+                color:"#7B9EC0",fontFamily:font.mono,cursor:"pointer"}}>
+              로그인
             </button>
           )}
         </div>
