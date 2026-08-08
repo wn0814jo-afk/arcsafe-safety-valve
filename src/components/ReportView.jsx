@@ -49,6 +49,18 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
   const failCount = r.checklist ? Object.values(r.checklist).filter(v=>!v).length : 0;
   const nextStates = WF_TRANSITIONS[snap.workflow] || [];
 
+  // PDF 리포트 — AuditEvidence와 동일한 ReportPackage 사용 (계산 재실행 없음, 표시된 Snapshot과 동일 identity)
+  const pkg = buildReportPackage(snap, {
+    approvalRecords: approvals,
+    approvalVerificationResults: verifiedResults,
+  });
+  const pkgValid = validateReportPackage(pkg);
+  const pkgIdentityMatch = pkg.identity?.snapshotHash === snap.snapshotHash;
+  const handleExportPDF = () => {
+    const res = renderPDF(pkg);
+    if (!res.ok) alert(`PDF 생성 실패: ${res.reason}`);
+  };
+
   const TAB = (id, label) => (
     <button key={id} onClick={()=>setReportTab(id)} style={{padding:"9px 14px",border:"none",cursor:"pointer",borderRadius:9,fontWeight:700,fontSize:11,fontFamily:font.mono,
       background:reportTab===id?T.navyLight:T.bg,color:reportTab===id?T.white:T.sub,
@@ -96,20 +108,33 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
 
       {/* 적정성 결론 — 화면 진입 즉시 보이는 최종 판정 */}
       <div style={{background:allOK?T.greenBg:T.redBg,border:`2px solid ${allOK?T.green:T.red}`,
-        borderRadius:14,padding:"14px 16px",marginBottom:12,display:"flex",alignItems:"center",gap:12}}>
-        <div style={{width:34,height:34,borderRadius:"50%",background:allOK?T.green:T.red,
-          color:T.white,display:"flex",alignItems:"center",justifyContent:"center",
-          fontSize:17,fontWeight:900,flexShrink:0}}>{allOK?"✓":"✗"}</div>
-        <div>
-          <div style={{fontSize:14,fontWeight:900,color:allOK?T.greenDk:T.redDk,fontFamily:font.sans}}>
-            {allOK
-              ? "적정 — 이 사양은 API 520/521 기준을 모두 충족합니다"
-              : `부적정 — 기준 미충족 항목이 있어 조치가 필요합니다 (${failCount}건)`}
-          </div>
-          <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginTop:3}}>
-            아래 "✅ PSM 체크" 탭에서 항목별 근거를 확인하세요
+        borderRadius:14,padding:"14px 16px",marginBottom:12,display:"flex",alignItems:"center",
+        justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{width:34,height:34,borderRadius:"50%",background:allOK?T.green:T.red,
+            color:T.white,display:"flex",alignItems:"center",justifyContent:"center",
+            fontSize:17,fontWeight:900,flexShrink:0}}>{allOK?"✓":"✗"}</div>
+          <div>
+            <div style={{fontSize:14,fontWeight:900,color:allOK?T.greenDk:T.redDk,fontFamily:font.sans}}>
+              {allOK
+                ? "적정 — 이 사양은 API 520/521 기준을 모두 충족합니다"
+                : `부적정 — 기준 미충족 항목이 있어 조치가 필요합니다 (${failCount}건)`}
+            </div>
+            <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginTop:3}}>
+              아래 "✅ PSM 체크" 탭에서 항목별 근거를 확인하세요
+            </div>
           </div>
         </div>
+        <button onClick={handleExportPDF}
+          disabled={!pkgValid.ok || !pkgIdentityMatch}
+          title={(!pkgValid.ok || !pkgIdentityMatch) ? "리포트 데이터 무결성 확인 중..." : "PDF 리포트 다운로드"}
+          style={{padding:"10px 16px",background:(pkgValid.ok&&pkgIdentityMatch)?T.navy:T.gray,
+            color:T.white,border:"none",borderRadius:10,fontSize:12,fontWeight:900,
+            fontFamily:font.mono,cursor:(pkgValid.ok&&pkgIdentityMatch)?"pointer":"not-allowed",
+            boxShadow:(pkgValid.ok&&pkgIdentityMatch)?`0 3px 0 ${T.navyMid}`:"none",
+            whiteSpace:"nowrap"}}>
+          📄 PDF 리포트 다운로드
+        </button>
       </div>
 
       {/* 리포트 탭 */}
