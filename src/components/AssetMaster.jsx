@@ -708,14 +708,13 @@ function AssetMaster({ equipments, dischargeSystems,
       {/* Equipment 탭 */}
       {tab === "equipment" && (
         <>
-          {!showEqForm && !editingEq && (
-            <button onClick={()=>setShowEqForm(true)}
-              style={{width:"100%",padding:"12px",background:T.navyLight,color:T.white,
-                border:"none",borderRadius:12,fontSize:13,fontWeight:900,
-                fontFamily:font.sans,cursor:"pointer",boxShadow:`0 4px 0 ${T.navy}`,
-                marginBottom:12}}>
-              + 새 설비 등록
-            </button>
+          {!showEqForm && !editingEq && equipments.length > 0 && (
+            <div style={{background:T.blueBg,border:`1px solid ${T.blue}`,borderRadius:10,
+              padding:"10px 14px",marginBottom:12,fontSize:12,color:T.navyLight,
+              fontFamily:font.sans,fontWeight:600}}>
+              ↓ 아래 설비 카드에서 <b>"이 설비로 검토 시작"</b>을 누르면 그 설비 사양이 자동으로
+              채워진 검토 화면으로 넘어갑니다.
+            </div>
           )}
           {showEqForm && (
             <div style={{marginBottom:12}}>
@@ -752,6 +751,14 @@ function AssetMaster({ equipments, dischargeSystems,
                 onSelect={onSelectEquipment} onEdit={setEditingEq}
                 onViewHistory={(e)=>setViewingEqHistory(e.id)}/>
             ))
+          )}
+          {!showEqForm && !editingEq && (
+            <button onClick={()=>setShowEqForm(true)}
+              style={{width:"100%",padding:"10px",background:"transparent",color:T.sub,
+                border:`1px dashed ${T.border}`,borderRadius:12,fontSize:12,fontWeight:700,
+                fontFamily:font.sans,cursor:"pointer",marginTop:equipments.length?12:0}}>
+              + 새 설비 등록 (목록에 없는 신규 설비만)
+            </button>
           )}
         </>
       )}
