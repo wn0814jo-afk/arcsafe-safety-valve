@@ -64,12 +64,53 @@ function CaseCard({ c, onOpen }) {
   );
 }
 
+function AboutBanner() {
+  const [open, setOpen] = useState(true);
+  if (!open) {
+    return (
+      <button onClick={()=>setOpen(true)}
+        style={{display:"block",width:"100%",textAlign:"left",background:"transparent",
+          border:`1px dashed ${T.border}`,borderRadius:10,padding:"6px 10px",
+          marginBottom:12,fontSize:10,color:T.sub,fontFamily:font.sans,cursor:"pointer"}}>
+        ⓘ 이 앱은 무엇을 위한 도구인가요?
+      </button>
+    );
+  }
+  return (
+    <div style={{background:T.navy,borderRadius:14,padding:"14px 16px",marginBottom:14,
+      boxShadow:"0 2px 8px #0002"}}>
+      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between"}}>
+        <div style={{fontSize:12,fontWeight:900,color:T.white,fontFamily:font.sans,lineHeight:1.5}}>
+          PSV(안전밸브) 사양이 API 520/521 기준에 맞는지 검토하고, 그 근거를 기록으로 남기는 도구입니다.
+        </div>
+        <button onClick={()=>setOpen(false)}
+          style={{background:"transparent",border:"none",color:T.blueBg,fontSize:14,
+            cursor:"pointer",padding:0,marginLeft:10,lineHeight:1}}>×</button>
+      </div>
+      <div style={{marginTop:10,display:"flex",flexDirection:"column",gap:6}}>
+        {[
+          ["🧮","설비를 고르면 사양이 자동으로 채워지고, 오리피스·여유율·면적이 계산됩니다"],
+          ["📄","검토가 끝나면 결과 리포트와 검토 이력(Snapshot)이 남습니다"],
+          ["🔁","사양이 바뀌면 MOC 번호로 근거를 남기고 개정 이력을 추적합니다"],
+        ].map(([icon,txt])=>(
+          <div key={txt} style={{display:"flex",gap:8,alignItems:"flex-start"}}>
+            <span style={{fontSize:13}}>{icon}</span>
+            <span style={{fontSize:11,color:T.blueBg,fontFamily:font.sans,lineHeight:1.5}}>{txt}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Dashboard({ cases, onOpenCase, onNewCase, onOpenAssetMaster }) {
   const [reviewType, setReviewType] = useState("정기 PSM 검토");
   const REVIEW_OPTIONS = ["정기 PSM 검토","최초 설치 검토","변경 검토 (MOC)","사고 후 검토"];
 
   return (
     <div>
+      <AboutBanner/>
+
       {/* 메인 CTA — 설비대장에서 선택 */}
       <button onClick={onOpenAssetMaster}
         style={{width:"100%",padding:"16px",background:T.navyLight,color:T.white,
