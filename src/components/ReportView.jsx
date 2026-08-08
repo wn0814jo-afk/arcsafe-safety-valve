@@ -4,7 +4,7 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
   const [simMode, setSimMode] = useState("IDLE");
   const [sim, setSim] = useState({pressure:2.0,direction:1,valveOpen:false,ratio:0});
   const [hist, setHist] = useState([2.0]);
-  const [reportTab, setReportTab] = useState("sim");
+  const [reportTab, setReportTab] = useState("checklist");
   const simRef = useRef(null);
 
   // 서명 검증은 여기서 1회만 계산 — ApprovalHistory와 AuditEvidence가 결과 공유
@@ -46,6 +46,7 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
 
   const r = snap.result;
   const allOK = r.checklist && Object.values(r.checklist).every(Boolean);
+  const failCount = r.checklist ? Object.values(r.checklist).filter(v=>!v).length : 0;
   const nextStates = WF_TRANSITIONS[snap.workflow] || [];
 
   const TAB = (id, label) => (
@@ -90,6 +91,24 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
               <div style={{fontSize:16,fontWeight:900,color:T.navyLight,fontFamily:font.mono,marginTop:2}}>{v}</div>
             </div>
           ))}
+        </div>
+      </div>
+
+      {/* 적정성 결론 — 화면 진입 즉시 보이는 최종 판정 */}
+      <div style={{background:allOK?T.greenBg:T.redBg,border:`2px solid ${allOK?T.green:T.red}`,
+        borderRadius:14,padding:"14px 16px",marginBottom:12,display:"flex",alignItems:"center",gap:12}}>
+        <div style={{width:34,height:34,borderRadius:"50%",background:allOK?T.green:T.red,
+          color:T.white,display:"flex",alignItems:"center",justifyContent:"center",
+          fontSize:17,fontWeight:900,flexShrink:0}}>{allOK?"✓":"✗"}</div>
+        <div>
+          <div style={{fontSize:14,fontWeight:900,color:allOK?T.greenDk:T.redDk,fontFamily:font.sans}}>
+            {allOK
+              ? "적정 — 이 사양은 API 520/521 기준을 모두 충족합니다"
+              : `부적정 — 기준 미충족 항목이 있어 조치가 필요합니다 (${failCount}건)`}
+          </div>
+          <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginTop:3}}>
+            아래 "✅ PSM 체크" 탭에서 항목별 근거를 확인하세요
+          </div>
         </div>
       </div>
 
