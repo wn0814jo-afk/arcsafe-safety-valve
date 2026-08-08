@@ -185,10 +185,10 @@ function EvidenceCard({ step }) {
 function ChecklistRenderer({ checklist }) {
   const items = [
     { key:"capacityOK",     label:"방출용량 충족",    detail:"선정 오리피스 면적 ≥ 필요 면적" },
-    { key:"backPressureOK", label:"배압 허용 범위",    detail:`P2/P1 < ${(API_CONST.BACKPRESSURE_SPRING*100).toFixed(0)}% (스프링식 기준)` },
-    { key:"mawpOK",         label:"설정압 ≤ MAWP",    detail:"P1 ≤ 최고허용운전압력" },
-    { key:"kdOK",           label:"Kd ≥ 0.9",         detail:"방출계수 최소 권고값 충족" },
-    { key:"marginOK",       label:"여유율 ≥ 1.0",     detail:"오리피스 면적 여유율" },
+    { key:"backPressureOK", label:"배압(背壓) 허용 범위 이내", detail:`P2/P1 < ${(API_CONST.BACKPRESSURE_SPRING*100).toFixed(0)}% (스프링식 기준) — 배출 배관이 밸브 작동을 방해하지 않는지 확인` },
+    { key:"mawpOK",         label:"설정압 ≤ 최고허용운전압력(MAWP)",    detail:"설정압이 설비가 견딜 수 있는 최고압력을 넘지 않는지 확인" },
+    { key:"kdOK",           label:"방출계수 Kd 충족 (≥ 0.9)",         detail:"밸브가 실제로 얼마나 잘 배출하는지 나타내는 보정값, 최소 권고 기준 충족" },
+    { key:"marginOK",       label:"여유율 충분 (≥ 1.0)",     detail:"필요량보다 여유있게 설계됐는지 — 선정 오리피스 면적의 여유 정도" },
   ];
   return (
     <div>

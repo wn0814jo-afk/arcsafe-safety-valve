@@ -714,8 +714,8 @@ def test_compressibility_contract() -> TestResult:
              "inputs:        Object.freeze({ ...snapshot.inputs })" in pkg_src,
              "ReportPackage가 inputs를 재계산/부분 복사함 — Z 누락 위험")
     tr.check("REPORT_Z_001_pdf_shows_Z",
-             "Compressibility Z" in pdf_src and "inputs?.Z" in pdf_src,
-             "PDF 템플릿에 Compressibility Z 표시가 없음")
+             "압축계수 Z" in pdf_src and "inputs?.Z" in pdf_src,
+             "PDF 템플릿에 압축계수 Z 표시가 없음")
     tr.check("REPORT_Z_001_evidence_shows_Z",
              "fluid.Z" in evid_src,
              "화면 Evidence(evidence.js)에 Z 표시가 없음 — PDF와 화면 근거 불일치 위험")
@@ -2449,11 +2449,15 @@ def test_pdf_renderer_contract() -> TestResult:
              "meta.generatedAt" in template_src,
              "template.js가 generatedAt을 메타데이터로 별도 취급하지 않음")
 
-    # ── PDF-004: 필수 Evidence 5개 섹션 ──────────────────────────
-    for section in ["ASSET", "CALCULATION BASIS", "WORKFLOW DECISION", "APPROVAL", "INTEGRITY"]:
+    # ── PDF-004: 필수 Evidence 5개 섹션 (한글 라벨) ──────────────────
+    for section, keyword in [
+        ("ASSET", "설비 정보"), ("CALCULATION BASIS", "계산 근거"),
+        ("WORKFLOW DECISION", "검토 진행 상태"), ("APPROVAL", "승인 현황"),
+        ("INTEGRITY", "문서 무결성"),
+    ]:
         tr.check(f"PDF_004_section_{section.split()[0]}",
-                  section in template_src,
-                  f"PDF 템플릿에 '{section}' 섹션이 없음")
+                  keyword in template_src,
+                  f"PDF 템플릿에 '{keyword}' 섹션이 없음")
     for field in ["pkg.asset.equipment.tag", "pkg.asset.equipment.revision", "pkg.asset.equipment.mocId",
                   "pkg.calculation.inputs", "pkg.calculation.engineVersion",
                   "pkg.workflow.state", "pkg.identity.snapshotHash", "pkg.meta.packageVersion"]:

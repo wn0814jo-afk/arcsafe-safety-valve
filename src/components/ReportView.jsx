@@ -86,7 +86,7 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
               {WF_LABEL[snap.workflow]}
             </div>
             <div style={{padding:"5px 12px",borderRadius:20,background:allOK?T.greenBg:T.redBg,border:`1.5px solid ${allOK?T.green:T.red}`,fontSize:11,fontWeight:700,color:allOK?T.green:T.red,fontFamily:font.mono}}>
-              {allOK?"ALL PASS":"FAIL"}
+              {allOK?"적정":"부적정"}
             </div>
           </div>
         </div>

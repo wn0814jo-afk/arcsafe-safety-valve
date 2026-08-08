@@ -29,7 +29,7 @@ function CaseCard({ c, onOpen }) {
               background:allOK?T.greenBg:T.redBg,
               border:`1px solid ${allOK?T.green:T.red}`,
               fontSize:10,fontWeight:700,color:allOK?T.green:T.red,fontFamily:font.mono}}>
-              {allOK?"PASS":"FAIL"}
+              {allOK?"적정":"부적정"}
             </span>
           )}
           <span style={{padding:"3px 9px",borderRadius:12,

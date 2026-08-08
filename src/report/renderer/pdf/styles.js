@@ -26,7 +26,7 @@ const PDF_STYLES = `
     padding: 3px 0; border-bottom: 1px dotted #e2e8f0; font-size: 11px;
   }
   .pdf-row:last-child { border-bottom: none; }
-  .pdf-row .k { color: #64748b; font-family: monospace; }
+  .pdf-row .k { color: #475569; font-family: 'Pretendard','Malgun Gothic',sans-serif; }
   .pdf-row .v { font-weight: 700; font-family: monospace; }
   .pdf-badge-ok    { color: #16a34a; font-weight: 700; }
   .pdf-badge-fail  { color: #dc2626; font-weight: 700; }
