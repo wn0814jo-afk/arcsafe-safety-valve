@@ -350,6 +350,51 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
           </div>
         )}
       </div>
+
+      {/* ── ACCUMULATION-001: 축적압력 허용성 검증 — sizing과 별개 정책 ── */}
+      <div style={{background:T.cardBg,borderRadius:10,padding:"10px 12px",marginBottom:10,
+        border:`1.5px solid ${T.border}`}}>
+        <div style={{fontSize:9,color:T.gray,fontFamily:font.mono,marginBottom:6}}>
+          ACCUMULATION GUARDRAIL — 이 Overpressure가 시나리오상 허용되는지 검증 (KOSHA D-18 §4.4)
+        </div>
+        <div style={{display:"flex",gap:8,marginBottom:6}}>
+          {[[1,"밸브 1개 설치"],[2,"밸브 2개 이상 설치"]].map(([v,l])=>(
+            <div key={v} onClick={()=>onChange("valveCount",v)}
+              style={{flex:1,padding:"8px 10px",borderRadius:8,cursor:"pointer",
+                border:`2px solid ${(inputs.valveCount||1)===v?T.navyLight:T.border}`,
+                background:(inputs.valveCount||1)===v?T.navy+"0D":T.bg}}>
+              <div style={{fontSize:11,fontWeight:900,color:(inputs.valveCount||1)===v?T.navy:T.text,fontFamily:font.sans}}>{l}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:8,marginBottom:8}}>
+          {[[false,"화재 보호 목적 아님"],[true,"화재 보호 목적"]].map(([v,l])=>(
+            <div key={String(v)} onClick={()=>onChange("fireScenario",v)}
+              style={{flex:1,padding:"8px 10px",borderRadius:8,cursor:"pointer",
+                border:`2px solid ${!!inputs.fireScenario===v?T.navyLight:T.border}`,
+                background:!!inputs.fireScenario===v?T.navy+"0D":T.bg}}>
+              <div style={{fontSize:11,fontWeight:900,color:!!inputs.fireScenario===v?T.navy:T.text,fontFamily:font.sans}}>{l}</div>
+            </div>
+          ))}
+        </div>
+        {(() => {
+          const allowRatio = getAllowableAccumulationRatio(!!inputs.fireScenario, inputs.valveCount || 1);
+          const actualRatio = typeof inputs.OP === "number" && !isNaN(inputs.OP) ? 1 + inputs.OP/100 : null;
+          const go = actualRatio != null && actualRatio <= allowRatio;
+          return actualRatio == null ? null : (
+            <div style={{fontSize:11,fontWeight:900,fontFamily:font.mono,
+              color: go ? T.green : T.red}}>
+              {go ? "✓ GO" : "✗ NO-GO"} — 현재 축적압력 {(actualRatio*100).toFixed(0)}%
+              {" "}(허용 한도 {(allowRatio*100).toFixed(0)}%, KOSHA D-18 §4.4)
+              {!go && <span style={{display:"block",fontWeight:600,color:T.sub,marginTop:2}}>
+                입력 축적압력이 적용 기준을 초과합니다 — 밸브 수량/화재 시나리오를 재확인하거나
+                설비대장에서 Overpressure 값을 낮춰야 합니다. 자동 보정하지 않습니다.
+              </span>}
+            </div>
+          );
+        })()}
+      </div>
+
       <DecisionSlider
         param="P2" label="배압 (Back Pressure)" unit="barg"
         value={inputs.P2} min={0} max={5} step={0.05}

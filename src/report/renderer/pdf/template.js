@@ -57,16 +57,29 @@ const PDF_CHECKLIST_ITEMS = [
   { key:"mawpOK",         label:"설정압이 최고허용운전압력(MAWP) 이내",    detail:"설정압이 설비가 견딜 수 있는 최고압력을 넘지 않는지 확인" },
   { key:"kdOK",           label:"방출계수 Kd 충족",         detail:"밸브가 실제로 얼마나 잘 배출하는지 나타내는 보정값, 최소 권고 기준(0.9 이상) 충족 여부" },
   { key:"marginOK",       label:"여유율 충분",     detail:"필요량보다 여유있게 설계됐는지 — 선정 오리피스 면적의 여유 정도(1.0배 이상)" },
+  { key:"accumulationOK", label:"축적압력 허용 범위 이내 (Overpressure Guardrail)",
+    detail:"실제 축적압력(1+OP/100)이 밸브 개수·화재 시나리오에 따른 허용 한도를 넘지 않는지 확인 — 초과 시 자동 보정 없이 NO-GO" },
 ];
 
-function _pdfVerdictSection(checklist, backpress) {
+function _pdfVerdictSection(checklist, backpress, accumulation) {
   if (!checklist) return "";
   const allOK = Object.values(checklist).every(Boolean);
   const vtLabel = backpress?.valveType==="BELLOWS" ? "벨로우즈형(밸런스형)" : "스프링식";
   const allowPct = backpress?.allowableRatio!=null ? (backpress.allowableRatio*100).toFixed(0) : "10";
-  const items = PDF_CHECKLIST_ITEMS.map(it => it.key === "backPressureOK"
-    ? { ...it, detail:`배출 배관에 걸리는 반대 압력이 밸브 작동을 방해하지 않는 범위인지 확인 — ${vtLabel} 기준 설정압력의 ${allowPct}% 이내 (KOSHA D-18 §7.2(4))` }
-    : it);
+  const accAllowPct = accumulation?.allowableRatio!=null ? (accumulation.allowableRatio*100).toFixed(0) : "110";
+  const accScenarioLabel = accumulation
+    ? (accumulation.fireScenario ? "화재 보호 목적" : `비화재, 밸브 ${accumulation.valveCount>=2?"2개 이상":"1개"} 설치`)
+    : "";
+  const accActualPct = accumulation?.actualRatio!=null ? (accumulation.actualRatio*100).toFixed(0) : null;
+  const items = PDF_CHECKLIST_ITEMS.map(it => {
+    if (it.key === "backPressureOK") {
+      return { ...it, detail:`배출 배관에 걸리는 반대 압력이 밸브 작동을 방해하지 않는 범위인지 확인 — ${vtLabel} 기준 설정압력의 ${allowPct}% 이내 (KOSHA D-18 §7.2(4))` };
+    }
+    if (it.key === "accumulationOK") {
+      return { ...it, detail:`현재 축적압력 ${accActualPct ?? "—"}% — ${accScenarioLabel} 기준 허용 한도 ${accAllowPct}% 이내인지 확인 (KOSHA D-18 §4.4). 초과 시 자동 보정 없이 NO-GO` };
+    }
+    return it;
+  });
   const rows = items.map(({key,label,detail}) => {
     const ok = checklist[key];
     return `<div class="pdf-row" style="align-items:flex-start;">
@@ -111,7 +124,14 @@ function buildPDFHtml(reportPackage) {
     _pdfRow("배출 헤더 압력", pkg.asset.dischargeSystem.headerPressure != null ? `${pkg.asset.dischargeSystem.headerPressure} bar(게이지압)` : "—") +
     _pdfRow("배관 길이",     pkg.asset.dischargeSystem.L != null ? `${pkg.asset.dischargeSystem.L} m` : "—") +
     _pdfRow("배관 내경",        pkg.asset.dischargeSystem.D != null ? `${Math.round(pkg.asset.dischargeSystem.D*1000)} mm` : "—") +
-    _pdfRow("배관 부속 저항계수 (ΣK)",      pkg.asset.dischargeSystem.fittingsK ?? "—");
+    _pdfRow("배관 부속 저항계수 (ΣK)",      pkg.asset.dischargeSystem.fittingsK ?? "—") +
+    `<div style="margin-top:6px;font-size:9px;font-weight:700;color:#64748b;letter-spacing:0.5px;">축적압력 산정 근거 — 이 Overpressure가 시나리오상 허용되는지 확인하는 값들 (KOSHA D-18 §4.4)</div>` +
+    _pdfRow("밸브 설치 수량", pkg.calculation.inputs?.valveCount >= 2 ? "2개 이상" : "1개") +
+    _pdfRow("설치 목적", pkg.calculation.inputs?.fireScenario === true ? "화재 보호 목적" : "화재 보호 목적 아님") +
+    _pdfRow("초과압력 Overpressure (OP)", pkg.calculation.inputs?.OP != null ? `${pkg.calculation.inputs.OP}%` : "—") +
+    _pdfRow("실제/허용 축적압력", pkg.calculation.result?.stepData?.accumulation
+      ? `${(pkg.calculation.result.stepData.accumulation.actualRatio*100).toFixed(0)}% / ${(pkg.calculation.result.stepData.accumulation.allowableRatio*100).toFixed(0)}% 이하`
+      : "—");
 
   const reasons = (pkg.workflow.decision?.reasons || [])
     .map(r => `<div class="pdf-reason-item">· ${r.field} ${r.from}${r.unit||""} → ${r.to}${r.unit||""}</div>`)
@@ -148,7 +168,7 @@ function buildPDFHtml(reportPackage) {
   <div class="pdf-title">PSV 검토 감사 보고서</div>
   <div class="pdf-subtitle">${pkg.identity.caseId} · ${pkg.identity.snapshotId}</div>
 
-  ${_pdfVerdictSection(pkg.calculation.result?.checklist, pkg.calculation.result?.stepData?.backpress)}
+  ${_pdfVerdictSection(pkg.calculation.result?.checklist, pkg.calculation.result?.stepData?.backpress, pkg.calculation.result?.stepData?.accumulation)}
   ${_pdfSection("① 설비 정보", assetBody)}
   ${_pdfSection("② 계산 근거", calcBody)}
   ${_pdfSection("③ 검토 진행 상태", wfBody)}

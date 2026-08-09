@@ -2,7 +2,7 @@
 // ════════════════════════════════════════════════════════════════
 function buildEvidence(sd) {
   if (!sd) return [];
-  const { fluid, cCoeff, pressure, orifice, selection, backpress } = sd;
+  const { fluid, cCoeff, pressure, orifice, selection, backpress, accumulation } = sd;
   return [
     {
       id:1, title:"유체 물성 확인",
@@ -45,6 +45,19 @@ function buildEvidence(sd) {
       result:`P2/Pset = ${(backpress.ratio*100).toFixed(1)}% → ${backpress.ratio < backpress.allowableRatio ? "적합 ✓" : "초과 ✗ — 조치 필요"}`,
       detail:`선택된 밸브 형식: ${backpress.valveType==="BELLOWS"?"벨로우즈형(밸런스형)":"스프링식"}. 배압이 이 한도를 초과하면 밸브가 제대로 재폐되지 않거나 용량이 저하될 수 있음. 근거: ${backpress.source||"KOSHA GUIDE D-18-2020 §7.2(4)"}`,
       ok: backpress.ratio < backpress.allowableRatio,
+    },
+    {
+      id:7, title:"축적압력 허용성 검증 (Overpressure Guardrail)",
+      formula:accumulation
+        ? `1 + OP/100 ≤ ${(accumulation.allowableRatio*100).toFixed(0)}% (${accumulation.fireScenario?"화재 보호 목적":`비화재, 밸브 ${accumulation.valveCount>=2?"2개 이상":"1개"} 설치`} 기준 — KOSHA GUIDE D-18-2020 §4.4)`
+        : "",
+      result:accumulation
+        ? `실제 축적압력 = ${(accumulation.actualRatio*100).toFixed(0)}% → ${accumulation.ok ? "GO ✓" : "NO-GO ✗ — 조치 필요"}`
+        : "",
+      detail:accumulation
+        ? `sizing(Relieving Pressure) 산정에 쓰인 것과 같은 Overpressure(OP=${accumulation.OP}%)를 여기서는 다른 질문에 사용 — "이 시나리오(밸브개수·화재여부)에서 허용되는 축적압력 상한을 넘는가?"를 검증한다. sizing 결과(오리피스/필요면적)에는 영향 없음. 초과 시 자동 보정하지 않고 NO-GO로 표시. 근거: ${accumulation.source}`
+        : "",
+      ok: accumulation ? accumulation.ok : true,
     },
   ];
 }

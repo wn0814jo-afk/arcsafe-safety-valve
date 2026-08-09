@@ -33,7 +33,7 @@ function _assetHash(equipment, dischargeSystem) {
   return (h >>> 0).toString(16).padStart(8, '0');
 }
 
-const SNAPSHOT_ENGINE_VERSION = "1.4.0";
+const SNAPSHOT_ENGINE_VERSION = "1.5.0";
 
 // Snapshot이 기록하는 trigger fields — 감사 시 "어떤 규칙으로 판단했는지" 재현용
 const WORKFLOW_TRIGGER_FIELDS_SNAPSHOT = [

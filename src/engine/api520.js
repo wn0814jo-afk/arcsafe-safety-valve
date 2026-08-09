@@ -13,6 +13,17 @@
 //   Asset이 아니라 Case 소유 — 유체·운전조건에 따라 케이스마다 달라짐.
 //   기본값 1.00은 UI가 명시적으로 대입하며 Engine은 몰래 채우지 않는다.
 //   validateInputs가 Z 누락을 거부하므로 이 필드는 계약 변경이다.
+// ENGINE_VERSION 1.5.0 — ACCUMULATION-001
+//   축적압력 허용한계(overpressure guardrail)를 밸브 개수(valveCount)+
+//   화재 보호 목적 여부(fireScenario)의 정책 테이블로 신설.
+//   Case 입력: valveCount, fireScenario (신규) + 기존 OP(Asset 소유,
+//   Case inputs로 복사되어 옴 — 신규 필드 아님, 재사용).
+//   근거: KOSHA GUIDE D-18-2020 §4.4, <표 1> — 비화재/단일 110%,
+//   비화재/2개이상 116%, 화재(수량무관) 121%.
+//   sizing(RELIEVING_PRESSURE의 P1abs 산정)과 이 가드레일은 같은 OP
+//   값을 쓰지만 서로 다른 질문에 답하는 별개 계산 — Trace에서 분리.
+//   허용치 초과 시 자동으로 OP를 낮추는 보정은 하지 않는다 — checklist에
+//   accumulationOK:false로 명시적 NO-GO만 표시(fail-fast, 결정론 원칙).
 // ENGINE_VERSION 1.4.0 — VALVE-TYPE-001
 //   배압 허용비율(10%)을 스프링식 전용 상수로 하드코딩했던 것을 밸브
 //   형식(valveType)별 정책 테이블(BACKPRESSURE_POLICY)로 승격.
@@ -22,7 +33,7 @@
 //   (밸런스형) 50%. 파일럿식은 원문에 수치 기준이 없어 이번 버전에서
 //   지원하지 않음 — 미지정/미지원 valveType은 SPRING(더 엄격한 기준,
 //   안전측)으로 처리한다. Pilot 기준은 별도 확인 후 후속 버전에서 추가.
-const ENGINE_VERSION = "1.4.0";
+const ENGINE_VERSION = "1.5.0";
 
 // ── TRACE-SCHEMA-001: Calculation Trace 스키마 고정 ────────────
 // Trace는 단순 로그가 아니라 감사 증거(Report Evidence)다. 각 항목은
@@ -65,6 +76,18 @@ const API_CONST = {
     BELLOWS: 0.50,
   },
   BACKPRESSURE_POLICY_SOURCE: "KOSHA GUIDE D-18-2020 §7.2(4)",
+  // ACCUMULATION-001: 축적압력 허용한계는 밸브 개수(valveCount) + 화재
+  // 보호 목적 여부(fireScenario)의 정책값 — 엔진이 정책 테이블을 소유한다.
+  // 출처: KOSHA GUIDE D-18-2020 §4.4 및 <표 1>.
+  //   화재 보호 목적이 아닌 경우: 밸브 1개 설치 → 110% / 2개 이상 설치 → 116%
+  //   화재 보호 목적인 경우: 밸브 수량과 무관하게 → 121%
+  // (모든 수치는 설계압력 또는 최고허용압력(MAWP)에 대한 %)
+  ACCUMULATION_POLICY: {
+    NON_FIRE_SINGLE: 1.10,
+    NON_FIRE_MULTI:  1.16,
+    FIRE:            1.21,
+  },
+  ACCUMULATION_POLICY_SOURCE: "KOSHA GUIDE D-18-2020 §4.4, <표 1>",
   RD_KD_FACTOR:        0.9,
   KD_MIN:              0.9,
   MARGIN_MIN:          1.0,
@@ -80,6 +103,18 @@ const API_CONST = {
 function getAllowableBackpressureRatio(valveType) {
   const vt = String(valveType || "SPRING").toUpperCase();
   return API_CONST.BACKPRESSURE_POLICY[vt] ?? API_CONST.BACKPRESSURE_POLICY.SPRING;
+}
+
+// ACCUMULATION-001: (화재여부, 밸브개수) → 허용 축적압력비.
+// 미지정 fireScenario는 false(비화재, 더 엄격한 쪽)로, 미지정/미인식
+// valveCount는 1(단일 밸브, 가장 엄격한 110%)로 처리한다 — 안전측 기본값,
+// 과거 Snapshot과의 하위호환도 겸한다.
+function getAllowableAccumulationRatio(fireScenario, valveCount) {
+  if (fireScenario === true) return API_CONST.ACCUMULATION_POLICY.FIRE;
+  const vc = Number(valveCount);
+  return (Number.isFinite(vc) && vc >= 2)
+    ? API_CONST.ACCUMULATION_POLICY.NON_FIRE_MULTI
+    : API_CONST.ACCUMULATION_POLICY.NON_FIRE_SINGLE;
 }
 
 const API526_ORIFICES = [
@@ -118,6 +153,17 @@ function validateInputs(inp) {
       return { ok: false, field:"valveType", reason:"unsupported_valve_type" };
     }
   }
+  // ACCUMULATION-001: valveCount/fireScenario도 선택적 — 없으면 안전측
+  // 기본값(단일 밸브·비화재)으로 처리하되, 값이 있는데 형식이 틀리면 거부.
+  if (inp.valveCount !== undefined && inp.valveCount !== null && inp.valveCount !== "") {
+    const vc = Number(inp.valveCount);
+    if (!Number.isFinite(vc) || !Number.isInteger(vc) || vc < 1) {
+      return { ok: false, field:"valveCount", reason:"must_be_positive_integer" };
+    }
+  }
+  if (inp.fireScenario !== undefined && inp.fireScenario !== null && typeof inp.fireScenario !== "boolean") {
+    return { ok: false, field:"fireScenario", reason:"must_be_boolean" };
+  }
   return { ok: true };
 }
 
@@ -132,6 +178,13 @@ function api520Engine(inp, deviceType) {
   // VALVE-TYPE-001: valveType은 문자열 Case 입력 — 위 숫자 변환 대상에서 제외.
   const valveType = String(inp.valveType || "SPRING").toUpperCase();
   const allowableBackpressureRatio = getAllowableBackpressureRatio(valveType);
+
+  // ACCUMULATION-001: valveCount/fireScenario도 숫자 일괄변환 대상에서 제외
+  // (fireScenario는 boolean, valveCount는 정수 개수 — 물리량이 아님).
+  const valveCount   = (inp.valveCount !== undefined && inp.valveCount !== null && inp.valveCount !== "")
+    ? Number(inp.valveCount) : 1;
+  const fireScenario = inp.fireScenario === true;
+  const allowableAccumulationRatio = getAllowableAccumulationRatio(fireScenario, valveCount);
 
   // ── COMPRESSIBILITY-001: Z는 Asset이 아니라 Calculation Input ──
   // 설비 속성이 아니라 유체·운전조건에 따라 케이스마다 달라지는 계산
@@ -164,12 +217,23 @@ function api520Engine(inp, deviceType) {
   const backPressureRatio = P2 / Pset;
   const criticalPressRatio= Math.pow(2/(k+1), k/(k-1));
 
+  // ── ACCUMULATION-001: 축적압력 허용성 검증 (sizing과는 별개 관심사) ──
+  // 위 RELIEVING_PRESSURE 단계의 OP는 P1abs(분출압력) 산정에 쓰인다 —
+  // "이 압력에서 오리피스를 얼마나 크게 잡을지"의 입력값이다.
+  // 여기서는 같은 OP 값을 다른 질문에 쓴다 — "이 축적압력(100+OP%)이
+  // 이 시나리오(밸브개수·화재여부)에서 허용되는 상한을 넘는가?"라는
+  // 별도의 정책 검증이며, sizing 결과(areaCm2/orifice)에는 영향을 주지
+  // 않는다. 초과해도 자동으로 OP를 낮추지 않는다 — NO-GO만 표시한다.
+  const actualAccumulationRatio = 1 + OP / 100;
+  const accumulationOK = actualAccumulationRatio <= allowableAccumulationRatio;
+
   const checklist = {
     capacityOK:     selected.area >= areaCm2,
     backPressureOK: backPressureRatio < allowableBackpressureRatio,
     mawpOK:         Pset <= mawp,
     kdOK:           Kd >= API_CONST.KD_MIN,
     marginOK:       margin >= API_CONST.MARGIN_MIN,
+    accumulationOK,
   };
 
   // ── Calculation Trace — 감사/Report Evidence 전용, UI 표시용 아님 ──
@@ -187,6 +251,12 @@ function api520Engine(inp, deviceType) {
     { step: "BACKPRESSURE_POLICY", value: allowableBackpressureRatio, unit: "",
       formula: "valveType → KOSHA GUIDE D-18-2020 §7.2(4) 허용비율",
       inputs: { valveType, allowableRatio: allowableBackpressureRatio, source: API_CONST.BACKPRESSURE_POLICY_SOURCE } },
+    { step: "ACCUMULATION_POLICY", value: allowableAccumulationRatio, unit: "",
+      formula: "fireScenario+valveCount → KOSHA D-18-2020 §4.4 <표1> 허용 축적압력",
+      inputs: { fireScenario, valveCount, allowableRatio: allowableAccumulationRatio, source: API_CONST.ACCUMULATION_POLICY_SOURCE } },
+    { step: "ACCUMULATION_GUARDRAIL", value: actualAccumulationRatio, unit: "",
+      formula: "실제 축적압력비 = 1 + OP/100 (RELIEVING_PRESSURE의 OP와 동일 값, 다른 검증 목적)",
+      inputs: { OP, actualRatio: actualAccumulationRatio, allowableRatio: allowableAccumulationRatio, ok: accumulationOK } },
   ];
 
   const stepData = {
@@ -196,6 +266,8 @@ function api520Engine(inp, deviceType) {
     orifice:   { areaCm2, W, P1abs, KdEff, Kb, isRD: deviceType === "ruptureDisk" },
     selection: { selected, areaCm2, margin },
     backpress: { ratio: backPressureRatio, valveType, allowableRatio: allowableBackpressureRatio, source: API_CONST.BACKPRESSURE_POLICY_SOURCE },
+    accumulation: { fireScenario, valveCount, allowableRatio: allowableAccumulationRatio,
+      actualRatio: actualAccumulationRatio, ok: accumulationOK, OP, source: API_CONST.ACCUMULATION_POLICY_SOURCE },
   };
 
   return { valid: true, areaCm2, selected, margin, C, P1abs, backPressureRatio, checklist, stepData, trace };

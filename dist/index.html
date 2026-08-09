@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:927eb5707bdb\n\n' +
+    box.textContent = '[ERROR] BUILD:ab68153a15a4\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:927eb5707bdb\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:ab68153a15a4\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:927eb5707bdb | 2026-08-09T15:23:25Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:ab68153a15a4 | 2026-08-09T21:33:03Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "927eb5707bdb";
+const __BUILD_HASH__ = "ab68153a15a4";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -80,7 +80,8 @@ const font = { mono: "'JetBrains Mono','Courier New',monospace", sans: "'Noto Sa
 // InputView, CaseView 양쪽에서 사용 (constants에 위치해 BUILD_ORDER 최상단 보장)
 const R201_DEFAULTS = {
   W:2500, P1:5.5, P2:0.3, T:373, M:44, k:1.3, Kd:0.975, Kb:1.0, mawp:6.0, OP:10, Z:1.0,
-  valveType:"SPRING" // VALVE-TYPE-001: 기본값 스프링식 — 기존 케이스와 동일 판정 유지
+  valveType:"SPRING", // VALVE-TYPE-001: 기본값 스프링식 — 기존 케이스와 동일 판정 유지
+  valveCount:1, fireScenario:false // ACCUMULATION-001: 기본값 단일밸브·비화재(가장 엄격, 110%) — 기존 케이스와 동일 판정 유지
 };
 
 
@@ -100,6 +101,17 @@ const R201_DEFAULTS = {
 //   Asset이 아니라 Case 소유 — 유체·운전조건에 따라 케이스마다 달라짐.
 //   기본값 1.00은 UI가 명시적으로 대입하며 Engine은 몰래 채우지 않는다.
 //   validateInputs가 Z 누락을 거부하므로 이 필드는 계약 변경이다.
+// ENGINE_VERSION 1.5.0 — ACCUMULATION-001
+//   축적압력 허용한계(overpressure guardrail)를 밸브 개수(valveCount)+
+//   화재 보호 목적 여부(fireScenario)의 정책 테이블로 신설.
+//   Case 입력: valveCount, fireScenario (신규) + 기존 OP(Asset 소유,
+//   Case inputs로 복사되어 옴 — 신규 필드 아님, 재사용).
+//   근거: KOSHA GUIDE D-18-2020 §4.4, <표 1> — 비화재/단일 110%,
+//   비화재/2개이상 116%, 화재(수량무관) 121%.
+//   sizing(RELIEVING_PRESSURE의 P1abs 산정)과 이 가드레일은 같은 OP
+//   값을 쓰지만 서로 다른 질문에 답하는 별개 계산 — Trace에서 분리.
+//   허용치 초과 시 자동으로 OP를 낮추는 보정은 하지 않는다 — checklist에
+//   accumulationOK:false로 명시적 NO-GO만 표시(fail-fast, 결정론 원칙).
 // ENGINE_VERSION 1.4.0 — VALVE-TYPE-001
 //   배압 허용비율(10%)을 스프링식 전용 상수로 하드코딩했던 것을 밸브
 //   형식(valveType)별 정책 테이블(BACKPRESSURE_POLICY)로 승격.
@@ -109,7 +121,7 @@ const R201_DEFAULTS = {
 //   (밸런스형) 50%. 파일럿식은 원문에 수치 기준이 없어 이번 버전에서
 //   지원하지 않음 — 미지정/미지원 valveType은 SPRING(더 엄격한 기준,
 //   안전측)으로 처리한다. Pilot 기준은 별도 확인 후 후속 버전에서 추가.
-const ENGINE_VERSION = "1.4.0";
+const ENGINE_VERSION = "1.5.0";
 
 // ── TRACE-SCHEMA-001: Calculation Trace 스키마 고정 ────────────
 // Trace는 단순 로그가 아니라 감사 증거(Report Evidence)다. 각 항목은
@@ -152,6 +164,18 @@ const API_CONST = {
     BELLOWS: 0.50,
   },
   BACKPRESSURE_POLICY_SOURCE: "KOSHA GUIDE D-18-2020 §7.2(4)",
+  // ACCUMULATION-001: 축적압력 허용한계는 밸브 개수(valveCount) + 화재
+  // 보호 목적 여부(fireScenario)의 정책값 — 엔진이 정책 테이블을 소유한다.
+  // 출처: KOSHA GUIDE D-18-2020 §4.4 및 <표 1>.
+  //   화재 보호 목적이 아닌 경우: 밸브 1개 설치 → 110% / 2개 이상 설치 → 116%
+  //   화재 보호 목적인 경우: 밸브 수량과 무관하게 → 121%
+  // (모든 수치는 설계압력 또는 최고허용압력(MAWP)에 대한 %)
+  ACCUMULATION_POLICY: {
+    NON_FIRE_SINGLE: 1.10,
+    NON_FIRE_MULTI:  1.16,
+    FIRE:            1.21,
+  },
+  ACCUMULATION_POLICY_SOURCE: "KOSHA GUIDE D-18-2020 §4.4, <표 1>",
   RD_KD_FACTOR:        0.9,
   KD_MIN:              0.9,
   MARGIN_MIN:          1.0,
@@ -167,6 +191,18 @@ const API_CONST = {
 function getAllowableBackpressureRatio(valveType) {
   const vt = String(valveType || "SPRING").toUpperCase();
   return API_CONST.BACKPRESSURE_POLICY[vt] ?? API_CONST.BACKPRESSURE_POLICY.SPRING;
+}
+
+// ACCUMULATION-001: (화재여부, 밸브개수) → 허용 축적압력비.
+// 미지정 fireScenario는 false(비화재, 더 엄격한 쪽)로, 미지정/미인식
+// valveCount는 1(단일 밸브, 가장 엄격한 110%)로 처리한다 — 안전측 기본값,
+// 과거 Snapshot과의 하위호환도 겸한다.
+function getAllowableAccumulationRatio(fireScenario, valveCount) {
+  if (fireScenario === true) return API_CONST.ACCUMULATION_POLICY.FIRE;
+  const vc = Number(valveCount);
+  return (Number.isFinite(vc) && vc >= 2)
+    ? API_CONST.ACCUMULATION_POLICY.NON_FIRE_MULTI
+    : API_CONST.ACCUMULATION_POLICY.NON_FIRE_SINGLE;
 }
 
 const API526_ORIFICES = [
@@ -205,6 +241,17 @@ function validateInputs(inp) {
       return { ok: false, field:"valveType", reason:"unsupported_valve_type" };
     }
   }
+  // ACCUMULATION-001: valveCount/fireScenario도 선택적 — 없으면 안전측
+  // 기본값(단일 밸브·비화재)으로 처리하되, 값이 있는데 형식이 틀리면 거부.
+  if (inp.valveCount !== undefined && inp.valveCount !== null && inp.valveCount !== "") {
+    const vc = Number(inp.valveCount);
+    if (!Number.isFinite(vc) || !Number.isInteger(vc) || vc < 1) {
+      return { ok: false, field:"valveCount", reason:"must_be_positive_integer" };
+    }
+  }
+  if (inp.fireScenario !== undefined && inp.fireScenario !== null && typeof inp.fireScenario !== "boolean") {
+    return { ok: false, field:"fireScenario", reason:"must_be_boolean" };
+  }
   return { ok: true };
 }
 
@@ -219,6 +266,13 @@ function api520Engine(inp, deviceType) {
   // VALVE-TYPE-001: valveType은 문자열 Case 입력 — 위 숫자 변환 대상에서 제외.
   const valveType = String(inp.valveType || "SPRING").toUpperCase();
   const allowableBackpressureRatio = getAllowableBackpressureRatio(valveType);
+
+  // ACCUMULATION-001: valveCount/fireScenario도 숫자 일괄변환 대상에서 제외
+  // (fireScenario는 boolean, valveCount는 정수 개수 — 물리량이 아님).
+  const valveCount   = (inp.valveCount !== undefined && inp.valveCount !== null && inp.valveCount !== "")
+    ? Number(inp.valveCount) : 1;
+  const fireScenario = inp.fireScenario === true;
+  const allowableAccumulationRatio = getAllowableAccumulationRatio(fireScenario, valveCount);
 
   // ── COMPRESSIBILITY-001: Z는 Asset이 아니라 Calculation Input ──
   // 설비 속성이 아니라 유체·운전조건에 따라 케이스마다 달라지는 계산
@@ -251,12 +305,23 @@ function api520Engine(inp, deviceType) {
   const backPressureRatio = P2 / Pset;
   const criticalPressRatio= Math.pow(2/(k+1), k/(k-1));
 
+  // ── ACCUMULATION-001: 축적압력 허용성 검증 (sizing과는 별개 관심사) ──
+  // 위 RELIEVING_PRESSURE 단계의 OP는 P1abs(분출압력) 산정에 쓰인다 —
+  // "이 압력에서 오리피스를 얼마나 크게 잡을지"의 입력값이다.
+  // 여기서는 같은 OP 값을 다른 질문에 쓴다 — "이 축적압력(100+OP%)이
+  // 이 시나리오(밸브개수·화재여부)에서 허용되는 상한을 넘는가?"라는
+  // 별도의 정책 검증이며, sizing 결과(areaCm2/orifice)에는 영향을 주지
+  // 않는다. 초과해도 자동으로 OP를 낮추지 않는다 — NO-GO만 표시한다.
+  const actualAccumulationRatio = 1 + OP / 100;
+  const accumulationOK = actualAccumulationRatio <= allowableAccumulationRatio;
+
   const checklist = {
     capacityOK:     selected.area >= areaCm2,
     backPressureOK: backPressureRatio < allowableBackpressureRatio,
     mawpOK:         Pset <= mawp,
     kdOK:           Kd >= API_CONST.KD_MIN,
     marginOK:       margin >= API_CONST.MARGIN_MIN,
+    accumulationOK,
   };
 
   // ── Calculation Trace — 감사/Report Evidence 전용, UI 표시용 아님 ──
@@ -274,6 +339,12 @@ function api520Engine(inp, deviceType) {
     { step: "BACKPRESSURE_POLICY", value: allowableBackpressureRatio, unit: "",
       formula: "valveType → KOSHA GUIDE D-18-2020 §7.2(4) 허용비율",
       inputs: { valveType, allowableRatio: allowableBackpressureRatio, source: API_CONST.BACKPRESSURE_POLICY_SOURCE } },
+    { step: "ACCUMULATION_POLICY", value: allowableAccumulationRatio, unit: "",
+      formula: "fireScenario+valveCount → KOSHA D-18-2020 §4.4 <표1> 허용 축적압력",
+      inputs: { fireScenario, valveCount, allowableRatio: allowableAccumulationRatio, source: API_CONST.ACCUMULATION_POLICY_SOURCE } },
+    { step: "ACCUMULATION_GUARDRAIL", value: actualAccumulationRatio, unit: "",
+      formula: "실제 축적압력비 = 1 + OP/100 (RELIEVING_PRESSURE의 OP와 동일 값, 다른 검증 목적)",
+      inputs: { OP, actualRatio: actualAccumulationRatio, allowableRatio: allowableAccumulationRatio, ok: accumulationOK } },
   ];
 
   const stepData = {
@@ -283,6 +354,8 @@ function api520Engine(inp, deviceType) {
     orifice:   { areaCm2, W, P1abs, KdEff, Kb, isRD: deviceType === "ruptureDisk" },
     selection: { selected, areaCm2, margin },
     backpress: { ratio: backPressureRatio, valveType, allowableRatio: allowableBackpressureRatio, source: API_CONST.BACKPRESSURE_POLICY_SOURCE },
+    accumulation: { fireScenario, valveCount, allowableRatio: allowableAccumulationRatio,
+      actualRatio: actualAccumulationRatio, ok: accumulationOK, OP, source: API_CONST.ACCUMULATION_POLICY_SOURCE },
   };
 
   return { valid: true, areaCm2, selected, margin, C, P1abs, backPressureRatio, checklist, stepData, trace };
@@ -435,7 +508,7 @@ function computeBackpressure(inp, geometry) {
 // ════════════════════════════════════════════════════════════════
 function buildEvidence(sd) {
   if (!sd) return [];
-  const { fluid, cCoeff, pressure, orifice, selection, backpress } = sd;
+  const { fluid, cCoeff, pressure, orifice, selection, backpress, accumulation } = sd;
   return [
     {
       id:1, title:"유체 물성 확인",
@@ -479,6 +552,19 @@ function buildEvidence(sd) {
       detail:`선택된 밸브 형식: ${backpress.valveType==="BELLOWS"?"벨로우즈형(밸런스형)":"스프링식"}. 배압이 이 한도를 초과하면 밸브가 제대로 재폐되지 않거나 용량이 저하될 수 있음. 근거: ${backpress.source||"KOSHA GUIDE D-18-2020 §7.2(4)"}`,
       ok: backpress.ratio < backpress.allowableRatio,
     },
+    {
+      id:7, title:"축적압력 허용성 검증 (Overpressure Guardrail)",
+      formula:accumulation
+        ? `1 + OP/100 ≤ ${(accumulation.allowableRatio*100).toFixed(0)}% (${accumulation.fireScenario?"화재 보호 목적":`비화재, 밸브 ${accumulation.valveCount>=2?"2개 이상":"1개"} 설치`} 기준 — KOSHA GUIDE D-18-2020 §4.4)`
+        : "",
+      result:accumulation
+        ? `실제 축적압력 = ${(accumulation.actualRatio*100).toFixed(0)}% → ${accumulation.ok ? "GO ✓" : "NO-GO ✗ — 조치 필요"}`
+        : "",
+      detail:accumulation
+        ? `sizing(Relieving Pressure) 산정에 쓰인 것과 같은 Overpressure(OP=${accumulation.OP}%)를 여기서는 다른 질문에 사용 — "이 시나리오(밸브개수·화재여부)에서 허용되는 축적압력 상한을 넘는가?"를 검증한다. sizing 결과(오리피스/필요면적)에는 영향 없음. 초과 시 자동 보정하지 않고 NO-GO로 표시. 근거: ${accumulation.source}`
+        : "",
+      ok: accumulation ? accumulation.ok : true,
+    },
   ];
 }
 
@@ -519,7 +605,7 @@ function _assetHash(equipment, dischargeSystem) {
   return (h >>> 0).toString(16).padStart(8, '0');
 }
 
-const SNAPSHOT_ENGINE_VERSION = "1.4.0";
+const SNAPSHOT_ENGINE_VERSION = "1.5.0";
 
 // Snapshot이 기록하는 trigger fields — 감사 시 "어떤 규칙으로 판단했는지" 재현용
 const WORKFLOW_TRIGGER_FIELDS_SNAPSHOT = [
@@ -1935,16 +2021,29 @@ const PDF_CHECKLIST_ITEMS = [
   { key:"mawpOK",         label:"설정압이 최고허용운전압력(MAWP) 이내",    detail:"설정압이 설비가 견딜 수 있는 최고압력을 넘지 않는지 확인" },
   { key:"kdOK",           label:"방출계수 Kd 충족",         detail:"밸브가 실제로 얼마나 잘 배출하는지 나타내는 보정값, 최소 권고 기준(0.9 이상) 충족 여부" },
   { key:"marginOK",       label:"여유율 충분",     detail:"필요량보다 여유있게 설계됐는지 — 선정 오리피스 면적의 여유 정도(1.0배 이상)" },
+  { key:"accumulationOK", label:"축적압력 허용 범위 이내 (Overpressure Guardrail)",
+    detail:"실제 축적압력(1+OP/100)이 밸브 개수·화재 시나리오에 따른 허용 한도를 넘지 않는지 확인 — 초과 시 자동 보정 없이 NO-GO" },
 ];
 
-function _pdfVerdictSection(checklist, backpress) {
+function _pdfVerdictSection(checklist, backpress, accumulation) {
   if (!checklist) return "";
   const allOK = Object.values(checklist).every(Boolean);
   const vtLabel = backpress?.valveType==="BELLOWS" ? "벨로우즈형(밸런스형)" : "스프링식";
   const allowPct = backpress?.allowableRatio!=null ? (backpress.allowableRatio*100).toFixed(0) : "10";
-  const items = PDF_CHECKLIST_ITEMS.map(it => it.key === "backPressureOK"
-    ? { ...it, detail:`배출 배관에 걸리는 반대 압력이 밸브 작동을 방해하지 않는 범위인지 확인 — ${vtLabel} 기준 설정압력의 ${allowPct}% 이내 (KOSHA D-18 §7.2(4))` }
-    : it);
+  const accAllowPct = accumulation?.allowableRatio!=null ? (accumulation.allowableRatio*100).toFixed(0) : "110";
+  const accScenarioLabel = accumulation
+    ? (accumulation.fireScenario ? "화재 보호 목적" : `비화재, 밸브 ${accumulation.valveCount>=2?"2개 이상":"1개"} 설치`)
+    : "";
+  const accActualPct = accumulation?.actualRatio!=null ? (accumulation.actualRatio*100).toFixed(0) : null;
+  const items = PDF_CHECKLIST_ITEMS.map(it => {
+    if (it.key === "backPressureOK") {
+      return { ...it, detail:`배출 배관에 걸리는 반대 압력이 밸브 작동을 방해하지 않는 범위인지 확인 — ${vtLabel} 기준 설정압력의 ${allowPct}% 이내 (KOSHA D-18 §7.2(4))` };
+    }
+    if (it.key === "accumulationOK") {
+      return { ...it, detail:`현재 축적압력 ${accActualPct ?? "—"}% — ${accScenarioLabel} 기준 허용 한도 ${accAllowPct}% 이내인지 확인 (KOSHA D-18 §4.4). 초과 시 자동 보정 없이 NO-GO` };
+    }
+    return it;
+  });
   const rows = items.map(({key,label,detail}) => {
     const ok = checklist[key];
     return `<div class="pdf-row" style="align-items:flex-start;">
@@ -1989,7 +2088,14 @@ function buildPDFHtml(reportPackage) {
     _pdfRow("배출 헤더 압력", pkg.asset.dischargeSystem.headerPressure != null ? `${pkg.asset.dischargeSystem.headerPressure} bar(게이지압)` : "—") +
     _pdfRow("배관 길이",     pkg.asset.dischargeSystem.L != null ? `${pkg.asset.dischargeSystem.L} m` : "—") +
     _pdfRow("배관 내경",        pkg.asset.dischargeSystem.D != null ? `${Math.round(pkg.asset.dischargeSystem.D*1000)} mm` : "—") +
-    _pdfRow("배관 부속 저항계수 (ΣK)",      pkg.asset.dischargeSystem.fittingsK ?? "—");
+    _pdfRow("배관 부속 저항계수 (ΣK)",      pkg.asset.dischargeSystem.fittingsK ?? "—") +
+    `<div style="margin-top:6px;font-size:9px;font-weight:700;color:#64748b;letter-spacing:0.5px;">축적압력 산정 근거 — 이 Overpressure가 시나리오상 허용되는지 확인하는 값들 (KOSHA D-18 §4.4)</div>` +
+    _pdfRow("밸브 설치 수량", pkg.calculation.inputs?.valveCount >= 2 ? "2개 이상" : "1개") +
+    _pdfRow("설치 목적", pkg.calculation.inputs?.fireScenario === true ? "화재 보호 목적" : "화재 보호 목적 아님") +
+    _pdfRow("초과압력 Overpressure (OP)", pkg.calculation.inputs?.OP != null ? `${pkg.calculation.inputs.OP}%` : "—") +
+    _pdfRow("실제/허용 축적압력", pkg.calculation.result?.stepData?.accumulation
+      ? `${(pkg.calculation.result.stepData.accumulation.actualRatio*100).toFixed(0)}% / ${(pkg.calculation.result.stepData.accumulation.allowableRatio*100).toFixed(0)}% 이하`
+      : "—");
 
   const reasons = (pkg.workflow.decision?.reasons || [])
     .map(r => `<div class="pdf-reason-item">· ${r.field} ${r.from}${r.unit||""} → ${r.to}${r.unit||""}</div>`)
@@ -2026,7 +2132,7 @@ function buildPDFHtml(reportPackage) {
   <div class="pdf-title">PSV 검토 감사 보고서</div>
   <div class="pdf-subtitle">${pkg.identity.caseId} · ${pkg.identity.snapshotId}</div>
 
-  ${_pdfVerdictSection(pkg.calculation.result?.checklist, pkg.calculation.result?.stepData?.backpress)}
+  ${_pdfVerdictSection(pkg.calculation.result?.checklist, pkg.calculation.result?.stepData?.backpress, pkg.calculation.result?.stepData?.accumulation)}
   ${_pdfSection("① 설비 정보", assetBody)}
   ${_pdfSection("② 계산 근거", calcBody)}
   ${_pdfSection("③ 검토 진행 상태", wfBody)}
@@ -2264,15 +2370,21 @@ function EvidenceCard({ step }) {
 }
 
 // ChecklistRenderer — Snapshot.result.checklist 렌더링
-function ChecklistRenderer({ checklist, backpress }) {
+function ChecklistRenderer({ checklist, backpress, accumulation }) {
   const vtLabel = backpress?.valveType==="BELLOWS" ? "벨로우즈형(밸런스형)" : "스프링식";
   const allowPct = backpress?.allowableRatio!=null ? (backpress.allowableRatio*100).toFixed(0) : "10";
+  const accAllowPct = accumulation?.allowableRatio!=null ? (accumulation.allowableRatio*100).toFixed(0) : "110";
+  const accScenarioLabel = accumulation
+    ? (accumulation.fireScenario ? "화재 보호 목적" : `비화재, 밸브 ${accumulation.valveCount>=2?"2개 이상":"1개"} 설치`)
+    : "";
   const items = [
     { key:"capacityOK",     label:"방출용량 충족",    detail:"선정 오리피스 면적 ≥ 필요 면적" },
     { key:"backPressureOK", label:"배압(背壓) 허용 범위 이내", detail:`P2/P1 < ${allowPct}% (${vtLabel} 기준, KOSHA D-18 §7.2(4)) — 배출 배관이 밸브 작동을 방해하지 않는지 확인` },
     { key:"mawpOK",         label:"설정압 ≤ 최고허용운전압력(MAWP)",    detail:"설정압이 설비가 견딜 수 있는 최고압력을 넘지 않는지 확인" },
     { key:"kdOK",           label:"방출계수 Kd 충족 (≥ 0.9)",         detail:"밸브가 실제로 얼마나 잘 배출하는지 나타내는 보정값, 최소 권고 기준 충족" },
     { key:"marginOK",       label:"여유율 충분 (≥ 1.0)",     detail:"필요량보다 여유있게 설계됐는지 — 선정 오리피스 면적의 여유 정도" },
+    { key:"accumulationOK", label:"축적압력 허용 범위 이내 (Overpressure Guardrail)",
+      detail:`1+OP/100 ≤ ${accAllowPct}% (${accScenarioLabel} 기준, KOSHA D-18 §4.4) — 초과 시 자동 보정 없이 NO-GO` },
   ];
   return (
     <div>
@@ -2646,6 +2758,51 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
           </div>
         )}
       </div>
+
+      {/* ── ACCUMULATION-001: 축적압력 허용성 검증 — sizing과 별개 정책 ── */}
+      <div style={{background:T.cardBg,borderRadius:10,padding:"10px 12px",marginBottom:10,
+        border:`1.5px solid ${T.border}`}}>
+        <div style={{fontSize:9,color:T.gray,fontFamily:font.mono,marginBottom:6}}>
+          ACCUMULATION GUARDRAIL — 이 Overpressure가 시나리오상 허용되는지 검증 (KOSHA D-18 §4.4)
+        </div>
+        <div style={{display:"flex",gap:8,marginBottom:6}}>
+          {[[1,"밸브 1개 설치"],[2,"밸브 2개 이상 설치"]].map(([v,l])=>(
+            <div key={v} onClick={()=>onChange("valveCount",v)}
+              style={{flex:1,padding:"8px 10px",borderRadius:8,cursor:"pointer",
+                border:`2px solid ${(inputs.valveCount||1)===v?T.navyLight:T.border}`,
+                background:(inputs.valveCount||1)===v?T.navy+"0D":T.bg}}>
+              <div style={{fontSize:11,fontWeight:900,color:(inputs.valveCount||1)===v?T.navy:T.text,fontFamily:font.sans}}>{l}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:8,marginBottom:8}}>
+          {[[false,"화재 보호 목적 아님"],[true,"화재 보호 목적"]].map(([v,l])=>(
+            <div key={String(v)} onClick={()=>onChange("fireScenario",v)}
+              style={{flex:1,padding:"8px 10px",borderRadius:8,cursor:"pointer",
+                border:`2px solid ${!!inputs.fireScenario===v?T.navyLight:T.border}`,
+                background:!!inputs.fireScenario===v?T.navy+"0D":T.bg}}>
+              <div style={{fontSize:11,fontWeight:900,color:!!inputs.fireScenario===v?T.navy:T.text,fontFamily:font.sans}}>{l}</div>
+            </div>
+          ))}
+        </div>
+        {(() => {
+          const allowRatio = getAllowableAccumulationRatio(!!inputs.fireScenario, inputs.valveCount || 1);
+          const actualRatio = typeof inputs.OP === "number" && !isNaN(inputs.OP) ? 1 + inputs.OP/100 : null;
+          const go = actualRatio != null && actualRatio <= allowRatio;
+          return actualRatio == null ? null : (
+            <div style={{fontSize:11,fontWeight:900,fontFamily:font.mono,
+              color: go ? T.green : T.red}}>
+              {go ? "✓ GO" : "✗ NO-GO"} — 현재 축적압력 {(actualRatio*100).toFixed(0)}%
+              {" "}(허용 한도 {(allowRatio*100).toFixed(0)}%, KOSHA D-18 §4.4)
+              {!go && <span style={{display:"block",fontWeight:600,color:T.sub,marginTop:2}}>
+                입력 축적압력이 적용 기준을 초과합니다 — 밸브 수량/화재 시나리오를 재확인하거나
+                설비대장에서 Overpressure 값을 낮춰야 합니다. 자동 보정하지 않습니다.
+              </span>}
+            </div>
+          );
+        })()}
+      </div>
+
       <DecisionSlider
         param="P2" label="배압 (Back Pressure)" unit="barg"
         value={inputs.P2} min={0} max={5} step={0.05}
@@ -4333,7 +4490,7 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
 
       {reportTab === "checklist" && (
         <div style={{background:T.cardBg,borderRadius:14,padding:14,border:`1px solid ${T.border}`}}>
-          <ChecklistRenderer checklist={snap.result.checklist} backpress={snap.result.stepData?.backpress}/>
+          <ChecklistRenderer checklist={snap.result.checklist} backpress={snap.result.stepData?.backpress} accumulation={snap.result.stepData?.accumulation}/>
         </div>
       )}
 

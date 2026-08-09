@@ -23,7 +23,8 @@ const font = { mono: "'JetBrains Mono','Courier New',monospace", sans: "'Noto Sa
 // InputView, CaseView 양쪽에서 사용 (constants에 위치해 BUILD_ORDER 최상단 보장)
 const R201_DEFAULTS = {
   W:2500, P1:5.5, P2:0.3, T:373, M:44, k:1.3, Kd:0.975, Kb:1.0, mawp:6.0, OP:10, Z:1.0,
-  valveType:"SPRING" // VALVE-TYPE-001: 기본값 스프링식 — 기존 케이스와 동일 판정 유지
+  valveType:"SPRING", // VALVE-TYPE-001: 기본값 스프링식 — 기존 케이스와 동일 판정 유지
+  valveCount:1, fireScenario:false // ACCUMULATION-001: 기본값 단일밸브·비화재(가장 엄격, 110%) — 기존 케이스와 동일 판정 유지
 };
 
 // ════════════════════════════════════════════════════════════════

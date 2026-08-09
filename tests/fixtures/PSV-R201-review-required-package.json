@@ -2,12 +2,12 @@
   "meta": {
     "packageVersion": "1.0.0",
     "generatedAt": "2026-07-10T10:05:00.000Z",
-    "engineVersion": "1.4.0"
+    "engineVersion": "1.5.0"
   },
   "identity": {
     "caseId": "C-2026-001",
-    "snapshotId": "SNAP-C-2026-001-1786288986079",
-    "snapshotHash": "3503b2c9"
+    "snapshotId": "SNAP-C-2026-001-1786311180110",
+    "snapshotHash": "4e99db0a"
   },
   "asset": {
     "equipment": {
@@ -30,7 +30,7 @@
     "assetFingerprint": "fb2bb5d0"
   },
   "calculation": {
-    "engineVersion": "1.4.0",
+    "engineVersion": "1.5.0",
     "inputs": {
       "W": 2500,
       "P1": 5.5,
@@ -43,7 +43,9 @@
       "mawp": 6,
       "OP": 10,
       "Z": 1,
-      "valveType": "SPRING"
+      "valveType": "SPRING",
+      "valveCount": 1,
+      "fireScenario": false
     },
     "result": {
       "valid": true,
@@ -61,7 +63,8 @@
         "backPressureOK": true,
         "mawpOK": true,
         "kdOK": true,
-        "marginOK": true
+        "marginOK": true,
+        "accumulationOK": true
       },
       "stepData": {
         "fluid": {
@@ -102,6 +105,15 @@
           "valveType": "SPRING",
           "allowableRatio": 0.1,
           "source": "KOSHA GUIDE D-18-2020 §7.2(4)"
+        },
+        "accumulation": {
+          "fireScenario": false,
+          "valveCount": 1,
+          "allowableRatio": 1.1,
+          "actualRatio": 1.1,
+          "ok": true,
+          "OP": 10,
+          "source": "KOSHA GUIDE D-18-2020 §4.4, <표 1>"
         }
       },
       "trace": [
@@ -181,6 +193,30 @@
             "allowableRatio": 0.1,
             "source": "KOSHA GUIDE D-18-2020 §7.2(4)"
           }
+        },
+        {
+          "step": "ACCUMULATION_POLICY",
+          "value": 1.1,
+          "unit": "",
+          "formula": "fireScenario+valveCount → KOSHA D-18-2020 §4.4 <표1> 허용 축적압력",
+          "inputs": {
+            "fireScenario": false,
+            "valveCount": 1,
+            "allowableRatio": 1.1,
+            "source": "KOSHA GUIDE D-18-2020 §4.4, <표 1>"
+          }
+        },
+        {
+          "step": "ACCUMULATION_GUARDRAIL",
+          "value": 1.1,
+          "unit": "",
+          "formula": "실제 축적압력비 = 1 + OP/100 (RELIEVING_PRESSURE의 OP와 동일 값, 다른 검증 목적)",
+          "inputs": {
+            "OP": 10,
+            "actualRatio": 1.1,
+            "allowableRatio": 1.1,
+            "ok": true
+          }
         }
       ]
     }
@@ -196,14 +232,14 @@
           "unit": "barg"
         }
       ],
-      "evaluatedAt": "2026-08-09T15:23:06.079Z",
-      "engineVersion": "1.4.0"
+      "evaluatedAt": "2026-08-09T21:33:00.110Z",
+      "engineVersion": "1.5.0"
     }
   },
   "approvals": [],
   "_fixtureMeta": {
-    "engineVersion": "1.4.0",
-    "buildHash": "927eb5707bdb",
+    "engineVersion": "1.5.0",
+    "buildHash": "ab68153a15a4",
     "generatedAt": "2026-07-10T10:05:00.000Z",
     "fixtureName": "PSV-R201-review-required"
   }

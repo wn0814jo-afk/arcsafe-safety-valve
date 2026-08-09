@@ -87,6 +87,7 @@ async function main() {
     T: 373, M: 44, k: 1.30, Kd: 0.975, Kb: 1.0,
     mawp: equipment.mawp, OP: equipment.overpressure, Z: 1.0,
     valveType: "SPRING", // VALVE-TYPE-001
+    valveCount: 1, fireScenario: false, // ACCUMULATION-001
   });
   const engineResult = api520Engine(inputs, equipment.deviceType);
   if (!engineResult.valid) throw new Error("engine invalid: " + JSON.stringify(engineResult.error));

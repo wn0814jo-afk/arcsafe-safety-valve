@@ -32,11 +32,17 @@ ATM_PRESSURE_BAR   = 1.01325   # API520-PRESSURE-001 — relieving pressure 절�
 # 출처: KOSHA GUIDE D-18-2020 §7.2(4) — 스프링식 10%, 벨로우즈형(밸런스형) 50%.
 # 파일럿식은 원문에 수치 기준이 없어 미지원 — 미지정/미지원 값은 SPRING으로 처리.
 BACKPRESSURE_POLICY = {"SPRING": 0.10, "BELLOWS": 0.50}
+# ACCUMULATION-001: 축적압력 허용한계는 밸브개수+화재여부의 정책값
+# (engine/api520.js와 동일 테이블). 출처: KOSHA GUIDE D-18-2020 §4.4, <표1>.
+ACCUMULATION_POLICY = {"NON_FIRE_SINGLE": 1.10, "NON_FIRE_MULTI": 1.16, "FIRE": 1.21}
 RD_KD_FACTOR       = 0.9
 KD_MIN             = 0.9
 MARGIN_MIN         = 1.0
 
-ENGINE_VERSION     = "1.4.0"   # engine/api520.js와 반드시 일치해야 함
+ENGINE_VERSION     = "1.5.0"   # engine/api520.js와 반드시 일치해야 함
+# v1.5.0: ACCUMULATION-001 — 축적압력 허용한계(overpressure guardrail)를
+# 밸브개수(valveCount)+화재여부(fireScenario) 정책 테이블로 신설. 초과 시
+# 자동 보정 없이 NO-GO만 표시(fail-fast). sizing(P1abs)과는 별개 검증.
 # v1.4.0: VALVE-TYPE-001 — 배압 허용비율(10% 고정)을 valveType 정책 테이블로
 # 승격. valveType 미지정 시 SPRING(기존과 동일 판정)으로 하위호환.
 # v1.3.0: COMPRESSIBILITY-001 — Z를 Calculation Input으로 승격 (기존
@@ -47,6 +53,15 @@ ENGINE_VERSION     = "1.4.0"   # engine/api520.js와 반드시 일치해야 함
 def _allowable_bp_ratio(valve_type):
     vt = str(valve_type or "SPRING").upper()
     return BACKPRESSURE_POLICY.get(vt, BACKPRESSURE_POLICY["SPRING"])
+
+def _allowable_accumulation_ratio(fire_scenario, valve_count):
+    if fire_scenario is True:
+        return ACCUMULATION_POLICY["FIRE"]
+    try:
+        vc = float(valve_count)
+    except (TypeError, ValueError):
+        vc = 1
+    return ACCUMULATION_POLICY["NON_FIRE_MULTI"] if vc >= 2 else ACCUMULATION_POLICY["NON_FIRE_SINGLE"]
 
 ORIFICES = [
     ("D",0.71),("E",1.27),("F",1.98),("G",3.24),("H",5.07),
@@ -61,6 +76,8 @@ def _py_engine(inp, device="safetyValve"):
     OP = float(inp["OP"])
     Z  = float(inp["Z"])   # COMPRESSIBILITY-001: Calculation Input, 기본값 1.00
     allowableBp = _allowable_bp_ratio(inp.get("valveType"))  # VALVE-TYPE-001
+    allowableAcc = _allowable_accumulation_ratio(inp.get("fireScenario"), inp.get("valveCount", 1))  # ACCUMULATION-001
+    actualAcc = 1 + OP/100
 
     # PRESSURE-001: Pset(barg) → P1abs(bara) 환산
     Pset  = P1
@@ -90,6 +107,7 @@ def _py_engine(inp, device="safetyValve"):
             "mawpOK":         Pset <= mawp,
             "kdOK":           Kd >= KD_MIN,
             "marginOK":       margin >= MARGIN_MIN,
+            "accumulationOK": actualAcc <= allowableAcc,
         }
     }
 
@@ -622,9 +640,16 @@ def test_unit_boundaries() -> TestResult:
     tr.check("UNIT_PRESSURE_003_divergence_documented",
              "의도적" in bp_src and "P1abs" in bp_src,
              "backpressure.js의 P1_abs가 api520.js의 P1abs와 다른 이유가 주석으로 문서화돼 있지 않음")
-    tr.check("UNIT_PRESSURE_003_OP_divided_by_100_exactly_once",
-             len(re.findall(r"OP\s*/\s*100", api520_code)) == 1,
-             "OP/100 변환(코드)이 api520.js에서 정확히 1회가 아님")
+    # ACCUMULATION-001(C-2)부터 OP/100은 두 곳에서 의도적으로 재사용된다:
+    #   1) RELIEVING_PRESSURE: P1abs = Pset*(1+OP/100)+Patm — sizing 입력
+    #   2) ACCUMULATION_GUARDRAIL: actualAccumulationRatio = 1+OP/100 — 별개
+    #      정책 검증(허용 축적압력 대비 GO/NO-GO), sizing 결과에 영향 없음
+    # 두 계산은 서로 다른 목적의 별도 코드이며 우연한 중복이 아니다 —
+    # 그래서 "정확히 1회"가 아니라 "정확히 2회"로 계약을 갱신한다(완화 아님,
+    # 3회 이상의 우발적 중복은 여전히 잡아낸다).
+    tr.check("UNIT_PRESSURE_003_OP_divided_by_100_exactly_twice",
+             len(re.findall(r"OP\s*/\s*100", api520_code)) == 2,
+             "OP/100 변환(코드)이 api520.js에서 정확히 2회(sizing + accumulation guardrail)가 아님")
 
     # ── UNIT-FLOW-001: kg/h → kg/s (÷3600) 는 backpressure.js 전용 ──
     # api520.js의 SI 면적식은 13160 상수가 W[kg/h] 기준으로 이미 보정돼
@@ -879,6 +904,171 @@ console.log(JSON.stringify(out));
 
 
 # ════════════════════════════════════════════════════════════════
+#  ACCUMULATION-001 CONTRACT — 축적압력(Overpressure) Guardrail (Sprint C-2)
+#  근거: KOSHA GUIDE D-18-2020 §4.4, <표 1> — 비화재/단일 110%,
+#  비화재/2개이상 116%, 화재(수량무관) 121%.
+#  범위: "입력된 Overpressure가 시나리오상 허용 가능한지 증명"까지만.
+#  인입배관 3%(C-3), 5장 소요분출량 산정(C-4)은 이번 계약의 범위 밖.
+# ════════════════════════════════════════════════════════════════
+def test_accumulation_policy_contract() -> TestResult:
+    tr = TestResult("ACCUMULATION-001", "Sprint C-2 — 축적압력(Overpressure) Guardrail")
+
+    api520_src   = (SRC / "engine" / "api520.js").read_text()
+    evid_src     = (SRC / "engine" / "evidence.js").read_text()
+    renderer_src = (SRC / "components" / "renderers" / "index.jsx").read_text()
+    template_src = (SRC / "report" / "renderer" / "pdf" / "template.js").read_text()
+    input_view   = (SRC / "components" / "InputView.jsx").read_text()
+
+    # ── 정책 테이블 값 자체가 소스에 정확히 존재하는지 ──────────
+    tr.check("POLICY_non_fire_single_110",
+             "NON_FIRE_SINGLE:" in api520_src and "1.10" in api520_src,
+             "ACCUMULATION_POLICY.NON_FIRE_SINGLE이 1.10이 아님")
+    tr.check("POLICY_non_fire_multi_116",
+             "NON_FIRE_MULTI:" in api520_src and "1.16" in api520_src,
+             "ACCUMULATION_POLICY.NON_FIRE_MULTI가 1.16이 아님")
+    tr.check("POLICY_fire_121",
+             "FIRE:" in api520_src and "1.21" in api520_src,
+             "ACCUMULATION_POLICY.FIRE가 1.21이 아님")
+    tr.check("POLICY_source_cited",
+             "KOSHA GUIDE D-18-2020 §4.4" in api520_src,
+             "정책 테이블에 KOSHA D-18-2020 §4.4 출처 인용이 없음")
+
+    node = shutil.which("node")
+    if node:
+        check_script = f"""
+const fs = require('fs');
+const files = ['constants.js','engine/api520.js']
+  .map(f => fs.readFileSync('{SRC}/' + f, 'utf8')).join('\\n');
+eval(files);
+
+const out = {{}};
+const baseInputs = {{ W:2500,P1:5.5,P2:0.3,T:373,M:44,k:1.3,Kd:0.975,Kb:1.0,mawp:6.0,Z:1.0 }};
+
+// 1) 정책값 3분기
+out.nonFireSingle = getAllowableAccumulationRatio(false, 1);
+out.nonFireMulti  = getAllowableAccumulationRatio(false, 2);
+out.fireSingle    = getAllowableAccumulationRatio(true, 1);
+out.fireMulti     = getAllowableAccumulationRatio(true, 2);
+
+// 2) 미지정 -> 가장 엄격한 기본값(단일/비화재 110%)
+out.missingBoth = getAllowableAccumulationRatio(undefined, undefined);
+
+// 3) valveCount 형식 오류 -> fail-fast
+out.badCountRejected = validateInputs({{ ...baseInputs, OP:10, valveCount: 1.5 }});
+out.badCountRejected2 = validateInputs({{ ...baseInputs, OP:10, valveCount: 0 }});
+out.badFireRejected = validateInputs({{ ...baseInputs, OP:10, fireScenario: "yes" }});
+out.missingAccepted = validateInputs({{ ...baseInputs, OP:10 }});
+out.validAccepted = validateInputs({{ ...baseInputs, OP:10, valveCount:2, fireScenario:true }});
+
+// 4) 허용치 초과 -> NO-GO(accumulationOK:false), 자동 보정 없음(sizing 불변)
+//    OP=15 -> 축적압력 115%. 단일/비화재 한도(110%) 초과, 2개설치(116%) 이내.
+const rSingleOP15 = api520Engine({{ ...baseInputs, OP:15, valveCount:1, fireScenario:false }}, "safetyValve");
+const rMultiOP15  = api520Engine({{ ...baseInputs, OP:15, valveCount:2, fireScenario:false }}, "safetyValve");
+const rSingleOP10 = api520Engine({{ ...baseInputs, OP:10, valveCount:1, fireScenario:false }}, "safetyValve"); // 경계값 == 허용, GO
+out.singleOP15_NOGO = rSingleOP10 && rSingleOP15.checklist.accumulationOK === false;
+out.multiOP15_GO    = rMultiOP15.checklist.accumulationOK === true;
+out.boundaryOP10_GO = rSingleOP10.checklist.accumulationOK === true;
+
+// 5) sizing(area/orifice)이 accumulation 통과여부와 무관하게 동일한지
+//    (NO-GO라고 areaCm2를 자동으로 바꾸지 않는지 — fail-fast이지 보정이 아님)
+out.sizingUnaffectedByAccumulation =
+  Math.abs(rSingleOP15.areaCm2 - rSingleOP15.areaCm2) < 1e-9 &&
+  rSingleOP15.valid === true; // NO-GO여도 engine이 값을 계속 반환(거부 아님) — checklist로만 표시
+
+// 6) Trace/stepData가 정책 근거를 명시적으로 담고 있는지
+out.traceHasPolicy = rSingleOP15.trace.some(t => t.step === "ACCUMULATION_POLICY");
+out.traceHasGuardrail = rSingleOP15.trace.some(t => t.step === "ACCUMULATION_GUARDRAIL");
+out.stepDataSource = rSingleOP15.stepData.accumulation.source;
+out.stepDataValveCount = rSingleOP15.stepData.accumulation.valveCount;
+out.stepDataFireScenario = rSingleOP15.stepData.accumulation.fireScenario;
+out.stepDataActualRatio = rSingleOP15.stepData.accumulation.actualRatio;
+out.stepDataAllowableRatio = rSingleOP15.stepData.accumulation.allowableRatio;
+
+// 7) C-1(valveType)과 충돌하지 않는지 — 같은 호출에서 두 정책이 동시에 정상 계산되는지
+const rBoth = api520Engine({{ ...baseInputs, OP:15, valveType:"BELLOWS", valveCount:1, fireScenario:false }}, "safetyValve");
+out.coexistsWithValveType =
+  rBoth.checklist.backPressureOK !== undefined &&
+  rBoth.checklist.accumulationOK !== undefined &&
+  rBoth.stepData.backpress.valveType === "BELLOWS" &&
+  rBoth.stepData.accumulation.allowableRatio === 1.10;
+
+console.log(JSON.stringify(out));
+"""
+        r = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=15)
+        try:
+            result = json.loads(r.stdout.strip())
+        except Exception:
+            result = None
+        ok = result is not None
+        tr.check("ENGINE_reachable", ok, f"node 실행 실패 — stdout={r.stdout!r} stderr={r.stderr!r}")
+        if ok:
+            tr.check("RATIO_non_fire_single_110", result["nonFireSingle"] == 1.10, f"actual={result['nonFireSingle']}")
+            tr.check("RATIO_non_fire_multi_116", result["nonFireMulti"] == 1.16, f"actual={result['nonFireMulti']}")
+            tr.check("RATIO_fire_single_121", result["fireSingle"] == 1.21, f"actual={result['fireSingle']}")
+            tr.check("RATIO_fire_multi_121", result["fireMulti"] == 1.21, f"actual={result['fireMulti']}")
+            tr.check("MISSING_defaults_to_strictest_110", result["missingBoth"] == 1.10, f"actual={result['missingBoth']}")
+            tr.check("BAD_valveCount_float_rejected",
+                     result["badCountRejected"]["ok"] is False and result["badCountRejected"].get("field") == "valveCount",
+                     f"actual={result['badCountRejected']}")
+            tr.check("BAD_valveCount_zero_rejected",
+                     result["badCountRejected2"]["ok"] is False and result["badCountRejected2"].get("field") == "valveCount",
+                     f"actual={result['badCountRejected2']}")
+            tr.check("BAD_fireScenario_type_rejected",
+                     result["badFireRejected"]["ok"] is False and result["badFireRejected"].get("field") == "fireScenario",
+                     f"actual={result['badFireRejected']}")
+            tr.check("MISSING_valveCount_fireScenario_accepted", result["missingAccepted"]["ok"] is True, f"actual={result['missingAccepted']}")
+            tr.check("VALID_valveCount_fireScenario_accepted", result["validAccepted"]["ok"] is True, f"actual={result['validAccepted']}")
+            tr.check("OP15_single_nonfire_is_NOGO", result["singleOP15_NOGO"] is True)
+            tr.check("OP15_multi_nonfire_is_GO", result["multiOP15_GO"] is True)
+            tr.check("OP10_boundary_is_GO", result["boundaryOP10_GO"] is True, "경계값(정확히 허용한계)은 GO여야 함 — <= 비교")
+            tr.check("NOGO_does_not_block_engine_or_alter_sizing", result["sizingUnaffectedByAccumulation"] is True,
+                     "NO-GO가 sizing 결과를 바꾸거나 engine을 막음 — fail-fast(표시)여야지 자동보정/거부가 아님")
+            tr.check("TRACE_has_ACCUMULATION_POLICY_step", result["traceHasPolicy"] is True)
+            tr.check("TRACE_has_ACCUMULATION_GUARDRAIL_step", result["traceHasGuardrail"] is True)
+            tr.check("stepData_source_cited",
+                     result["stepDataSource"] is not None and "KOSHA" in result["stepDataSource"],
+                     f"actual={result['stepDataSource']}")
+            tr.check("stepData_records_valveCount", result["stepDataValveCount"] == 1, f"actual={result['stepDataValveCount']}")
+            tr.check("stepData_records_fireScenario", result["stepDataFireScenario"] is False, f"actual={result['stepDataFireScenario']}")
+            tr.check("stepData_actualRatio_matches_OP",
+                     abs(result["stepDataActualRatio"] - 1.15) < 1e-9, f"actual={result['stepDataActualRatio']}")
+            tr.check("stepData_allowableRatio_matches_policy",
+                     result["stepDataAllowableRatio"] == 1.10, f"actual={result['stepDataAllowableRatio']}")
+            tr.check("COEXISTS_with_valveType_policy_C1", result["coexistsWithValveType"] is True,
+                     "C-1(valveType)과 C-2(accumulation) 정책이 같은 호출에서 동시에 정상 계산되지 않음")
+    else:
+        tr.check("ENGINE_node_available", False, "node 없음 — 실행 검증 생략")
+
+    # ── Checklist(화면)/Evidence/PDF가 하드코딩 대신 stepData.accumulation을 읽는지 ──
+    tr.check("CHECKLIST_reads_accumulation_allowableRatio",
+             "accumulation?.allowableRatio" in renderer_src or "accumulation.allowableRatio" in renderer_src,
+             "ChecklistRenderer가 accumulation.allowableRatio를 읽지 않음 — 하드코딩 가능성")
+    tr.check("EVIDENCE_reads_accumulation_allowableRatio",
+             "accumulation.allowableRatio" in evid_src,
+             "evidence.js가 accumulation.allowableRatio를 읽지 않음 — 하드코딩 가능성")
+    tr.check("PDF_reads_accumulation_allowableRatio",
+             "accumulation?.allowableRatio" in template_src or "accumulation.allowableRatio" in template_src,
+             "PDF template이 accumulation.allowableRatio를 읽지 않음 — 하드코딩 가능성")
+
+    # ── UI가 허용 상한을 자체 계산하지 않고 engine 함수를 호출하는지 ──
+    tr.check("UI_calls_getAllowableAccumulationRatio",
+             "getAllowableAccumulationRatio(" in input_view,
+             "InputView.jsx가 getAllowableAccumulationRatio()를 호출하지 않음 — 자체 계산 가능성")
+
+    # ── UI가 초과 시 자동으로 OP 값을 낮추지 않는지 (onChange(\"OP\", ...) 자동 보정 금지) ──
+    tr.check("UI_does_not_auto_clamp_OP",
+             'onChange("OP"' not in input_view and "onChange('OP'" not in input_view,
+             "InputView.jsx가 축적압력 초과 시 OP를 자동으로 재설정함 — 자동 보정 금지 원칙 위반")
+
+    # ── 신규 필드가 기존 OP(Asset 소유)를 중복 생성하지 않았는지 ──────
+    tr.check("NO_duplicate_overpressure_field",
+             "overpressureAllowed" not in api520_src and "maxOverpressure" not in api520_src,
+             "OP와 별개의 중복 Overpressure 필드가 생성됨 — 기존 OP(Asset 소유)를 재사용해야 함")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
 #  BASELINE LOCK CONTRACT (Sprint A.1) — Engine 1.3.0 기준선 보호 장치
 #  1) ENGINE-VERSION-LOCK-001: Snapshot/ReportPackage/Fixture 엔진버전 일치
 #  2) GOLDEN-FIXTURE-MUTATION-GUARD-001: fixture를 손으로 고치면 감지
@@ -993,7 +1183,7 @@ def test_baseline_lock_contract() -> TestResult:
                  f"실제 엔진 trace 출력이 스키마 검증을 통과하지 못함 — stdout={cp.stdout!r} stderr={cp.stderr!r}")
         expected_steps = ["COMPRESSIBILITY_Z","SET_PRESSURE","RELIEVING_PRESSURE",
                            "C_COEFFICIENT","MASS_FLUX_AREA","REQUIRED_AREA","ORIFICE_SELECTION",
-                           "BACKPRESSURE_POLICY"]
+                           "BACKPRESSURE_POLICY","ACCUMULATION_POLICY","ACCUMULATION_GUARDRAIL"]
         tr.check("TRACE_SCHEMA_001_step_order_frozen",
                  tresult is not None and tresult.get("steps") == expected_steps,
                  f"trace 단계 순서/구성이 계약과 다름 — actual={tresult.get('steps') if tresult else None}")
@@ -2869,6 +3059,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [VALVE-TYPE-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── Accumulation policy contract (Sprint C-2) ────────────────
+    print("\n── ACCUMULATION POLICY (Sprint C-2) ──────────────────")
+    tr = test_accumulation_policy_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [ACCUMULATION-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"
