@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:3b65d4a3c79e\n\n' +
+    box.textContent = '[ERROR] BUILD:927eb5707bdb\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:3b65d4a3c79e\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:927eb5707bdb\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:3b65d4a3c79e | 2026-08-08T18:57:31Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:927eb5707bdb | 2026-08-09T15:23:25Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "3b65d4a3c79e";
+const __BUILD_HASH__ = "927eb5707bdb";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -79,7 +79,8 @@ const font = { mono: "'JetBrains Mono','Courier New',monospace", sans: "'Noto Sa
 // R-201 CO2 반응기 — engine input 기본값
 // InputView, CaseView 양쪽에서 사용 (constants에 위치해 BUILD_ORDER 최상단 보장)
 const R201_DEFAULTS = {
-  W:2500, P1:5.5, P2:0.3, T:373, M:44, k:1.3, Kd:0.975, Kb:1.0, mawp:6.0, OP:10, Z:1.0
+  W:2500, P1:5.5, P2:0.3, T:373, M:44, k:1.3, Kd:0.975, Kb:1.0, mawp:6.0, OP:10, Z:1.0,
+  valveType:"SPRING" // VALVE-TYPE-001: 기본값 스프링식 — 기존 케이스와 동일 판정 유지
 };
 
 
@@ -99,7 +100,16 @@ const R201_DEFAULTS = {
 //   Asset이 아니라 Case 소유 — 유체·운전조건에 따라 케이스마다 달라짐.
 //   기본값 1.00은 UI가 명시적으로 대입하며 Engine은 몰래 채우지 않는다.
 //   validateInputs가 Z 누락을 거부하므로 이 필드는 계약 변경이다.
-const ENGINE_VERSION = "1.3.0";
+// ENGINE_VERSION 1.4.0 — VALVE-TYPE-001
+//   배압 허용비율(10%)을 스프링식 전용 상수로 하드코딩했던 것을 밸브
+//   형식(valveType)별 정책 테이블(BACKPRESSURE_POLICY)로 승격.
+//   valveType은 Case 입력(Calculation Input) — InputView → inputs →
+//   Engine → Snapshot → ReportPackage → Evidence/PDF까지 동일 값 전파.
+//   근거: KOSHA GUIDE D-18-2020 §7.2(4) — 스프링식 10%, 벨로우즈형
+//   (밸런스형) 50%. 파일럿식은 원문에 수치 기준이 없어 이번 버전에서
+//   지원하지 않음 — 미지정/미지원 valveType은 SPRING(더 엄격한 기준,
+//   안전측)으로 처리한다. Pilot 기준은 별도 확인 후 후속 버전에서 추가.
+const ENGINE_VERSION = "1.4.0";
 
 // ── TRACE-SCHEMA-001: Calculation Trace 스키마 고정 ────────────
 // Trace는 단순 로그가 아니라 감사 증거(Report Evidence)다. 각 항목은
@@ -129,8 +139,19 @@ const API_CONST = {
   C_BASE:              520,
   SI_AREA_CONST:        13160,   // API 520 SI eq.: A[mm²]=13160·W[kg/h]/(C·Kd·P1[kPa]·Kb)·√(TZ/M)
   ATM_PRESSURE_BAR:     1.01325, // 표준 대기압 (relieving pressure 절대압 환산용)
-  BACKPRESSURE_SPRING: 0.10,
-  BACKPRESSURE_PILOT:  0.30,
+  // VALVE-TYPE-001: 배압 허용비율은 밸브 형식의 정책값 — 엔진이 정책
+  // 테이블을 소유한다. UI는 valveType만 넘기고 허용비율 숫자를 직접
+  // 넘기지 않는다. 출처: KOSHA GUIDE D-18-2020 §7.2(4).
+  //   SPRING  — 스프링식(일반형): 배압 ≤ 설정압력의 10%
+  //   BELLOWS — 벨로우즈형(밸런스형): 배압 ≤ 설정압력의 50%
+  //             (단, 제작자가 별도 허용한도를 명시한 경우 그에 따름 — 이 앱은
+  //             가이드 표준값만 적용, 제작자 개별 데이터시트는 반영하지 않음)
+  //   PILOT   — 가이드 원문에 수치 기준 없음. 별도 확인 전까지 미지원.
+  BACKPRESSURE_POLICY: {
+    SPRING:  0.10,
+    BELLOWS: 0.50,
+  },
+  BACKPRESSURE_POLICY_SOURCE: "KOSHA GUIDE D-18-2020 §7.2(4)",
   RD_KD_FACTOR:        0.9,
   KD_MIN:              0.9,
   MARGIN_MIN:          1.0,
@@ -139,6 +160,14 @@ const API_CONST = {
   SIM_SPEED_RELIEF:    0.08,
   HISTORY_SIZE:        90,
 };
+
+// VALVE-TYPE-001: 밸브 형식 → 허용 배압비율. 미지정/미지원 값은 SPRING
+// (더 엄격한 기준)으로 처리한다 — 안전측 기본값, 과거 Snapshot(valveType
+// 필드 없음)과의 하위호환도 겸한다.
+function getAllowableBackpressureRatio(valveType) {
+  const vt = String(valveType || "SPRING").toUpperCase();
+  return API_CONST.BACKPRESSURE_POLICY[vt] ?? API_CONST.BACKPRESSURE_POLICY.SPRING;
+}
 
 const API526_ORIFICES = [
   { letter:"D", area:0.71 },{ letter:"E", area:1.27 },
@@ -167,6 +196,15 @@ function validateInputs(inp) {
   if (inp.Kb <= 0) return { ok: false, field:"Kb", reason:"must_be_positive" };
   if (inp.OP <  0) return { ok: false, field:"OP", reason:"must_be_non_negative" };
   if (inp.Z  <= 0) return { ok: false, field:"Z",  reason:"must_be_positive" };
+  // VALVE-TYPE-001: valveType은 선택적 필드 — 없으면 SPRING(안전측)으로
+  // 처리하되(하위호환), 값이 있는데 정책 테이블에 없는 값이면 오타/오입력
+  // 가능성이 크므로 거부한다.
+  if (inp.valveType !== undefined && inp.valveType !== null && inp.valveType !== "") {
+    const vt = String(inp.valveType).toUpperCase();
+    if (!(vt in API_CONST.BACKPRESSURE_POLICY)) {
+      return { ok: false, field:"valveType", reason:"unsupported_valve_type" };
+    }
+  }
   return { ok: true };
 }
 
@@ -178,6 +216,9 @@ function api520Engine(inp, deviceType) {
   const { W, P1, P2, T, M, k, Kd, Kb, mawp, OP, Z } = Object.fromEntries(
     Object.entries(inp).map(([key, v]) => [key, Number(v)])
   );
+  // VALVE-TYPE-001: valveType은 문자열 Case 입력 — 위 숫자 변환 대상에서 제외.
+  const valveType = String(inp.valveType || "SPRING").toUpperCase();
+  const allowableBackpressureRatio = getAllowableBackpressureRatio(valveType);
 
   // ── COMPRESSIBILITY-001: Z는 Asset이 아니라 Calculation Input ──
   // 설비 속성이 아니라 유체·운전조건에 따라 케이스마다 달라지는 계산
@@ -212,7 +253,7 @@ function api520Engine(inp, deviceType) {
 
   const checklist = {
     capacityOK:     selected.area >= areaCm2,
-    backPressureOK: backPressureRatio < API_CONST.BACKPRESSURE_SPRING,
+    backPressureOK: backPressureRatio < allowableBackpressureRatio,
     mawpOK:         Pset <= mawp,
     kdOK:           Kd >= API_CONST.KD_MIN,
     marginOK:       margin >= API_CONST.MARGIN_MIN,
@@ -230,6 +271,9 @@ function api520Engine(inp, deviceType) {
       formula: "A = 13160·W/(C·Kd·P1[kPa]·Kb)·√(TZ/M)", inputs: { W, KdEff, P1_kPa, Kb, T, Z, M } },
     { step: "REQUIRED_AREA",    value: areaCm2, unit: "cm²", formula: "areaCm2 = A_mm2 / 100" },
     { step: "ORIFICE_SELECTION",value: selected.letter, unit: "", formula: "next API526 orifice ≥ areaCm2", inputs: { areaCm2, selectedArea: selected.area } },
+    { step: "BACKPRESSURE_POLICY", value: allowableBackpressureRatio, unit: "",
+      formula: "valveType → KOSHA GUIDE D-18-2020 §7.2(4) 허용비율",
+      inputs: { valveType, allowableRatio: allowableBackpressureRatio, source: API_CONST.BACKPRESSURE_POLICY_SOURCE } },
   ];
 
   const stepData = {
@@ -238,7 +282,7 @@ function api520Engine(inp, deviceType) {
     pressure:  { Pset, OP, P1abs, atm: API_CONST.ATM_PRESSURE_BAR },
     orifice:   { areaCm2, W, P1abs, KdEff, Kb, isRD: deviceType === "ruptureDisk" },
     selection: { selected, areaCm2, margin },
-    backpress: { ratio: backPressureRatio, limitSpring: API_CONST.BACKPRESSURE_SPRING, limitPilot: API_CONST.BACKPRESSURE_PILOT },
+    backpress: { ratio: backPressureRatio, valveType, allowableRatio: allowableBackpressureRatio, source: API_CONST.BACKPRESSURE_POLICY_SOURCE },
   };
 
   return { valid: true, areaCm2, selected, margin, C, P1abs, backPressureRatio, checklist, stepData, trace };
@@ -430,10 +474,10 @@ function buildEvidence(sd) {
     },
     {
       id:6, title:"Back Pressure 검증",
-      formula:`P2/Pset < ${(API_CONST.BACKPRESSURE_SPRING*100).toFixed(0)}% (스프링식) / ${(API_CONST.BACKPRESSURE_PILOT*100).toFixed(0)}% (파일럿식)`,
-      result:`P2/Pset = ${(backpress.ratio*100).toFixed(1)}% → ${backpress.ratio < backpress.limitSpring ? "스프링식 적합 ✓" : backpress.ratio < backpress.limitPilot ? "파일럿식 검토 필요 ⚠" : "초과 ✗"}`,
-      detail:`Back Pressure가 설정압력의 ${(backpress.limitSpring*100).toFixed(0)}% 초과 시 스프링식 용량 보정 필요(Kb). ${(backpress.limitPilot*100).toFixed(0)}% 초과 시 파일럿식 전환 검토.`,
-      ok: backpress.ratio < backpress.limitPilot,
+      formula:`P2/Pset < ${(backpress.allowableRatio*100).toFixed(0)}% (${backpress.valveType==="BELLOWS"?"벨로우즈형(밸런스형)":"스프링식"} 기준 — KOSHA GUIDE D-18-2020 §7.2(4))`,
+      result:`P2/Pset = ${(backpress.ratio*100).toFixed(1)}% → ${backpress.ratio < backpress.allowableRatio ? "적합 ✓" : "초과 ✗ — 조치 필요"}`,
+      detail:`선택된 밸브 형식: ${backpress.valveType==="BELLOWS"?"벨로우즈형(밸런스형)":"스프링식"}. 배압이 이 한도를 초과하면 밸브가 제대로 재폐되지 않거나 용량이 저하될 수 있음. 근거: ${backpress.source||"KOSHA GUIDE D-18-2020 §7.2(4)"}`,
+      ok: backpress.ratio < backpress.allowableRatio,
     },
   ];
 }
@@ -475,7 +519,7 @@ function _assetHash(equipment, dischargeSystem) {
   return (h >>> 0).toString(16).padStart(8, '0');
 }
 
-const SNAPSHOT_ENGINE_VERSION = "1.3.0";
+const SNAPSHOT_ENGINE_VERSION = "1.4.0";
 
 // Snapshot이 기록하는 trigger fields — 감사 시 "어떤 규칙으로 판단했는지" 재현용
 const WORKFLOW_TRIGGER_FIELDS_SNAPSHOT = [
@@ -1893,10 +1937,15 @@ const PDF_CHECKLIST_ITEMS = [
   { key:"marginOK",       label:"여유율 충분",     detail:"필요량보다 여유있게 설계됐는지 — 선정 오리피스 면적의 여유 정도(1.0배 이상)" },
 ];
 
-function _pdfVerdictSection(checklist) {
+function _pdfVerdictSection(checklist, backpress) {
   if (!checklist) return "";
   const allOK = Object.values(checklist).every(Boolean);
-  const rows = PDF_CHECKLIST_ITEMS.map(({key,label,detail}) => {
+  const vtLabel = backpress?.valveType==="BELLOWS" ? "벨로우즈형(밸런스형)" : "스프링식";
+  const allowPct = backpress?.allowableRatio!=null ? (backpress.allowableRatio*100).toFixed(0) : "10";
+  const items = PDF_CHECKLIST_ITEMS.map(it => it.key === "backPressureOK"
+    ? { ...it, detail:`배출 배관에 걸리는 반대 압력이 밸브 작동을 방해하지 않는 범위인지 확인 — ${vtLabel} 기준 설정압력의 ${allowPct}% 이내 (KOSHA D-18 §7.2(4))` }
+    : it);
+  const rows = items.map(({key,label,detail}) => {
     const ok = checklist[key];
     return `<div class="pdf-row" style="align-items:flex-start;">
       <span class="k" style="font-family:'Pretendard','Malgun Gothic',sans-serif;color:#1a2b3d;">
@@ -1930,6 +1979,7 @@ function buildPDFHtml(reportPackage) {
 
   const calcBody =
     _pdfRow("유체 종류", _pdfFluidLabel(pkg.calculation.inputs)) +
+    _pdfRow("밸브 형식", pkg.calculation.inputs?.valveType === "BELLOWS" ? "벨로우즈형(밸런스형)" : "스프링식") +
     _pdfRow("계산 방식 (계산 엔진 버전)", `API 520 방식 v${pkg.calculation.engineVersion}`) +
     _pdfRow("압축계수 Z (이상기체와의 차이 보정값)", pkg.calculation.inputs?.Z != null ? `${pkg.calculation.inputs.Z}${pkg.calculation.inputs.Z===1 ? " (기본값)" : ""}` : "—") +
     _pdfRow("분출압력 (절대압 기준)", pkg.calculation.result?.P1abs ? `${pkg.calculation.result.P1abs.toFixed(3)} bar(절대압)` : "—") +
@@ -1976,7 +2026,7 @@ function buildPDFHtml(reportPackage) {
   <div class="pdf-title">PSV 검토 감사 보고서</div>
   <div class="pdf-subtitle">${pkg.identity.caseId} · ${pkg.identity.snapshotId}</div>
 
-  ${_pdfVerdictSection(pkg.calculation.result?.checklist)}
+  ${_pdfVerdictSection(pkg.calculation.result?.checklist, pkg.calculation.result?.stepData?.backpress)}
   ${_pdfSection("① 설비 정보", assetBody)}
   ${_pdfSection("② 계산 근거", calcBody)}
   ${_pdfSection("③ 검토 진행 상태", wfBody)}
@@ -2214,10 +2264,12 @@ function EvidenceCard({ step }) {
 }
 
 // ChecklistRenderer — Snapshot.result.checklist 렌더링
-function ChecklistRenderer({ checklist }) {
+function ChecklistRenderer({ checklist, backpress }) {
+  const vtLabel = backpress?.valveType==="BELLOWS" ? "벨로우즈형(밸런스형)" : "스프링식";
+  const allowPct = backpress?.allowableRatio!=null ? (backpress.allowableRatio*100).toFixed(0) : "10";
   const items = [
     { key:"capacityOK",     label:"방출용량 충족",    detail:"선정 오리피스 면적 ≥ 필요 면적" },
-    { key:"backPressureOK", label:"배압(背壓) 허용 범위 이내", detail:`P2/P1 < ${(API_CONST.BACKPRESSURE_SPRING*100).toFixed(0)}% (스프링식 기준) — 배출 배관이 밸브 작동을 방해하지 않는지 확인` },
+    { key:"backPressureOK", label:"배압(背壓) 허용 범위 이내", detail:`P2/P1 < ${allowPct}% (${vtLabel} 기준, KOSHA D-18 §7.2(4)) — 배출 배관이 밸브 작동을 방해하지 않는지 확인` },
     { key:"mawpOK",         label:"설정압 ≤ 최고허용운전압력(MAWP)",    detail:"설정압이 설비가 견딜 수 있는 최고압력을 넘지 않는지 확인" },
     { key:"kdOK",           label:"방출계수 Kd 충족 (≥ 0.9)",         detail:"밸브가 실제로 얼마나 잘 배출하는지 나타내는 보정값, 최소 권고 기준 충족" },
     { key:"marginOK",       label:"여유율 충분 (≥ 1.0)",     detail:"필요량보다 여유있게 설계됐는지 — 선정 오리피스 면적의 여유 정도" },
@@ -2446,7 +2498,8 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
 
   // 배압 비율 실시간 계산 (경고용)
   const bpRatio = inputs.P1 > 0 ? (inputs.P2 / inputs.P1 * 100).toFixed(1) : 0;
-  const bpWarning = bpRatio > 30 ? "파일럿식 검토" : bpRatio > 10 ? "Kb 확인" : null;
+  const allowableBpPct = getAllowableBackpressureRatio(inputs.valveType) * 100;
+  const bpWarning = bpRatio > allowableBpPct ? "배압 초과" : bpRatio > allowableBpPct/2 ? "Kb 확인" : null;
 
   // 설정압 > MAWP 경고
   const mawpWarning = inputs.P1 > inputs.mawp ? "설정압 > MAWP!" : null;
@@ -2471,6 +2524,34 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
           </div>
         ))}
       </div>
+
+      {/* ── 1b. 밸브 형식 (배압 허용비율 결정) — 안전밸브인 경우에만 ── */}
+      {deviceType === "safetyValve" && (
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono,letterSpacing:0.5,marginBottom:6}}>
+            VALVE TYPE — 배압 허용비율을 결정합니다
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            {[
+              ["SPRING", "스프링식(일반형)", "배압 ≤ 설정압력의 10%"],
+              ["BELLOWS","벨로우즈형(밸런스형)", "배압 ≤ 설정압력의 50%"],
+            ].map(([v,l,sub])=>(
+              <div key={v} onClick={()=>onChange("valveType",v)}
+                style={{flex:1,padding:"10px 12px",borderRadius:10,cursor:"pointer",
+                  border:`2px solid ${(inputs.valveType||"SPRING")===v?T.navyLight:T.border}`,
+                  background:(inputs.valveType||"SPRING")===v?T.navy+"0D":T.cardBg,
+                  transition:"all 0.15s"}}>
+                <div style={{fontSize:12,fontWeight:900,color:(inputs.valveType||"SPRING")===v?T.navy:T.text,fontFamily:font.sans}}>{l}</div>
+                <div style={{fontSize:9,color:T.sub,marginTop:2,fontFamily:font.mono}}>{sub}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:5,lineHeight:1.5}}>
+            출처: KOSHA GUIDE D-18-2020 §7.2(4). 파일럿식은 원문에 수치 기준이 없어 이 앱에서 아직 지원하지 않습니다 — 실제 파일럿식 밸브는 제작사 데이터시트를 별도로 확인하세요.
+          </div>
+        </div>
+      )}
+
 
       {/* ── 2. 방출 시나리오 ── */}
       <SectionHeader step="2" title="방출 시나리오" sub="어떤 상황에서 밸브가 열리는가 — API 521 시나리오"/>
@@ -2569,7 +2650,7 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         param="P2" label="배압 (Back Pressure)" unit="barg"
         value={inputs.P2} min={0} max={5} step={0.05}
         onChange={v=>onChange("P2",v)}
-        basis={`플레어 헤더 또는 방출 배관 압력. 현재 P2/P1 = ${bpRatio}%.${bpRatio>10?" 10% 초과 → Kb 1.0 미만 적용 필요.":""}${bpRatio>30?" 30% 초과 → 스프링식 부적합, 파일럿식 전환 검토.":""}`}
+        basis={`플레어 헤더 또는 방출 배관 압력. 현재 P2/P1 = ${bpRatio}%. 허용 한도 = ${(inputs.valveType==="BELLOWS"?"벨로우즈형":"스프링식")} 기준 ${allowableBpPct.toFixed(0)}% (KOSHA D-18 §7.2(4)).${bpRatio>allowableBpPct?" 한도 초과 — 벨로우즈형 전환 또는 배관 재설계 검토.":""}`}
         warning={bpWarning}
       />
       {/* COMPRESSIBILITY-001: Z는 Asset이 아니라 Calculation Input —
@@ -4252,7 +4333,7 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
 
       {reportTab === "checklist" && (
         <div style={{background:T.cardBg,borderRadius:14,padding:14,border:`1px solid ${T.border}`}}>
-          <ChecklistRenderer checklist={snap.result.checklist}/>
+          <ChecklistRenderer checklist={snap.result.checklist} backpress={snap.result.stepData?.backpress}/>
         </div>
       )}
 

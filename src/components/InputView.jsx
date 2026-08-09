@@ -202,7 +202,8 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
 
   // 배압 비율 실시간 계산 (경고용)
   const bpRatio = inputs.P1 > 0 ? (inputs.P2 / inputs.P1 * 100).toFixed(1) : 0;
-  const bpWarning = bpRatio > 30 ? "파일럿식 검토" : bpRatio > 10 ? "Kb 확인" : null;
+  const allowableBpPct = getAllowableBackpressureRatio(inputs.valveType) * 100;
+  const bpWarning = bpRatio > allowableBpPct ? "배압 초과" : bpRatio > allowableBpPct/2 ? "Kb 확인" : null;
 
   // 설정압 > MAWP 경고
   const mawpWarning = inputs.P1 > inputs.mawp ? "설정압 > MAWP!" : null;
@@ -227,6 +228,34 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
           </div>
         ))}
       </div>
+
+      {/* ── 1b. 밸브 형식 (배압 허용비율 결정) — 안전밸브인 경우에만 ── */}
+      {deviceType === "safetyValve" && (
+        <div style={{marginBottom:16}}>
+          <div style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono,letterSpacing:0.5,marginBottom:6}}>
+            VALVE TYPE — 배압 허용비율을 결정합니다
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            {[
+              ["SPRING", "스프링식(일반형)", "배압 ≤ 설정압력의 10%"],
+              ["BELLOWS","벨로우즈형(밸런스형)", "배압 ≤ 설정압력의 50%"],
+            ].map(([v,l,sub])=>(
+              <div key={v} onClick={()=>onChange("valveType",v)}
+                style={{flex:1,padding:"10px 12px",borderRadius:10,cursor:"pointer",
+                  border:`2px solid ${(inputs.valveType||"SPRING")===v?T.navyLight:T.border}`,
+                  background:(inputs.valveType||"SPRING")===v?T.navy+"0D":T.cardBg,
+                  transition:"all 0.15s"}}>
+                <div style={{fontSize:12,fontWeight:900,color:(inputs.valveType||"SPRING")===v?T.navy:T.text,fontFamily:font.sans}}>{l}</div>
+                <div style={{fontSize:9,color:T.sub,marginTop:2,fontFamily:font.mono}}>{sub}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:5,lineHeight:1.5}}>
+            출처: KOSHA GUIDE D-18-2020 §7.2(4). 파일럿식은 원문에 수치 기준이 없어 이 앱에서 아직 지원하지 않습니다 — 실제 파일럿식 밸브는 제작사 데이터시트를 별도로 확인하세요.
+          </div>
+        </div>
+      )}
+
 
       {/* ── 2. 방출 시나리오 ── */}
       <SectionHeader step="2" title="방출 시나리오" sub="어떤 상황에서 밸브가 열리는가 — API 521 시나리오"/>
@@ -325,7 +354,7 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         param="P2" label="배압 (Back Pressure)" unit="barg"
         value={inputs.P2} min={0} max={5} step={0.05}
         onChange={v=>onChange("P2",v)}
-        basis={`플레어 헤더 또는 방출 배관 압력. 현재 P2/P1 = ${bpRatio}%.${bpRatio>10?" 10% 초과 → Kb 1.0 미만 적용 필요.":""}${bpRatio>30?" 30% 초과 → 스프링식 부적합, 파일럿식 전환 검토.":""}`}
+        basis={`플레어 헤더 또는 방출 배관 압력. 현재 P2/P1 = ${bpRatio}%. 허용 한도 = ${(inputs.valveType==="BELLOWS"?"벨로우즈형":"스프링식")} 기준 ${allowableBpPct.toFixed(0)}% (KOSHA D-18 §7.2(4)).${bpRatio>allowableBpPct?" 한도 초과 — 벨로우즈형 전환 또는 배관 재설계 검토.":""}`}
         warning={bpWarning}
       />
       {/* COMPRESSIBILITY-001: Z는 Asset이 아니라 Calculation Input —

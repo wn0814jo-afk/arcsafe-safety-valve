@@ -41,10 +41,10 @@ function buildEvidence(sd) {
     },
     {
       id:6, title:"Back Pressure 검증",
-      formula:`P2/Pset < ${(API_CONST.BACKPRESSURE_SPRING*100).toFixed(0)}% (스프링식) / ${(API_CONST.BACKPRESSURE_PILOT*100).toFixed(0)}% (파일럿식)`,
-      result:`P2/Pset = ${(backpress.ratio*100).toFixed(1)}% → ${backpress.ratio < backpress.limitSpring ? "스프링식 적합 ✓" : backpress.ratio < backpress.limitPilot ? "파일럿식 검토 필요 ⚠" : "초과 ✗"}`,
-      detail:`Back Pressure가 설정압력의 ${(backpress.limitSpring*100).toFixed(0)}% 초과 시 스프링식 용량 보정 필요(Kb). ${(backpress.limitPilot*100).toFixed(0)}% 초과 시 파일럿식 전환 검토.`,
-      ok: backpress.ratio < backpress.limitPilot,
+      formula:`P2/Pset < ${(backpress.allowableRatio*100).toFixed(0)}% (${backpress.valveType==="BELLOWS"?"벨로우즈형(밸런스형)":"스프링식"} 기준 — KOSHA GUIDE D-18-2020 §7.2(4))`,
+      result:`P2/Pset = ${(backpress.ratio*100).toFixed(1)}% → ${backpress.ratio < backpress.allowableRatio ? "적합 ✓" : "초과 ✗ — 조치 필요"}`,
+      detail:`선택된 밸브 형식: ${backpress.valveType==="BELLOWS"?"벨로우즈형(밸런스형)":"스프링식"}. 배압이 이 한도를 초과하면 밸브가 제대로 재폐되지 않거나 용량이 저하될 수 있음. 근거: ${backpress.source||"KOSHA GUIDE D-18-2020 §7.2(4)"}`,
+      ok: backpress.ratio < backpress.allowableRatio,
     },
   ];
 }

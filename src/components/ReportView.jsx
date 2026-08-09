@@ -172,7 +172,7 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
 
       {reportTab === "checklist" && (
         <div style={{background:T.cardBg,borderRadius:14,padding:14,border:`1px solid ${T.border}`}}>
-          <ChecklistRenderer checklist={snap.result.checklist}/>
+          <ChecklistRenderer checklist={snap.result.checklist} backpress={snap.result.stepData?.backpress}/>
         </div>
       )}
 

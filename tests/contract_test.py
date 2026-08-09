@@ -28,17 +28,25 @@ SRC  = ROOT / 'src'
 C_BASE             = 520
 SI_AREA_CONST      = 13160     # API520-SI-001 — SI 단위 필수 변환상수 (누락 시 ~7600배 오차)
 ATM_PRESSURE_BAR   = 1.01325   # API520-PRESSURE-001 — relieving pressure 절대압 환산용
-BACKPRESSURE_SPRING= 0.10
-BACKPRESSURE_PILOT = 0.30
+# VALVE-TYPE-001: 배압 허용비율은 밸브 형식의 정책값 (engine/api520.js와 동일 테이블).
+# 출처: KOSHA GUIDE D-18-2020 §7.2(4) — 스프링식 10%, 벨로우즈형(밸런스형) 50%.
+# 파일럿식은 원문에 수치 기준이 없어 미지원 — 미지정/미지원 값은 SPRING으로 처리.
+BACKPRESSURE_POLICY = {"SPRING": 0.10, "BELLOWS": 0.50}
 RD_KD_FACTOR       = 0.9
 KD_MIN             = 0.9
 MARGIN_MIN         = 1.0
 
-ENGINE_VERSION     = "1.3.0"   # engine/api520.js와 반드시 일치해야 함
+ENGINE_VERSION     = "1.4.0"   # engine/api520.js와 반드시 일치해야 함
+# v1.4.0: VALVE-TYPE-001 — 배압 허용비율(10% 고정)을 valveType 정책 테이블로
+# 승격. valveType 미지정 시 SPRING(기존과 동일 판정)으로 하위호환.
 # v1.3.0: COMPRESSIBILITY-001 — Z를 Calculation Input으로 승격 (기존
 # 하드코딩 1.0 제거). Case 소유, Asset 아님. inputs에 Z 필드 필수화.
 # v1.2.0: [BUG FIX] SI 변환상수(13160) 누락 수정, [BUG FIX] P1 절대압 환산
 # (Pset*(1+OP/100)+대기압) 누락 수정. 기준값 전면 재계산 (2026-07-10).
+
+def _allowable_bp_ratio(valve_type):
+    vt = str(valve_type or "SPRING").upper()
+    return BACKPRESSURE_POLICY.get(vt, BACKPRESSURE_POLICY["SPRING"])
 
 ORIFICES = [
     ("D",0.71),("E",1.27),("F",1.98),("G",3.24),("H",5.07),
@@ -52,6 +60,7 @@ def _py_engine(inp, device="safetyValve"):
     Kd = float(inp["Kd"]); Kb = float(inp["Kb"]); mawp = float(inp["mawp"])
     OP = float(inp["OP"])
     Z  = float(inp["Z"])   # COMPRESSIBILITY-001: Calculation Input, 기본값 1.00
+    allowableBp = _allowable_bp_ratio(inp.get("valveType"))  # VALVE-TYPE-001
 
     # PRESSURE-001: Pset(barg) → P1abs(bara) 환산
     Pset  = P1
@@ -77,7 +86,7 @@ def _py_engine(inp, device="safetyValve"):
         "P1abs":    P1abs,
         "checklist": {
             "capacityOK":     sel[1] >= areaCm2,
-            "backPressureOK": bpRatio < BACKPRESSURE_SPRING,
+            "backPressureOK": bpRatio < allowableBp,
             "mawpOK":         Pset <= mawp,
             "kdOK":           Kd >= KD_MIN,
             "marginOK":       margin >= MARGIN_MIN,
@@ -732,12 +741,151 @@ def test_compressibility_contract() -> TestResult:
 
 
 # ════════════════════════════════════════════════════════════════
+#  VALVE-TYPE-001 CONTRACT — 밸브 형식별 배압 정책 (Sprint C-1)
+#  근거: KOSHA GUIDE D-18-2020 §7.2(4) — 스프링식 10%, 벨로우즈형 50%.
+#  범위: "밸브 형식별 배압 정책을 정확히 적용하는 것"까지만. 축적압력/
+#  Overpressure 가드레일(C-2), 인입배관 3%(C-3), 소요분출량 산정(C-4)은
+#  이번 계약의 범위 밖 — 여기서 그 항목들을 검증하지 않는다.
+# ════════════════════════════════════════════════════════════════
+def test_valve_type_policy_contract() -> TestResult:
+    tr = TestResult("VALVE-TYPE-001", "Sprint C-1 — 밸브 형식별 배압 정책")
+
+    api520_src   = (SRC / "engine" / "api520.js").read_text()
+    evid_src     = (SRC / "engine" / "evidence.js").read_text()
+    renderer_src = (SRC / "components" / "renderers" / "index.jsx").read_text()
+    template_src = (SRC / "report" / "renderer" / "pdf" / "template.js").read_text()
+    input_view   = (SRC / "components" / "InputView.jsx").read_text()
+
+    # ── 정책 테이블 자체가 소스에 정확한 값으로 존재하는지 ──────
+    tr.check("POLICY_table_SPRING_010",
+             "SPRING:  0.10" in api520_src or "SPRING: 0.10" in api520_src,
+             "BACKPRESSURE_POLICY.SPRING이 0.10이 아님")
+    tr.check("POLICY_table_BELLOWS_050",
+             "BELLOWS: 0.50" in api520_src,
+             "BACKPRESSURE_POLICY.BELLOWS가 0.50이 아님")
+    tr.check("POLICY_source_cited",
+             "KOSHA GUIDE D-18-2020" in api520_src,
+             "정책 테이블에 KOSHA D-18-2020 출처 인용이 없음")
+    tr.check("POLICY_pilot_not_in_table",
+             '"PILOT"' not in api520_src.replace("PILOT_", "") and "PILOT:" not in api520_src.split("BACKPRESSURE_POLICY")[1].split("}")[0],
+             "정책 테이블에 PILOT이 값과 함께 들어있음 — 원문에 수치 기준 없는 채로 지원 표시하면 안 됨")
+
+    node = shutil.which("node")
+    if node:
+        check_script = f"""
+const fs = require('fs');
+const files = ['constants.js','engine/api520.js']
+  .map(f => fs.readFileSync('{SRC}/' + f, 'utf8')).join('\\n');
+eval(files);
+
+const out = {{}};
+
+// 1) SPRING -> 10%, BELLOWS -> 50%
+out.spring = getAllowableBackpressureRatio("SPRING");
+out.bellows = getAllowableBackpressureRatio("BELLOWS");
+out.lowercase = getAllowableBackpressureRatio("bellows");
+
+// 2) valveType 누락 -> SPRING 하위호환
+out.missing = getAllowableBackpressureRatio(undefined);
+out.emptyString = getAllowableBackpressureRatio("");
+
+// 3) 알 수 없는 valveType -> fail-fast (validateInputs가 거부)
+const baseInputs = {{ W:2500,P1:5.5,P2:0.3,T:373,M:44,k:1.3,Kd:0.975,Kb:1.0,mawp:6.0,OP:10,Z:1.0 }};
+out.unknownRejected = validateInputs({{ ...baseInputs, valveType:"PILOT" }});
+out.unknownRejected2 = validateInputs({{ ...baseInputs, valveType:"GARBAGE" }});
+out.missingAccepted = validateInputs({{ ...baseInputs }});
+out.springAccepted = validateInputs({{ ...baseInputs, valveType:"SPRING" }});
+out.bellowsAccepted = validateInputs({{ ...baseInputs, valveType:"BELLOWS" }});
+
+// 4) Engine 실행 결과 checklist가 정책값을 실제로 사용하는지
+//    (P2/P1 = 0.3/5.5 = 5.45% -> SPRING(10%) 통과, 이 자체로는 구분 안 되므로
+//     30% 배압으로 SPRING/BELLOWS 갈리는 case 별도 확인)
+const hiBp = {{ ...baseInputs, P2: 2.0 }}; // P2/P1 = 36.4%
+const rSpring  = api520Engine({{ ...hiBp, valveType:"SPRING" }}, "safetyValve");
+const rBellows = api520Engine({{ ...hiBp, valveType:"BELLOWS" }}, "safetyValve");
+out.springFailsAt36pct  = rSpring.checklist.backPressureOK === false;
+out.bellowsPassesAt36pct = rBellows.checklist.backPressureOK === true;
+out.springStepDataRatio  = rSpring.stepData.backpress.allowableRatio;
+out.bellowsStepDataRatio = rBellows.stepData.backpress.allowableRatio;
+out.springTraceRatio = rSpring.trace.find(t => t.step === "BACKPRESSURE_POLICY").value;
+out.bellowsTraceRatio = rBellows.trace.find(t => t.step === "BACKPRESSURE_POLICY").value;
+out.springSource = rSpring.stepData.backpress.source;
+
+console.log(JSON.stringify(out));
+"""
+        r = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=15)
+        try:
+            result = json.loads(r.stdout.strip())
+        except Exception:
+            result = None
+        ok = result is not None
+        tr.check("ENGINE_reachable", ok, f"node 실행 실패 — stdout={r.stdout!r} stderr={r.stderr!r}")
+        if ok:
+            tr.check("RATIO_spring_is_010", result["spring"] == 0.10, f"actual={result['spring']}")
+            tr.check("RATIO_bellows_is_050", result["bellows"] == 0.50, f"actual={result['bellows']}")
+            tr.check("RATIO_case_insensitive", result["lowercase"] == 0.50, f"actual={result['lowercase']}")
+            tr.check("MISSING_defaults_to_SPRING", result["missing"] == 0.10, f"actual={result['missing']}")
+            tr.check("EMPTY_STRING_defaults_to_SPRING", result["emptyString"] == 0.10, f"actual={result['emptyString']}")
+            tr.check("UNKNOWN_valveType_PILOT_rejected",
+                     result["unknownRejected"]["ok"] is False and result["unknownRejected"].get("field") == "valveType",
+                     f"actual={result['unknownRejected']}")
+            tr.check("UNKNOWN_valveType_GARBAGE_rejected",
+                     result["unknownRejected2"]["ok"] is False and result["unknownRejected2"].get("field") == "valveType",
+                     f"actual={result['unknownRejected2']}")
+            tr.check("MISSING_valveType_accepted", result["missingAccepted"]["ok"] is True, f"actual={result['missingAccepted']}")
+            tr.check("SPRING_accepted", result["springAccepted"]["ok"] is True, f"actual={result['springAccepted']}")
+            tr.check("BELLOWS_accepted", result["bellowsAccepted"]["ok"] is True, f"actual={result['bellowsAccepted']}")
+            tr.check("SPRING_fails_at_36pct_backpressure", result["springFailsAt36pct"] is True)
+            tr.check("BELLOWS_passes_at_36pct_backpressure", result["bellowsPassesAt36pct"] is True)
+            tr.check("stepData_ratio_matches_policy_SPRING", result["springStepDataRatio"] == 0.10)
+            tr.check("stepData_ratio_matches_policy_BELLOWS", result["bellowsStepDataRatio"] == 0.50)
+            tr.check("trace_ratio_matches_stepData_SPRING", result["springTraceRatio"] == result["springStepDataRatio"])
+            tr.check("trace_ratio_matches_stepData_BELLOWS", result["bellowsTraceRatio"] == result["bellowsStepDataRatio"])
+            tr.check("provenance_source_cited_in_stepData",
+                     result["springSource"] is not None and "KOSHA" in result["springSource"],
+                     f"actual={result['springSource']}")
+    else:
+        tr.check("ENGINE_node_available", False, "node 없음 — 실행 검증 생략")
+
+    # ── Checklist(화면)/Evidence/PDF가 하드코딩된 10%/50% 대신
+    #    stepData/backpress의 allowableRatio를 그대로 읽는지 (단일 출처) ──
+    tr.check("CHECKLIST_reads_allowableRatio_not_hardcoded",
+             "backpress?.allowableRatio" in renderer_src or "backpress.allowableRatio" in renderer_src,
+             "ChecklistRenderer가 backpress.allowableRatio를 읽지 않음 — 하드코딩 가능성")
+    tr.check("EVIDENCE_reads_allowableRatio_not_hardcoded",
+             "backpress.allowableRatio" in evid_src,
+             "evidence.js가 backpress.allowableRatio를 읽지 않음 — 하드코딩 가능성")
+    tr.check("PDF_reads_allowableRatio_not_hardcoded",
+             "backpress?.allowableRatio" in template_src or "backpress.allowableRatio" in template_src,
+             "PDF template이 backpress.allowableRatio를 읽지 않음 — 하드코딩 가능성")
+    tr.check("CHECKLIST_no_hardcoded_percent_literal",
+             "*0.10" not in renderer_src.replace(" ", "") and "* 0.10" not in renderer_src,
+             "ChecklistRenderer에 배압 비율 0.10 리터럴이 하드코딩됨")
+
+    # ── UI(InputView)가 10%/50%를 자체 계산하지 않고 engine 함수를 호출하는지 ──
+    tr.check("UI_calls_getAllowableBackpressureRatio",
+             "getAllowableBackpressureRatio(" in input_view,
+             "InputView.jsx가 getAllowableBackpressureRatio()를 호출하지 않음 — 자체 계산 가능성")
+    tr.check("UI_does_not_hardcode_bp_thresholds",
+             "bpRatio > 30" not in input_view and "bpRatio > 10" not in input_view,
+             "InputView.jsx에 예전 하드코딩 배압 임계값(10/30)이 잔존")
+
+    # ── PILOT을 UI 선택지로 노출하지 않는지 ─────────────────────
+    tr.check("UI_does_not_offer_PILOT_option",
+             '["PILOT"' not in input_view and "'PILOT'" not in input_view,
+             "InputView.jsx가 PILOT을 선택지로 제공함 — 원문에 수치 기준 없는 상태에서 지원 표시하면 안 됨")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
 #  BASELINE LOCK CONTRACT (Sprint A.1) — Engine 1.3.0 기준선 보호 장치
 #  1) ENGINE-VERSION-LOCK-001: Snapshot/ReportPackage/Fixture 엔진버전 일치
 #  2) GOLDEN-FIXTURE-MUTATION-GUARD-001: fixture를 손으로 고치면 감지
 #  3) TRACE-SCHEMA-001: Calculation Trace 필드 스키마 고정
 # ════════════════════════════════════════════════════════════════
 def test_baseline_lock_contract() -> TestResult:
+
     tr = TestResult("BASELINE-LOCK-001", "Sprint A.1 — Engine 1.3.0 Baseline 보호 장치")
 
     node = shutil.which("node")
@@ -844,7 +992,8 @@ def test_baseline_lock_contract() -> TestResult:
                  tresult is not None and tresult.get("schemaOk") is True and tresult.get("traceLen", 0) >= 7,
                  f"실제 엔진 trace 출력이 스키마 검증을 통과하지 못함 — stdout={cp.stdout!r} stderr={cp.stderr!r}")
         expected_steps = ["COMPRESSIBILITY_Z","SET_PRESSURE","RELIEVING_PRESSURE",
-                           "C_COEFFICIENT","MASS_FLUX_AREA","REQUIRED_AREA","ORIFICE_SELECTION"]
+                           "C_COEFFICIENT","MASS_FLUX_AREA","REQUIRED_AREA","ORIFICE_SELECTION",
+                           "BACKPRESSURE_POLICY"]
         tr.check("TRACE_SCHEMA_001_step_order_frozen",
                  tresult is not None and tresult.get("steps") == expected_steps,
                  f"trace 단계 순서/구성이 계약과 다름 — actual={tresult.get('steps') if tresult else None}")
@@ -2709,6 +2858,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [BASELINE-LOCK-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── Valve Type policy contract (Sprint C-1) ──────────────────
+    print("\n── VALVE TYPE POLICY (Sprint C-1) ────────────────────")
+    tr = test_valve_type_policy_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [VALVE-TYPE-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"

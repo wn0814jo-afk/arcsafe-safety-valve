@@ -59,10 +59,15 @@ const PDF_CHECKLIST_ITEMS = [
   { key:"marginOK",       label:"여유율 충분",     detail:"필요량보다 여유있게 설계됐는지 — 선정 오리피스 면적의 여유 정도(1.0배 이상)" },
 ];
 
-function _pdfVerdictSection(checklist) {
+function _pdfVerdictSection(checklist, backpress) {
   if (!checklist) return "";
   const allOK = Object.values(checklist).every(Boolean);
-  const rows = PDF_CHECKLIST_ITEMS.map(({key,label,detail}) => {
+  const vtLabel = backpress?.valveType==="BELLOWS" ? "벨로우즈형(밸런스형)" : "스프링식";
+  const allowPct = backpress?.allowableRatio!=null ? (backpress.allowableRatio*100).toFixed(0) : "10";
+  const items = PDF_CHECKLIST_ITEMS.map(it => it.key === "backPressureOK"
+    ? { ...it, detail:`배출 배관에 걸리는 반대 압력이 밸브 작동을 방해하지 않는 범위인지 확인 — ${vtLabel} 기준 설정압력의 ${allowPct}% 이내 (KOSHA D-18 §7.2(4))` }
+    : it);
+  const rows = items.map(({key,label,detail}) => {
     const ok = checklist[key];
     return `<div class="pdf-row" style="align-items:flex-start;">
       <span class="k" style="font-family:'Pretendard','Malgun Gothic',sans-serif;color:#1a2b3d;">
@@ -96,6 +101,7 @@ function buildPDFHtml(reportPackage) {
 
   const calcBody =
     _pdfRow("유체 종류", _pdfFluidLabel(pkg.calculation.inputs)) +
+    _pdfRow("밸브 형식", pkg.calculation.inputs?.valveType === "BELLOWS" ? "벨로우즈형(밸런스형)" : "스프링식") +
     _pdfRow("계산 방식 (계산 엔진 버전)", `API 520 방식 v${pkg.calculation.engineVersion}`) +
     _pdfRow("압축계수 Z (이상기체와의 차이 보정값)", pkg.calculation.inputs?.Z != null ? `${pkg.calculation.inputs.Z}${pkg.calculation.inputs.Z===1 ? " (기본값)" : ""}` : "—") +
     _pdfRow("분출압력 (절대압 기준)", pkg.calculation.result?.P1abs ? `${pkg.calculation.result.P1abs.toFixed(3)} bar(절대압)` : "—") +
@@ -142,7 +148,7 @@ function buildPDFHtml(reportPackage) {
   <div class="pdf-title">PSV 검토 감사 보고서</div>
   <div class="pdf-subtitle">${pkg.identity.caseId} · ${pkg.identity.snapshotId}</div>
 
-  ${_pdfVerdictSection(pkg.calculation.result?.checklist)}
+  ${_pdfVerdictSection(pkg.calculation.result?.checklist, pkg.calculation.result?.stepData?.backpress)}
   ${_pdfSection("① 설비 정보", assetBody)}
   ${_pdfSection("② 계산 근거", calcBody)}
   ${_pdfSection("③ 검토 진행 상태", wfBody)}
