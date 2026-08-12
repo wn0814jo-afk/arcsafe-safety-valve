@@ -42,6 +42,12 @@ const EQUIPMENT_DIFF_FIELDS = [
   ["inletSize",    null],
   ["outletSize",   null],
   ["installedAt",  null],
+  // INLET-LOSS-001: inletPiping.* — dot-path 필드. DischargeSystem의
+  // L/D/fittingsK와 이름이 겹치므로("L" vs "L") 반드시 접두사를 붙여
+  // 구분한다 — 감사 로그에서 "무엇의 L이 바뀌었는지" 모호하면 안 된다.
+  ["inletPiping.L",         "m"],
+  ["inletPiping.D",         "m"],
+  ["inletPiping.fittingsK", null],
 ];
 
 const DISCHARGE_DIFF_FIELDS = [
@@ -69,13 +75,22 @@ function _valuesEqual(a, b) {
   return a === b;
 }
 
+// ── _getPath (내부 전용) ──────────────────────────────────────
+// "inletPiping.L" 같은 1-depth 점(.) 경로를 읽는다. 중간 객체가
+// null/undefined면 undefined를 반환(값 없음 취급) — _emptyish와 호환.
+function _getPath(obj, path) {
+  if (!obj) return undefined;
+  if (path.indexOf(".") === -1) return obj[path];
+  return path.split(".").reduce((acc, key) => (acc == null ? acc : acc[key]), obj);
+}
+
 // ── _diffFields (내부 전용) ───────────────────────────────────
 function _diffFields(oldRev, newRev, fieldSpec) {
   if (!oldRev || !newRev) return Object.freeze([]);
   const changes = [];
   for (const [field, unit] of fieldSpec) {
-    const from = oldRev[field];
-    const to = newRev[field];
+    const from = _getPath(oldRev, field);
+    const to = _getPath(newRev, field);
     if (!_valuesEqual(from, to)) {
       changes.push(Object.freeze(
         unit ? { field, from, to, unit } : { field, from, to }

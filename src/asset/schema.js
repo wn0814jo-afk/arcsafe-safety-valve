@@ -4,6 +4,25 @@
 // ════════════════════════════════════════════════════════════════
 
 // ── PSVEquipment ─────────────────────────────────────────────
+// INLET-LOSS-001: inletPiping은 Equipment revision 데이터의 일부다 —
+// 별도 엔티티가 아니라 Equipment와 같은 (id, revision) 생명주기를 공유.
+// 값이 바뀌면 reviseEquipment()로만 개정 가능(mocId 필수) — Asset
+// Revision History/Diff/Impact Analysis가 그대로 적용된다.
+function validateInletPiping(ip) {
+  // 인입배관 데이터 자체가 없는 것은 허용(선택 항목) — 3% 판정을 아직
+  // 안 하는 설비도 있을 수 있다. 있는데 형식이 틀린 것만 거부한다.
+  if (ip === undefined || ip === null) return { ok:true };
+  const fields = ["L", "D", "fittingsK"];
+  for (const f of fields) {
+    const v = Number(ip[f]);
+    if (isNaN(v) || !isFinite(v)) return { ok:false, field:`inletPiping.${f}`, reason:"not_a_number" };
+  }
+  if (Number(ip.D) <= 0) return { ok:false, field:"inletPiping.D", reason:"must_be_positive" };
+  if (Number(ip.L) <  0) return { ok:false, field:"inletPiping.L", reason:"must_be_non_negative" };
+  if (Number(ip.fittingsK) < 0) return { ok:false, field:"inletPiping.fittingsK", reason:"must_be_non_negative" };
+  return { ok:true };
+}
+
 function validateEquipment(eq) {
   if (!eq.tag || !eq.tag.trim())
     return { ok:false, field:"tag", reason:"required" };
@@ -20,6 +39,8 @@ function validateEquipment(eq) {
     return { ok:false, field:"overpressure", reason:"required" };
   if (Number(eq.overpressure) < 0)
     return { ok:false, field:"overpressure", reason:"must_be_non_negative" };
+  const ipValid = validateInletPiping(eq.inletPiping);
+  if (!ipValid.ok) return ipValid;
   return { ok:true };
 }
 
@@ -42,6 +63,15 @@ function createEquipment(fields) {
     orifice:      fields.orifice || "",
     inletSize:    fields.inletSize || "",
     outletSize:   fields.outletSize || "",
+    // INLET-LOSS-001: 명목 배관 크기(inletSize)를 자동 변환하지 않는다 —
+    // 실제 L/D/fittingsK를 별도로 입력받은 경우에만 존재(선택 항목).
+    // 중첩 객체이므로 별도로 freeze — Equipment를 Object.freeze({...})
+    // 해도 내부 참조 객체는 얕은 freeze만 되므로 여기서 직접 고정한다.
+    inletPiping:  fields.inletPiping ? Object.freeze({
+      L:         Number(fields.inletPiping.L),
+      D:         Number(fields.inletPiping.D),
+      fittingsK: Number(fields.inletPiping.fittingsK),
+    }) : null,
     installedAt:  fields.installedAt || "",
     registeredAt: new Date().toISOString(),
   });
@@ -69,6 +99,11 @@ function reviseEquipment(existing, fields) {
       mawp:         Number(fields.mawp),
       setPressure:  Number(fields.setPressure),
       overpressure: Number(fields.overpressure),
+      inletPiping:  fields.inletPiping ? Object.freeze({
+        L:         Number(fields.inletPiping.L),
+        D:         Number(fields.inletPiping.D),
+        fittingsK: Number(fields.inletPiping.fittingsK),
+      }) : (fields.inletPiping === null ? null : existing.inletPiping),
       registeredAt: existing.registeredAt,     // 최초 등록일 유지
       revisedAt:    new Date().toISOString(),
     }),

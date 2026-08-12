@@ -36,7 +36,7 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   const handleInputChange = (key, val) => setInputs(p => ({ ...p, [key]: val }));
 
   const handleCalculate = () => {
-    const engineResult = api520Engine(inputs, deviceType);
+    const engineResult = api520Engine(inputs, deviceType, equipment?.inletPiping || null);
     if (!engineResult.valid) {
       alert(`입력 오류: ${engineResult.error.field} — ${engineResult.error.reason}`);
       return;
@@ -328,7 +328,7 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
 
       {screen === "input" && (
         <InputView inputs={inputs} deviceType={deviceType}
-          dischargeSystem={dischargeSystem}
+          dischargeSystem={dischargeSystem} equipment={equipment}
           onChange={handleInputChange} onDeviceChange={setDeviceType}
           onSubmit={handleCalculate}/>
       )}

@@ -151,7 +151,7 @@ const KB_OPTIONS_SPRING = [
   { id:"high", label:"배압 높음 — 감소 적용",   value:0.90, tag:"15~20%",       basis:"P2/P1 15~20% 구간. 스프링식 용량 10% 이상 감소. 파일럿식 전환 검토 필요." },
 ];
 
-function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dischargeSystem }) {
+function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dischargeSystem, equipment }) {
   const [fluidId, setFluidId]   = useState("co2");
   const [kdId,    setKdId]      = useState("sv_std");
   const [showCustomFluid, setShowCustomFluid] = useState(false);
@@ -390,6 +390,53 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
                 입력 축적압력이 적용 기준을 초과합니다 — 밸브 수량/화재 시나리오를 재확인하거나
                 설비대장에서 Overpressure 값을 낮춰야 합니다. 자동 보정하지 않습니다.
               </span>}
+            </div>
+          );
+        })()}
+      </div>
+
+      {/* ── INLET-LOSS-001: 인입배관 압력손실 — read-only, Engine이 판정 소유 ── */}
+      <div style={{background:T.cardBg,borderRadius:10,padding:"10px 12px",marginBottom:10,
+        border:`1.5px solid ${T.border}`}}>
+        <div style={{fontSize:9,color:T.gray,fontFamily:font.mono,marginBottom:6}}>
+          INLET PRESSURE LOSS — 인입배관 압력손실 ≤ 설정압력 × {(getAllowableInletLossRatio()*100).toFixed(0)}% (KOSHA D-18-2020 §7.2(1))
+        </div>
+        {(() => {
+          const ip = equipment?.inletPiping;
+          if (!ip) {
+            return (
+              <div style={{fontSize:11,fontWeight:700,color:T.gray,fontFamily:font.mono}}>
+                — 판정 보류 (INSUFFICIENT INPUT) — 설비대장에 인입배관(L/D/ΣK)이 등록되어 있지 않습니다.
+                <div style={{fontSize:9,color:T.sub,fontWeight:400,marginTop:3,fontFamily:font.sans}}>
+                  임의로 추정하지 않습니다 — 실제 판정이 필요하면 설비대장에서 등록하세요.
+                </div>
+              </div>
+            );
+          }
+          const Pset = inputs.P1;
+          const fric = computeInletFrictionLoss({ W:inputs.W, T:inputs.T, M:inputs.M, Pset, inletPiping: ip });
+          const result = evaluateInletPressureLossPolicy(Pset, fric);
+          if (!result.pressureLossAvailable) {
+            return (
+              <div style={{fontSize:11,fontWeight:700,color:T.gray,fontFamily:font.mono}}>
+                — 판정 보류 (INSUFFICIENT INPUT) — {result.reason}
+              </div>
+            );
+          }
+          const go = result.pressureLossOK;
+          return (
+            <div>
+              <div style={{fontSize:10,color:T.sub,fontFamily:font.mono,marginBottom:4}}>
+                L={ip.L}m · D={Math.round(ip.D*1000)}mm · ΣK={ip.fittingsK}
+              </div>
+              <div style={{fontSize:11,fontWeight:900,fontFamily:font.mono,color: go ? T.green : T.red}}>
+                {go ? "✓ GO" : "✗ NO-GO"} — ΔP {result.pressureLoss.toFixed(4)} bar
+                {" "}({(result.pressureLossRatio*100).toFixed(2)}%, 허용 {(result.allowablePressureLoss).toFixed(4)} bar = {(result.allowableRatio*100).toFixed(0)}%)
+                {!go && <span style={{display:"block",fontWeight:600,color:T.sub,marginTop:2}}>
+                  인입배관 압력손실이 기준을 초과합니다 — 배관 내경을 늘리거나 길이/부속을 줄이는 재설계가 필요합니다.
+                  자동 보정하지 않습니다.
+                </span>}
+              </div>
             </div>
           );
         })()}

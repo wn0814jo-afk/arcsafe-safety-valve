@@ -10,8 +10,12 @@ const BP_CONST = {
 
 // 배관 형상 입력 — InputView에서 사용자가 결정하는 "물리적 사실"
 // (계산값이 아니라 실제 배관 도면 기준 입력)
-function validateGeometry(geo) {
-  const fields = ["L", "D", "fittingsK", "headerPressure"];
+// FRICTION-LOSS-001: L/D/fittingsK 3개는 배출측(DischargeSystem)과
+// 인입측(Equipment.inletPiping) 모두가 공유하는 순수 배관형상 계약 —
+// validatePipeGeometry()가 단일 출처. headerPressure는 배출측 전용
+// (정적 배압, superimposed backpressure)이라 별도로 검증한다.
+function validatePipeGeometry(geo) {
+  const fields = ["L", "D", "fittingsK"];
   for (const f of fields) {
     const v = Number(geo?.[f]);
     if (isNaN(v) || !isFinite(v)) return { ok:false, field:f, reason:"not_a_number" };
@@ -19,7 +23,15 @@ function validateGeometry(geo) {
   if (geo.D <= 0) return { ok:false, field:"D", reason:"must_be_positive" };
   if (geo.L <  0) return { ok:false, field:"L", reason:"must_be_non_negative" };
   if (geo.fittingsK < 0) return { ok:false, field:"fittingsK", reason:"must_be_non_negative" };
-  if (geo.headerPressure < 0) return { ok:false, field:"headerPressure", reason:"must_be_non_negative" };
+  return { ok:true };
+}
+
+function validateGeometry(geo) {
+  const pipeValid = validatePipeGeometry(geo);
+  if (!pipeValid.ok) return pipeValid;
+  const hp = Number(geo?.headerPressure);
+  if (isNaN(hp) || !isFinite(hp)) return { ok:false, field:"headerPressure", reason:"not_a_number" };
+  if (hp < 0) return { ok:false, field:"headerPressure", reason:"must_be_non_negative" };
   return { ok:true };
 }
 
@@ -29,6 +41,66 @@ function gasDensity(P_bar, T_K, M_gmol) {
   const P_Pa = P_bar * 1e5;
   const R = 8314; // J/(kmol·K), M은 g/mol = kg/kmol 이므로 그대로 사용
   return (P_Pa * M_gmol) / (R * T_K); // kg/m³
+}
+
+// ── computeFrictionLoss ─────────────────────────────────────────
+// FRICTION-LOSS-001: 배관 "마찰+fittings" 압력손실의 유일한 물리 계산
+// 코어 — Darcy-Weisbach(동압×f×L/D) + fittings(동압×ΣK). 배출측 전용
+// 개념(exit loss, 정적 헤더압, Kb, choked flow)은 이 함수에 넣지 않는다
+// — computeBackpressure()가 이 함수의 결과 위에 자신만의 정책을 얹는다.
+// 인입측(inlet loss)도 동일하게 이 함수만 호출하고 자신만의 정책
+// (KOSHA 3% 기준)을 별도로 얹는다 — 물리 계산 코드가 두 곳에 복제되지
+// 않는다.
+//
+// 입력: W(kg/h), T(K), M(g/mol), P_ref(barg — 밀도 산정 기준압력,
+//       배출측은 Pset, 인입측도 Pset 재사용), L(m), D(m), fittingsK(ΣK)
+// 출력: rho(kg/m³), velocity(m/s), 동압/마찰/fittings 손실 — Pa(원값)와
+//       bar(반올림 표시값) 둘 다 반환. Pa 원값은 상위 계산(exit loss 합산
+//       등)에서 반올림 오차 누적 없이 그대로 이어 쓸 수 있게 하기 위함.
+function computeFrictionLoss({ W, T, M, P_ref, L, D, fittingsK }) {
+  const geoValid = validatePipeGeometry({ L, D, fittingsK });
+  if (!geoValid.ok) {
+    return { valid:false, error: geoValid };
+  }
+  const Wn = Number(W), Tn = Number(T), Mn = Number(M), Pn = Number(P_ref);
+  if ([Wn,Tn,Mn,Pn].some(v => isNaN(v) || !isFinite(v))) {
+    return { valid:false, error:{ field:"W|T|M|P_ref", reason:"not_a_number" } };
+  }
+  if (Pn <= 0) return { valid:false, error:{ field:"P_ref", reason:"must_be_positive" } };
+
+  // UNIT-PRESSURE-002: 대기압 상수는 api520.js API_CONST.ATM_PRESSURE_BAR
+  // 단일 출처. 여기서는 OP를 더하지 않는다 — sizing용 relieving pressure
+  // (P1abs)와 별개의, 배관 유속/밀도 계산 전용 근사(의도적).
+  const P_ref_abs = Pn + API_CONST.ATM_PRESSURE_BAR;
+  const rho = gasDensity(P_ref_abs, Tn, Mn); // kg/m³
+
+  const W_kgs = Wn / 3600;
+  const A = Math.PI * (D * D) / 4;
+  const v = A > 0 ? W_kgs / (rho * A) : 0;
+
+  const dynHead_Pa = rho * v * v / 2;
+  const dP_pipe_Pa = D > 0 ? BP_CONST.DARCY_F_DEFAULT * (L / D) * dynHead_Pa : 0;
+  const dP_fit_Pa  = fittingsK * dynHead_Pa;
+  const totalFrictionLoss_Pa = dP_pipe_Pa + dP_fit_Pa;
+
+  return {
+    valid: true,
+    rho_kgm3:   rho,
+    velocity_ms: v,
+    frictionFactor: BP_CONST.DARCY_F_DEFAULT,
+    L_over_D: D > 0 ? L / D : 0,
+    // Pa 원값 — 상위 함수가 다른 손실항과 합산 후 한 번에 반올림할 때 사용
+    dynamicHead_Pa: dynHead_Pa,
+    dP_pipe_Pa,
+    dP_fit_Pa,
+    totalFrictionLoss_Pa,
+    // bar 반올림 표시값 — 그대로 evidence/PDF에 노출해도 되는 값
+    rho_kgm3_r:    Math.round(rho * 100) / 100,
+    velocity_ms_r: Math.round(v * 100) / 100,
+    dP_pipe_bar:   Math.round(dP_pipe_Pa / 1e5 * 10000) / 10000,
+    dP_fit_bar:    Math.round(dP_fit_Pa  / 1e5 * 10000) / 10000,
+    totalFrictionLoss_bar: Math.round(totalFrictionLoss_Pa / 1e5 * 10000) / 10000,
+  };
 }
 
 // ── computeBackpressure ───────────────────────────────────────
@@ -63,39 +135,31 @@ function computeBackpressure(inp, geometry) {
 
   const { L, D, fittingsK, headerPressure } = geometry;
 
-  // ── 1. 밀도 (방출 조건 기준, P1 절대압 근사) ──
-  // UNIT-PRESSURE-002: 대기압 상수는 api520.js API_CONST.ATM_PRESSURE_BAR
-  // 단일 출처 — 이 파일에서 값을 별도로 하드코딩하지 않는다. build.py
-  // BUILD_ORDER상 api520.js가 이 파일보다 먼저 로드되어 전역에서 참조 가능.
-  // 주의: 여기서는 OP(overpressure)를 더하지 않는다 — api520.js의 relieving
-  // pressure(P1abs, sizing용)와는 다른 값이다. 배관 유속/밀도 계산은 밸브가
-  // 막 열리는 시점(overpressure 이전) 기준 근사이므로 의도적으로 별개.
-  const P1_abs = P1 + API_CONST.ATM_PRESSURE_BAR; // barg → bara 근사 (OP 미포함, 의도적)
-  const rho = gasDensity(P1_abs, T, M); // kg/m³
+  // ── FRICTION-LOSS-001: 마찰+fittings 손실은 공용 계산부로 위임 ──
+  // (P1_abs/rho 계산은 computeFrictionLoss 내부에서 동일하게 수행됨)
+  const fric = computeFrictionLoss({ W, T, M, P_ref: P1, L, D, fittingsK });
+  if (!fric.valid) {
+    return { valid:false, error: fric.error };
+  }
+  const P1_abs = P1 + API_CONST.ATM_PRESSURE_BAR;
+  const rho = fric.rho_kgm3;
+  const v = fric.velocity_ms;
 
-  // ── 2. 유속 ──
-  const W_kgs = W / 3600;               // kg/h → kg/s (이 파일 유일한 변환 지점)
-  const A = Math.PI * (D * D) / 4;      // m²
-  const v = A > 0 ? W_kgs / (rho * A) : 0; // m/s
-
-  // ── 3. Choked flow 판정 ──
+  // ── Choked flow 판정 (배출측 전용 정책 — 공용 계산부에 없음) ──
   // 임계압력비 = (2/(k+1))^(k/(k-1))
   const criticalRatio = Math.pow(2/(k+1), k/(k-1));
   const pressureRatio = headerPressure > 0 ? (headerPressure + API_CONST.ATM_PRESSURE_BAR) / P1_abs : 0;
   const choked = pressureRatio <= criticalRatio;
 
-  // ── 4. 동적 배압 (Darcy-Weisbach + fittings + exit) ──
-  const dynHead = rho * v * v / 2; // Pa 단위 동압
-  const dP_pipe   = D > 0 ? BP_CONST.DARCY_F_DEFAULT * (L / D) * dynHead : 0;
-  const dP_fit    = fittingsK * dynHead;
-  const dP_exit   = BP_CONST.EXIT_K * dynHead;
-  const p_dynamic_Pa = dP_pipe + dP_fit + dP_exit;
+  // ── 동적 배압 = 공용 마찰손실(Pa 원값) + exit loss(배출측 전용) ──
+  const dP_exit_Pa   = BP_CONST.EXIT_K * fric.dynamicHead_Pa;
+  const p_dynamic_Pa = fric.dP_pipe_Pa + fric.dP_fit_Pa + dP_exit_Pa;
   const p_dynamic_bar = p_dynamic_Pa / 1e5;
 
-  // ── 5. 정적 배압 (header/flare 압력) ──
+  // ── 정적 배압 (header/flare 압력, 배출측 전용) ──
   const p_static = headerPressure;
 
-  // ── 6. 합산 + Kb ──
+  // ── 합산 + Kb ──
   const p_total = p_static + p_dynamic_bar;
   const kb = P1 > 0 ? Math.max(0, 1 - (p_total / P1) * 0.5) : 1.0;
   // 참고: 정밀 Kb 곡선은 API 520 Fig.31 실측 데이터 기반이며
@@ -108,7 +172,7 @@ function computeBackpressure(inp, geometry) {
     basis = `P_total/P1 = ${(ratio*100).toFixed(1)}% — 배압 영향 미미. 표준 스프링식 적용 가능.`;
   } else if (ratio < 0.30) {
     status = "calculated";
-    basis = `P_total/P1 = ${(ratio*100).toFixed(1)}% — 동적+정적 배압 합산 결과. Kb 보정 적용됨 (Pipe ΔP=${(dP_pipe/1e5).toFixed(3)}bar, Fittings ΔP=${(dP_fit/1e5).toFixed(3)}bar, Exit ΔP=${(dP_exit/1e5).toFixed(3)}bar).`;
+    basis = `P_total/P1 = ${(ratio*100).toFixed(1)}% — 동적+정적 배압 합산 결과. Kb 보정 적용됨 (Pipe ΔP=${(fric.dP_pipe_Pa/1e5).toFixed(3)}bar, Fittings ΔP=${(fric.dP_fit_Pa/1e5).toFixed(3)}bar, Exit ΔP=${(dP_exit_Pa/1e5).toFixed(3)}bar).`;
   } else {
     status = "out_of_range";
     basis = `P_total/P1 = ${(ratio*100).toFixed(1)}% — 스프링식 적용 범위(30%) 초과. 파일럿식 전환 또는 배관 재설계 검토 필요.`;
@@ -127,9 +191,9 @@ function computeBackpressure(inp, geometry) {
     choked,
     criticalRatio: Math.round(criticalRatio * 1000) / 1000,
     breakdown: {
-      dP_pipe_bar:  Math.round(dP_pipe/1e5 * 1000) / 1000,
-      dP_fit_bar:   Math.round(dP_fit/1e5  * 1000) / 1000,
-      dP_exit_bar:  Math.round(dP_exit/1e5 * 1000) / 1000,
+      dP_pipe_bar:  Math.round(fric.dP_pipe_Pa/1e5 * 1000) / 1000,
+      dP_fit_bar:   Math.round(fric.dP_fit_Pa /1e5 * 1000) / 1000,
+      dP_exit_bar:  Math.round(dP_exit_Pa/1e5 * 1000) / 1000,
       rho_kgm3:     Math.round(rho * 100) / 100,
     },
     status,

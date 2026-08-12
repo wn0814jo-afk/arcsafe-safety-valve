@@ -39,7 +39,13 @@ RD_KD_FACTOR       = 0.9
 KD_MIN             = 0.9
 MARGIN_MIN         = 1.0
 
-ENGINE_VERSION     = "1.5.0"   # engine/api520.js와 반드시 일치해야 함
+ENGINE_VERSION     = "1.6.0"   # engine/api520.js와 반드시 일치해야 함
+# v1.6.0: INLET-LOSS-001 — 인입배관 압력손실(KOSHA D-18-2020 §7.2(1),
+# 설정압력의 3% 이하) 판정 신설. Physical Calculation(computeFrictionLoss
+# 공용 재사용)과 Safety Policy(INLET_PRESSURE_LOSS_POLICY.MAX_RATIO)를
+# 분리. inletPiping 데이터 없으면 임의 추정 없이 dataGaps로 명시 —
+# checklist.every(Boolean) 통과와 GO는 별개(computeAdequacyVerdict 단일
+# 출처, INSUFFICIENT_INPUT을 NO_GO로 오인하지 않음).
 # v1.5.0: ACCUMULATION-001 — 축적압력 허용한계(overpressure guardrail)를
 # 밸브개수(valveCount)+화재여부(fireScenario) 정책 테이블로 신설. 초과 시
 # 자동 보정 없이 NO-GO만 표시(fail-fast). sizing(P1abs)과는 별개 검증.
@@ -1069,6 +1075,362 @@ console.log(JSON.stringify(out));
 
 
 # ════════════════════════════════════════════════════════════════
+#  INLET-LOSS-001 CONTRACT — 인입배관 압력손실 (Sprint C-3)
+#  근거: KOSHA GUIDE D-18-2020 §7.2(1) — 설정압력의 3% 이하.
+#  범위: Physical Calculation(공용 computeFrictionLoss 재사용)과 Safety
+#  Acceptance Policy(INLET_PRESSURE_LOSS_POLICY.MAX_RATIO)를 분리하고,
+#  입력 부족을 GO로 오판하지 않는 것까지. A안(checklist에 조건부 포함 +
+#  dataGaps + computeAdequacyVerdict 단일 판정)이 기존 구조와 공존하는지
+#  증명한다.
+# ════════════════════════════════════════════════════════════════
+def test_inlet_pressure_loss_contract() -> TestResult:
+    tr = TestResult("INLET-LOSS-001", "Sprint C-3 — 인입배관 압력손실 (KOSHA D-18 §7.2(1))")
+
+    api520_src    = (SRC / "engine" / "api520.js").read_text()
+    bp_src        = (SRC / "engine" / "backpressure.js").read_text()
+    evid_src      = (SRC / "engine" / "evidence.js").read_text()
+    renderer_src  = (SRC / "components" / "renderers" / "index.jsx").read_text()
+    template_src  = (SRC / "report" / "renderer" / "pdf" / "template.js").read_text()
+    input_view    = (SRC / "components" / "InputView.jsx").read_text()
+    asset_schema  = (SRC / "asset" / "schema.js").read_text()
+    asset_diff    = (SRC / "asset" / "diff.js").read_text()
+    wf_src        = (SRC / "engine" / "workflow_engine.js").read_text()
+    snap_src      = (SRC / "snapshot" / "create.js").read_text()
+    case_view     = (SRC / "components" / "CaseView.jsx").read_text()
+    dash_src      = (SRC / "components" / "Dashboard.jsx").read_text()
+    report_src    = (SRC / "components" / "ReportView.jsx").read_text()
+
+    # ── INLET-001: 정책 단일 출처 ──────────────────────────────
+    tr.check("INLET_001_policy_value_is_003",
+             "MAX_RATIO: 0.03" in api520_src,
+             "INLET_PRESSURE_LOSS_POLICY.MAX_RATIO가 0.03이 아님")
+    tr.check("INLET_001_source_cited",
+             "KOSHA GUIDE D-18-2020 §7.2(1)" in api520_src,
+             "정책에 KOSHA D-18-2020 §7.2(1) 출처 인용이 없음")
+    tr.check("INLET_001_accessor_function_exists",
+             "function getAllowableInletLossRatio" in api520_src,
+             "getAllowableInletLossRatio() 단일 접근점이 없음 — C-1/C-2와 동일 패턴 필요")
+    # UI/PDF/Evidence/Checklist가 0.03 또는 "3%"를 직접 하드코딩하지 않는지 —
+    # 반드시 allowableRatio/allowablePressureLoss 필드를 통해서만 표시해야 한다.
+    tr.check("INLET_001_UI_does_not_hardcode_003_or_3pct",
+             "0.03" not in input_view and "= 3%" not in input_view and "3%)" not in input_view,
+             "InputView.jsx가 0.03 또는 '3%'를 직접 하드코딩함 — allowableRatio를 통해야 함")
+    tr.check("INLET_001_PDF_does_not_hardcode_003_or_3pct",
+             "0.03" not in template_src and "의 3%" not in template_src and "3% 이내" not in template_src,
+             "PDF template이 0.03 또는 '3%'를 직접 하드코딩함")
+    tr.check("INLET_001_evidence_does_not_hardcode_003",
+             "0.03" not in evid_src and "의 3%(" not in evid_src,
+             "evidence.js가 0.03을 직접 하드코딩함 — API_CONST.INLET_PRESSURE_LOSS_POLICY.MAX_RATIO를 통해야 함")
+    tr.check("INLET_001_checklist_does_not_hardcode_003",
+             "0.03" not in renderer_src,
+             "ChecklistRenderer가 0.03을 직접 하드코딩함")
+
+    node = shutil.which("node")
+    if node:
+        common_files = "['constants.js','engine/api520.js','engine/backpressure.js','asset/schema.js']"
+        check_script = f"""
+const fs = require('fs');
+const files = {common_files}.map(f => fs.readFileSync('{SRC}/' + f, 'utf8')).join('\\n');
+eval(files);
+
+const out = {{}};
+const base = {{ W:2500,P1:5.5,P2:0.3,T:373,M:44,k:1.3,Kd:0.975,Kb:1.0,mawp:6.0,OP:10,Z:1.0,valveType:"SPRING",valveCount:1,fireScenario:false }};
+
+// ── INLET-002/003/004: 경계값 — 정확히 3%/미만/초과 ──────────
+// 역산: allowablePressureLoss = Pset*0.03. totalFrictionLoss(L,D,fittingsK)로
+// 정확히 그 값을 만들 수 있는 geometry를 이분탐색으로 찾는다(모델을
+// 시험에서 다시 발명하지 않고, 실제 computeFrictionLoss를 그대로 역이용).
+function lossFor(L) {{
+  const fric = computeInletFrictionLoss({{W:base.W,T:base.T,M:base.M,Pset:base.P1,inletPiping:{{L,D:0.05,fittingsK:1.0}}}});
+  return fric.pressureLoss_bar;
+}}
+const targetLoss = base.P1 * 0.03; // Pset=5.5 -> 0.165 bar
+let lo=0.001, hi=500;
+for (let i=0;i<80;i++) {{
+  const mid=(lo+hi)/2;
+  if (lossFor(mid) < targetLoss) lo=mid; else hi=mid;
+}}
+const L_exact = lo;
+const geomExact = {{L:L_exact, D:0.05, fittingsK:1.0}};
+const rExact = api520Engine({{...base}}, 'safetyValve', geomExact);
+out.exactRatio = rExact.stepData.inletLoss.pressureLossRatio;
+out.exactOK = rExact.checklist.inletLossOK;
+out.exactVerdictGO = rExact.verdict;
+
+const geomUnder = {{L:L_exact*0.5, D:0.05, fittingsK:1.0}};
+const rUnder = api520Engine({{...base}}, 'safetyValve', geomUnder);
+out.underOK = rUnder.checklist.inletLossOK;
+out.underRatio = rUnder.stepData.inletLoss.pressureLossRatio;
+
+const geomOver = {{L:L_exact*3, D:0.05, fittingsK:1.0}};
+const rOver = api520Engine({{...base}}, 'safetyValve', geomOver);
+out.overOK = rOver.checklist.inletLossOK;
+out.overRatio = rOver.stepData.inletLoss.pressureLossRatio;
+out.overVerdictNOGO = rOver.verdict;
+
+// ── INLET-005: 입력 누락/부분 입력 -> INSUFFICIENT_INPUT, 절대 GO 아님 ──
+const rMissing = api520Engine({{...base}}, 'safetyValve', null);
+out.missingAvailable = rMissing.stepData.inletLoss.pressureLossAvailable;
+out.missingOK = rMissing.stepData.inletLoss.pressureLossOK;
+out.missingHasChecklistKey = Object.prototype.hasOwnProperty.call(rMissing.checklist, 'inletLossOK');
+out.missingDataGaps = rMissing.dataGaps;
+out.missingVerdict = rMissing.verdict;
+
+const rUndefinedArg = api520Engine({{...base}}, 'safetyValve'); // 3번째 인자 자체를 생략
+out.undefinedArgVerdict = rUndefinedArg.verdict;
+out.undefinedArgDataGaps = rUndefinedArg.dataGaps;
+
+// 부분 입력(L만 있고 D/fittingsK 없음) -> 계산 불가로 처리, GO 아님
+const rPartial = api520Engine({{...base}}, 'safetyValve', {{L:5}});
+out.partialAvailable = rPartial.stepData.inletLoss.pressureLossAvailable;
+out.partialVerdict = rPartial.verdict;
+out.partialDataGaps = rPartial.dataGaps;
+
+// L=0(유효, 배관 길이 0도 허용값)이면서 D/fittingsK 있는 경우 -> "0은 누락이 아니다"
+// (INLET-012: every(Boolean)/truthy 검사였다면 L:0이 falsy라 누락으로 오판될 수 있음)
+const rZeroL = api520Engine({{...base}}, 'safetyValve', {{L:0, D:0.05, fittingsK:1.0}});
+out.zeroL_available = rZeroL.stepData.inletLoss.pressureLossAvailable;
+out.zeroL_hasChecklistKey = Object.prototype.hasOwnProperty.call(rZeroL.checklist, 'inletLossOK');
+
+// fittingsK=0(유효, 부속 없음)도 같은 방식으로 확인
+const rZeroFK = api520Engine({{...base}}, 'safetyValve', {{L:5, D:0.05, fittingsK:0}});
+out.zeroFK_available = rZeroFK.stepData.inletLoss.pressureLossAvailable;
+
+// ── INLET-006: 잘못된 geometry -> fail-fast (계산 불가로, NaN 전파 없이) ──
+const rBadD = api520Engine({{...base}}, 'safetyValve', {{L:5, D:0, fittingsK:1.0}});   // D<=0
+const rBadL = api520Engine({{...base}}, 'safetyValve', {{L:-1, D:0.05, fittingsK:1.0}}); // L<0
+const rBadFK = api520Engine({{...base}}, 'safetyValve', {{L:5, D:0.05, fittingsK:-1}}); // fittingsK<0
+const rNaN = api520Engine({{...base}}, 'safetyValve', {{L:"abc", D:0.05, fittingsK:1.0}});
+out.badD_available = rBadD.stepData.inletLoss.pressureLossAvailable;
+out.badL_available = rBadL.stepData.inletLoss.pressureLossAvailable;
+out.badFK_available = rBadFK.stepData.inletLoss.pressureLossAvailable;
+out.nan_available = rNaN.stepData.inletLoss.pressureLossAvailable;
+out.badD_noNaNPropagation = !isNaN(rBadD.areaCm2) && isFinite(rBadD.areaCm2); // sizing 자체는 안 깨짐
+out.nan_verdict = rNaN.verdict; // GO가 아니어야 함
+out.nan_isNotGo = rNaN.verdict !== "GO";
+
+// asset/schema.js 레벨 fail-fast — createEquipment가 잘못된 inletPiping을 던지는지
+out.schemaRejectsInvalid = (() => {{
+  try {{ createEquipment({{ tag:"T1", mawp:6, setPressure:5.5, overpressure:10, inletPiping:{{L:5,D:-1,fittingsK:1}} }}); return false; }}
+  catch(e) {{ return /INLET|inletPiping|D/.test(e.message); }}
+}})();
+out.schemaAcceptsValid = (() => {{
+  try {{ createEquipment({{ tag:"T2", mawp:6, setPressure:5.5, overpressure:10, inletPiping:{{L:5,D:0.05,fittingsK:1}} }}); return true; }}
+  catch(e) {{ return false; }}
+}})();
+out.schemaAcceptsNull = (() => {{
+  try {{ createEquipment({{ tag:"T3", mawp:6, setPressure:5.5, overpressure:10 }}); return true; }}
+  catch(e) {{ return false; }}
+}})();
+
+// ── INLET-007: sizing 독립성 — 관련없는 sizing 입력이 바뀌어도 동일
+//    inletPiping 입력이면 inlet-loss 결과가 바뀌지 않아야 함, 그리고
+//    inlet-loss 결과(NO-GO 포함)가 sizing 결과(areaCm2/orifice)를
+//    바꾸지 않아야 함 (양방향) ──
+const geomFixed = {{L:5, D:0.05, fittingsK:1.0}};
+const rSizeA = api520Engine({{...base, W:2500}}, 'safetyValve', geomFixed);
+const rSizeB = api520Engine({{...base, W:2500, Kd:0.98}}, 'safetyValve', geomFixed); // 관련없는 sizing 입력 변경
+out.inletLossUnaffectedBySizingChange =
+  Math.abs(rSizeA.stepData.inletLoss.pressureLoss - rSizeB.stepData.inletLoss.pressureLoss) < 1e-9;
+const rGoSizing = api520Engine({{...base}}, 'safetyValve', geomUnder).areaCm2;
+const rNoGoSizing = api520Engine({{...base}}, 'safetyValve', geomOver).areaCm2;
+out.sizingUnaffectedByInletLossVerdict = Math.abs(rGoSizing - rNoGoSizing) < 1e-9;
+out.sizingSameOrificeRegardlessOfInletLoss =
+  api520Engine({{...base}}, 'safetyValve', geomUnder).selected.letter ===
+  api520Engine({{...base}}, 'safetyValve', geomOver).selected.letter;
+
+// ── INLET-008: C-1(valveType)/C-2(accumulation)과 공존 ─────────
+const rCoexist = api520Engine({{...base, valveType:"BELLOWS", valveCount:2, fireScenario:true}}, 'safetyValve', geomFixed);
+out.coexist_backpressOK = rCoexist.checklist.backPressureOK !== undefined;
+out.coexist_accumulationOK = rCoexist.checklist.accumulationOK !== undefined;
+out.coexist_inletLossOK = rCoexist.checklist.inletLossOK !== undefined;
+out.coexist_valveTypeCorrect = rCoexist.stepData.backpress.valveType === "BELLOWS";
+out.coexist_accumulationRatioCorrect = rCoexist.stepData.accumulation.allowableRatio === 1.21; // fire
+// 반대 방향 — C-3 데이터 없이 C-1/C-2만 있는 기존 케이스가 여전히 정상 동작하는지
+const rC1C2Only = api520Engine({{...base, valveType:"BELLOWS", valveCount:2, fireScenario:true}}, 'safetyValve', null);
+out.c1c2OnlyStillWorks = rC1C2Only.checklist.backPressureOK !== undefined &&
+                          rC1C2Only.checklist.accumulationOK !== undefined &&
+                          !Object.prototype.hasOwnProperty.call(rC1C2Only.checklist, 'inletLossOK') &&
+                          rC1C2Only.dataGaps.includes('inletPiping');
+
+console.log(JSON.stringify(out));
+"""
+        r = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=20)
+        try:
+            result = json.loads(r.stdout.strip())
+        except Exception:
+            result = None
+        ok = result is not None
+        tr.check("ENGINE_reachable", ok, f"node 실행 실패 — stdout={r.stdout!r} stderr={r.stderr!r}")
+        if ok:
+            # INLET-002: 정확히 3% -> GO
+            tr.check("INLET_002_exact_3pct_ratio_is_003",
+                     abs(result["exactRatio"] - 0.03) < 1e-4, f"actual={result['exactRatio']}")
+            tr.check("INLET_002_exact_3pct_is_GO",
+                     result["exactOK"] is True, "정확히 3%(경계)는 <=이므로 GO여야 함")
+            tr.check("INLET_002_exact_3pct_verdict_GO",
+                     result["exactVerdictGO"] == "GO", f"actual={result['exactVerdictGO']}")
+            # INLET-003: 미만 -> GO
+            tr.check("INLET_003_under_3pct_is_GO",
+                     result["underOK"] is True and result["underRatio"] < 0.03,
+                     f"underOK={result['underOK']} underRatio={result['underRatio']}")
+            # INLET-004: 초과 -> NO-GO (canonical: checklist False, verdict NO_GO)
+            tr.check("INLET_004_over_3pct_is_NOGO",
+                     result["overOK"] is False and result["overRatio"] > 0.03,
+                     f"overOK={result['overOK']} overRatio={result['overRatio']}")
+            tr.check("INLET_004_over_3pct_verdict_is_canonical_NO_GO",
+                     result["overVerdictNOGO"] == "NO_GO", f"actual={result['overVerdictNOGO']}")
+
+            # INLET-005: 누락/부분입력 -> INSUFFICIENT_INPUT, 절대 GO 아님
+            tr.check("INLET_005_missing_not_available", result["missingAvailable"] is False)
+            tr.check("INLET_005_missing_ok_is_null", result["missingOK"] is None,
+                     "입력 누락 시 pressureLossOK는 false가 아니라 null(판정불가)이어야 함")
+            tr.check("INLET_005_missing_not_in_checklist", result["missingHasChecklistKey"] is False,
+                     "A안: 계산 불가 시 checklist.inletLossOK 자체가 없어야 함")
+            tr.check("INLET_005_missing_in_dataGaps", "inletPiping" in result["missingDataGaps"])
+            tr.check("INLET_005_missing_verdict_is_INSUFFICIENT_INPUT",
+                     result["missingVerdict"] == "INSUFFICIENT_INPUT",
+                     f"actual={result['missingVerdict']} — 절대 GO가 되면 안 됨")
+            tr.check("INLET_005_undefined_3rd_arg_same_as_missing",
+                     result["undefinedArgVerdict"] == "INSUFFICIENT_INPUT" and "inletPiping" in result["undefinedArgDataGaps"],
+                     "inletPiping 인자 자체를 생략해도 누락과 동일하게 처리되어야 함")
+            tr.check("INLET_005_partial_input_not_available", result["partialAvailable"] is False,
+                     "L만 있고 D/fittingsK 없는 부분 입력은 계산 불가여야 함")
+            tr.check("INLET_005_partial_input_verdict_INSUFFICIENT",
+                     result["partialVerdict"] == "INSUFFICIENT_INPUT", f"actual={result['partialVerdict']}")
+            tr.check("INLET_005_partial_input_in_dataGaps", "inletPiping" in result["partialDataGaps"])
+
+            # INLET-012: every(Boolean)/truthy 회귀 방지 — L=0, fittingsK=0은 유효값이지 누락이 아님
+            tr.check("INLET_012_zero_L_is_valid_not_missing",
+                     result["zeroL_available"] is True and result["zeroL_hasChecklistKey"] is True,
+                     "L=0(유효값, 배관 길이 0)이 truthy 검사로 인해 '누락'으로 오판됨 — every(Boolean) 패턴 회귀")
+            tr.check("INLET_012_zero_fittingsK_is_valid_not_missing",
+                     result["zeroFK_available"] is True,
+                     "fittingsK=0(유효값, 부속 없음)이 truthy 검사로 인해 '누락'으로 오판됨")
+
+            # INLET-006: 잘못된 geometry -> fail-fast, NaN 전파 없음, GO 아님
+            tr.check("INLET_006_D_zero_rejected", result["badD_available"] is False)
+            tr.check("INLET_006_L_negative_rejected", result["badL_available"] is False)
+            tr.check("INLET_006_fittingsK_negative_rejected", result["badFK_available"] is False)
+            tr.check("INLET_006_non_numeric_rejected", result["nan_available"] is False)
+            tr.check("INLET_006_no_NaN_propagation_to_sizing", result["badD_noNaNPropagation"] is True,
+                     "잘못된 inletPiping이 sizing(areaCm2)에 NaN을 전파시킴")
+            tr.check("INLET_006_invalid_never_becomes_GO", result["nan_isNotGo"] is True)
+            tr.check("INLET_006_schema_rejects_invalid_D", result["schemaRejectsInvalid"] is True,
+                     "asset/schema.js의 createEquipment가 D<=0인 inletPiping을 거부하지 않음")
+            tr.check("INLET_006_schema_accepts_valid", result["schemaAcceptsValid"] is True)
+            tr.check("INLET_006_schema_accepts_missing_inletPiping", result["schemaAcceptsNull"] is True,
+                     "inletPiping 자체가 선택 항목이므로 없어도 Equipment 생성은 성공해야 함")
+
+            # INLET-007: sizing 독립성 (양방향)
+            tr.check("INLET_007_inletLoss_unaffected_by_unrelated_sizing_input",
+                     result["inletLossUnaffectedBySizingChange"] is True,
+                     "관련없는 sizing 입력(Kd) 변경이 inlet-loss 결과에 영향을 줌")
+            tr.check("INLET_007_sizing_unaffected_by_inletLoss_verdict",
+                     result["sizingUnaffectedByInletLossVerdict"] is True,
+                     "inlet-loss GO/NO-GO 차이가 areaCm2(sizing)를 변경시킴")
+            tr.check("INLET_007_orifice_unaffected_by_inletLoss_verdict",
+                     result["sizingSameOrificeRegardlessOfInletLoss"] is True)
+
+            # INLET-008: C-1/C-2 공존 (양방향)
+            tr.check("INLET_008_coexists_with_backpressure_checklist", result["coexist_backpressOK"] is True)
+            tr.check("INLET_008_coexists_with_accumulation_checklist", result["coexist_accumulationOK"] is True)
+            tr.check("INLET_008_coexists_with_inletLoss_checklist", result["coexist_inletLossOK"] is True)
+            tr.check("INLET_008_valveType_still_correct_with_inletPiping_present", result["coexist_valveTypeCorrect"] is True)
+            tr.check("INLET_008_accumulation_still_correct_with_inletPiping_present", result["coexist_accumulationRatioCorrect"] is True)
+            tr.check("INLET_008_C1_C2_only_still_works_without_C3_data", result["c1c2OnlyStillWorks"] is True,
+                     "C-3 데이터 없이 C-1/C-2만 쓰는 기존 케이스가 깨짐")
+    else:
+        tr.check("ENGINE_node_available", False, "node 없음 — 실행 검증 생략")
+
+    # ── INLET-009: MOC/Revision Diff 감지 ──────────────────────
+    tr.check("INLET_009_diff_has_inletPiping_L",
+             '["inletPiping.L"' in asset_diff, "asset/diff.js에 inletPiping.L diff 필드가 없음")
+    tr.check("INLET_009_diff_has_inletPiping_D",
+             '["inletPiping.D"' in asset_diff, "asset/diff.js에 inletPiping.D diff 필드가 없음")
+    tr.check("INLET_009_diff_has_inletPiping_fittingsK",
+             '["inletPiping.fittingsK"' in asset_diff, "asset/diff.js에 inletPiping.fittingsK diff 필드가 없음")
+    tr.check("INLET_009_diff_uses_dotpath_not_UI_only",
+             "function _getPath" in asset_diff, "dot-path 리더가 없음 — Snapshot/Diff 레벨이 아니라 UI에서만 비교할 위험")
+    tr.check("INLET_009_workflow_trigger_includes_inletPiping",
+             "inletPiping.L" in wf_src and "inletPiping.D" in wf_src and "inletPiping.fittingsK" in wf_src,
+             "workflow_engine.js의 WORKFLOW_TRIGGER_FIELDS/detectMOC가 inletPiping 변경을 감지하지 않음")
+    tr.check("INLET_009_asset_hash_includes_inletPiping",
+             "inletPiping" in wf_src.split("function _wfAssetHash")[1][:600] if "function _wfAssetHash" in wf_src else False,
+             "_wfAssetHash가 inletPiping을 fingerprint에 포함하지 않음 — 변경돼도 감지 안 됨")
+    tr.check("INLET_009_snapshot_asset_hash_includes_inletPiping",
+             "inletPiping" in snap_src.split("function _assetHash")[1][:600] if "function _assetHash" in snap_src else False,
+             "snapshot/create.js의 _assetHash가 inletPiping을 포함하지 않음")
+
+    # ── INLET-010: UI가 압력손실/적정성을 독자 계산하지 않는지 ──
+    tr.check("INLET_010_UI_calls_engine_inlet_functions",
+             "computeInletFrictionLoss(" in input_view and "evaluateInletPressureLossPolicy(" in input_view,
+             "InputView.jsx가 Engine의 computeInletFrictionLoss/evaluateInletPressureLossPolicy를 호출하지 않음 — 자체 계산 가능성")
+    tr.check("INLET_010_UI_does_not_reimplement_darcy_weisbach",
+             "DARCY_F_DEFAULT" not in input_view and "gasDensity(" not in input_view,
+             "InputView.jsx가 Darcy-Weisbach/밀도 계산을 직접 재구현함")
+
+    # ── INLET-011: PDF/Evidence가 Snapshot 파생값만 쓰는지 (재계산 금지) ──
+    tr.check("INLET_011_PDF_reads_stepData_inletLoss",
+             "stepData?.inletLoss" in template_src or "stepData.inletLoss" in template_src,
+             "PDF template이 pkg.calculation.result.stepData.inletLoss를 읽지 않음")
+    tr.check("INLET_011_PDF_does_not_call_computeFrictionLoss",
+             "computeFrictionLoss(" not in template_src and "computeInletFrictionLoss(" not in template_src,
+             "PDF template이 압력손실을 직접 재계산함 — Snapshot/Engine 결과만 표시해야 함")
+    tr.check("INLET_011_evidence_reads_stepData_not_recompute",
+             "computeFrictionLoss(" not in evid_src and "computeInletFrictionLoss(" not in evid_src,
+             "evidence.js가 압력손실을 직접 재계산함")
+
+    # ── INLET-012: every(Boolean) 재도입 금지 (checklist 소비측) ──
+    tr.check("INLET_012_ReportView_uses_verdict_not_every_Boolean",
+             "r.verdict" in report_src and "Object.values(r.checklist).every(Boolean)" not in report_src.split("const verdict")[0],
+             "ReportView.jsx가 verdict 이전에 checklist.every(Boolean)로 allOK를 직접 계산함 — 재도입 금지 규칙 위반")
+    tr.check("INLET_012_Dashboard_uses_verdict_not_every_Boolean",
+             "result?.verdict" in dash_src,
+             "Dashboard.jsx가 latestSnap.result.verdict를 쓰지 않음 — every(Boolean) 재도입 가능성")
+    tr.check("INLET_012_PDF_uses_verdict_param",
+             "verdict)" in template_src.split("function _pdfVerdictSection")[1][:300] if "function _pdfVerdictSection" in template_src else False,
+             "PDF _pdfVerdictSection이 verdict 파라미터를 받지 않음")
+    tr.check("INLET_012_computeAdequacyVerdict_checks_dataGaps_first",
+             "dataGaps && dataGaps.length > 0" in api520_src,
+             "computeAdequacyVerdict()가 dataGaps를 checklist보다 우선 확인하지 않음")
+
+    # ── INLET-013: Snapshot/Report 보존 — equipment.inletPiping이 그대로 흐르는지 ──
+    tr.check("INLET_013_snapshot_freezes_equipment_copy",
+             "equipment       ? Object.freeze({ ...equipment })" in snap_src or "equipment ? Object.freeze({ ...equipment })" in snap_src,
+             "snapshot/create.js가 equipment를 freeze 복사하지 않음 — inletPiping 보존 경로 불명확")
+    tr.check("INLET_013_schema_freezes_nested_inletPiping",
+             asset_schema.count("Object.freeze({\n      L:") >= 1 or "inletPiping.L" in asset_schema and "Object.freeze" in asset_schema,
+             "asset/schema.js가 중첩된 inletPiping 객체를 별도로 freeze하지 않음 — 얕은 freeze로 인해 Snapshot 이후 변조 가능")
+    tr.check("INLET_013_CaseView_passes_inletPiping_to_engine",
+             "equipment?.inletPiping" in case_view or "equipment.inletPiping" in case_view,
+             "CaseView.jsx가 api520Engine 호출 시 equipment.inletPiping을 전달하지 않음")
+    # ReportPackage 레벨 화이트리스트 누락 방지 — 실제로 이 방식으로 한번
+    # 놓쳤던 결함(Snapshot에는 있으나 asset.equipment 화이트리스트에서
+    # 빠져 PDF가 "미등록"으로 잘못 표시)이라 회귀 테스트로 고정한다.
+    createpkg_src = (SRC / "report" / "createPackage.js").read_text()
+    tr.check("INLET_013_reportpackage_equipment_whitelist_includes_inletPiping",
+             "inletPiping:" in createpkg_src.split("asset: Object.freeze")[1][:800]
+             and "snapshot.equipment?.inletPiping" in createpkg_src,
+             "createPackage.js의 asset.equipment 화이트리스트에 inletPiping이 없음 — Snapshot엔 있어도 PDF/Evidence가 '미등록'으로 잘못 표시됨")
+
+    # ── INLET-014: 결정론/아키텍처 무결성 ──────────────────────
+    tr.check("INLET_014_engine_is_pure_no_date_now_in_inlet_functions",
+             "Date.now()" not in api520_src.split("function computeInletFrictionLoss")[1].split("function evaluateInletPressureLossPolicy")[1].split("function computeAdequacyVerdict")[0]
+             if "function computeInletFrictionLoss" in api520_src and "function evaluateInletPressureLossPolicy" in api520_src and "function computeAdequacyVerdict" in api520_src
+             else False,
+             "evaluateInletPressureLossPolicy가 Date.now() 등 비결정적 값을 사용함 — pure function 원칙 위반")
+    tr.check("INLET_014_no_engine_version_duplicate",
+             api520_src.count('const ENGINE_VERSION = "1.6.0"') == 1,
+             "ENGINE_VERSION 1.6.0 선언이 정확히 1곳이 아님")
+    tr.check("INLET_014_snapshot_engine_version_matches",
+             'const SNAPSHOT_ENGINE_VERSION = "1.6.0"' in snap_src,
+             "SNAPSHOT_ENGINE_VERSION이 1.6.0으로 갱신되지 않음 — engine_version == report_version 계약 위반")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
 #  BASELINE LOCK CONTRACT (Sprint A.1) — Engine 1.3.0 기준선 보호 장치
 #  1) ENGINE-VERSION-LOCK-001: Snapshot/ReportPackage/Fixture 엔진버전 일치
 #  2) GOLDEN-FIXTURE-MUTATION-GUARD-001: fixture를 손으로 고치면 감지
@@ -1183,7 +1545,8 @@ def test_baseline_lock_contract() -> TestResult:
                  f"실제 엔진 trace 출력이 스키마 검증을 통과하지 못함 — stdout={cp.stdout!r} stderr={cp.stderr!r}")
         expected_steps = ["COMPRESSIBILITY_Z","SET_PRESSURE","RELIEVING_PRESSURE",
                            "C_COEFFICIENT","MASS_FLUX_AREA","REQUIRED_AREA","ORIFICE_SELECTION",
-                           "BACKPRESSURE_POLICY","ACCUMULATION_POLICY","ACCUMULATION_GUARDRAIL"]
+                           "BACKPRESSURE_POLICY","ACCUMULATION_POLICY","ACCUMULATION_GUARDRAIL",
+                           "INLET_LOSS_POLICY","INLET_LOSS_CALCULATION","INLET_LOSS_GUARDRAIL"]
         tr.check("TRACE_SCHEMA_001_step_order_frozen",
                  tresult is not None and tresult.get("steps") == expected_steps,
                  f"trace 단계 순서/구성이 계약과 다름 — actual={tresult.get('steps') if tresult else None}")
@@ -2521,7 +2884,7 @@ def test_equipment_moc_contract() -> TestResult:
              "onReviseEquipment" in asset_master_src and "reviseEquipment(editing" in asset_master_src,
              "AssetMaster.jsx가 reviseEquipment 흐름을 실제로 호출하지 않음")
     tr.check("AssetMaster_equipment_form_requires_mocId_when_revising",
-             "isRevision ||" in asset_master_src.split("function EquipmentForm")[1][:1500],
+             "isRevision ||" in asset_master_src.split("function EquipmentForm")[1][:2500],
              "EquipmentForm이 개정 모드에서 mocId 필수 검증을 하지 않음")
 
     return tr
@@ -3070,6 +3433,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [ACCUMULATION-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── Inlet pressure-loss contract (Sprint C-3) ────────────────
+    print("\n── INLET PRESSURE LOSS (Sprint C-3) ──────────────────")
+    tr = test_inlet_pressure_loss_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [INLET-LOSS-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"

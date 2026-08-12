@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:ab68153a15a4\n\n' +
+    box.textContent = '[ERROR] BUILD:af2c7099fd39\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:ab68153a15a4\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:af2c7099fd39\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:ab68153a15a4 | 2026-08-09T21:33:03Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:af2c7099fd39 | 2026-08-12T22:29:18Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "ab68153a15a4";
+const __BUILD_HASH__ = "af2c7099fd39";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -121,7 +121,24 @@ const R201_DEFAULTS = {
 //   (밸런스형) 50%. 파일럿식은 원문에 수치 기준이 없어 이번 버전에서
 //   지원하지 않음 — 미지정/미지원 valveType은 SPRING(더 엄격한 기준,
 //   안전측)으로 처리한다. Pilot 기준은 별도 확인 후 후속 버전에서 추가.
-const ENGINE_VERSION = "1.5.0";
+// ENGINE_VERSION 1.6.0 — INLET-LOSS-001
+//   KOSHA GUIDE D-18-2020 §7.2(1) — 인입배관 압력손실 ≤ 설정압력의 3%.
+//   Physical Calculation(computeInletFrictionLoss, backpressure.js의
+//   검증된 computeFrictionLoss 공용 재사용)과 Safety Acceptance Policy
+//   (evaluateInletPressureLossPolicy, INLET_PRESSURE_LOSS_POLICY.MAX_RATIO
+//   단일 출처)를 명확히 분리. 계산에 필요한 inletPiping(L/D/fittingsK)이
+//   Equipment에 없으면 임의 추정하지 않고 pressureLossOK=null +
+//   dataGaps:["inletPiping"]로 명시(INSUFFICIENT_INPUT) — A안: checklist.
+//   inletLossOK는 계산 가능할 때만 존재, "계산 불가"를 GO로 취급하지
+//   않는다. computeAdequacyVerdict()가 checklist.every(Boolean)과
+//   dataGaps를 함께 봐서 최종 GO/NO_GO/INSUFFICIENT_INPUT을 단일 소스로
+//   판정 — Dashboard/ReportView/PDF는 각자 재계산하지 않고 이 함수만
+//   호출한다. backpressure.js의 Darcy-Weisbach 계산부(computeFrictionLoss)
+//   를 신설 공용 함수로 추출했고, computeBackpressure()의 기존 결과값은
+//   리팩터링 전후 회귀 테스트로 동일함을 확인(REFACTOR-REGRESSION-001).
+//   sizing(P1abs/Required Area/Orifice/Kd/Kb/Z/W)은 inlet loss 판정과
+//   완전히 독립 — NO-GO/INSUFFICIENT_INPUT이어도 자동 변경하지 않는다.
+const ENGINE_VERSION = "1.6.0";
 
 // ── TRACE-SCHEMA-001: Calculation Trace 스키마 고정 ────────────
 // Trace는 단순 로그가 아니라 감사 증거(Report Evidence)다. 각 항목은
@@ -176,6 +193,14 @@ const API_CONST = {
     FIRE:            1.21,
   },
   ACCUMULATION_POLICY_SOURCE: "KOSHA GUIDE D-18-2020 §4.4, <표 1>",
+  // INLET-LOSS-001: 인입배관 압력손실 허용비율 — 단일 정책 소스.
+  // 출처: KOSHA GUIDE D-18-2020 §7.2(1) — "설치대상 용기 등에서 안전밸브
+  // 등의 인입 플랜지까지의 인입배관 내에서의 압력손실은 설정 압력의 3%
+  // 이하이어야 한다." 분모는 설정압력(Pset, barg) — MAWP도 P1abs도 아님.
+  INLET_PRESSURE_LOSS_POLICY: {
+    MAX_RATIO: 0.03,
+  },
+  INLET_PRESSURE_LOSS_POLICY_SOURCE: "KOSHA GUIDE D-18-2020 §7.2(1)",
   RD_KD_FACTOR:        0.9,
   KD_MIN:              0.9,
   MARGIN_MIN:          1.0,
@@ -203,6 +228,88 @@ function getAllowableAccumulationRatio(fireScenario, valveCount) {
   return (Number.isFinite(vc) && vc >= 2)
     ? API_CONST.ACCUMULATION_POLICY.NON_FIRE_MULTI
     : API_CONST.ACCUMULATION_POLICY.NON_FIRE_SINGLE;
+}
+
+// INLET-LOSS-001: 정책 비율 단일 접근점 — UI가 0.03을 직접 참조하지 않고
+// 이 함수(→ API_CONST 단일 출처)를 호출한다. C-1의
+// getAllowableBackpressureRatio(), C-2의 getAllowableAccumulationRatio()와
+// 동일한 패턴.
+function getAllowableInletLossRatio() {
+  return API_CONST.INLET_PRESSURE_LOSS_POLICY.MAX_RATIO;
+}
+
+// ── INLET-LOSS-001: 두 개의 명확히 분리된 층 ─────────────────────
+//   Physical Calculation → computeInletFrictionLoss()
+//     backpressure.js의 검증된 computeFrictionLoss()를 그대로 호출한다.
+//     새로운 상관식을 여기서 발명하지 않는다. 입력이 부족/부정확하면
+//     "계산 불가"를 반환할 뿐 추정하지 않는다(임의 기본값 금지).
+//   Safety Acceptance Policy → evaluateInletPressureLossPolicy()
+//     "3% 이하인가"만 판정한다. 물리 계산과 이 정책은 서로 다른 함수 —
+//     계산식이 바뀌어도 정책 함수는 손대지 않고, 정책(3%)이 바뀌어도
+//     계산 함수는 손대지 않는다.
+function computeInletFrictionLoss({ W, T, M, Pset, inletPiping }) {
+  if (!inletPiping || inletPiping.L == null || inletPiping.D == null || inletPiping.fittingsK == null) {
+    return { available:false, reason:"missing_inlet_piping_data" };
+  }
+  const fric = computeFrictionLoss({ W, T, M, P_ref: Pset, L: inletPiping.L, D: inletPiping.D, fittingsK: inletPiping.fittingsK });
+  if (!fric.valid) {
+    return { available:false, reason:"invalid_inlet_piping_geometry", error: fric.error };
+  }
+  return {
+    available: true,
+    // KOSHA 3% 기준은 "인입배관 내 압력손실"만 다룬다 — exit loss(밸브
+    // 출구 이후 개념)는 여기 해당하지 않으므로 마찰+fittings까지만 사용.
+    pressureLoss_bar: fric.totalFrictionLoss_bar,
+    rho_kgm3:    fric.rho_kgm3_r,
+    velocity_ms: fric.velocity_ms_r,
+    dP_pipe_bar: fric.dP_pipe_bar,
+    dP_fit_bar:  fric.dP_fit_bar,
+    L_over_D:    fric.L_over_D,
+  };
+}
+
+function evaluateInletPressureLossPolicy(Pset, physCalc) {
+  const allowablePressureLoss = Pset * API_CONST.INLET_PRESSURE_LOSS_POLICY.MAX_RATIO;
+  if (!physCalc.available) {
+    // ACCUMULATION-A안과 동일 원칙: 계산 불가 상태를 GO로 취급하지 않는다.
+    // pressureLossOK를 false가 아니라 null로 둔다 — "부적정"이 아니라
+    // "판정 불가"이며, 상위 checklist에는 아예 포함하지 않고 dataGaps로
+    // 별도 표현한다(engine 본문에서 처리).
+    return {
+      pressureLossAvailable: false,
+      pressureLoss: null,
+      allowablePressureLoss,
+      allowableRatio: API_CONST.INLET_PRESSURE_LOSS_POLICY.MAX_RATIO,
+      pressureLossRatio: null,
+      pressureLossOK: null,
+      reason: physCalc.reason,
+      source: API_CONST.INLET_PRESSURE_LOSS_POLICY_SOURCE,
+    };
+  }
+  const pressureLossRatio = Pset > 0 ? physCalc.pressureLoss_bar / Pset : null;
+  const pressureLossOK = pressureLossRatio != null
+    ? pressureLossRatio <= API_CONST.INLET_PRESSURE_LOSS_POLICY.MAX_RATIO
+    : null;
+  return {
+    pressureLossAvailable: true,
+    pressureLoss: physCalc.pressureLoss_bar,
+    allowablePressureLoss,
+    allowableRatio: API_CONST.INLET_PRESSURE_LOSS_POLICY.MAX_RATIO,
+    pressureLossRatio,
+    pressureLossOK,
+    source: API_CONST.INLET_PRESSURE_LOSS_POLICY_SOURCE,
+  };
+}
+
+// ── computeAdequacyVerdict — 화면/PDF 공용 최종 판정 단일 출처 ──
+// GO ≠ checklist.every(Boolean)만으로 결정하지 않는다. dataGaps가
+// 있으면(판정에 필요한 입력이 부족하면) 아무리 checklist가 전부 true여도
+// GO가 아니라 INSUFFICIENT_INPUT이다. Dashboard/ReportView/PDF는 각자
+// allOK를 다시 계산하지 말고 반드시 이 함수를 호출한다.
+function computeAdequacyVerdict(checklist, dataGaps) {
+  if (dataGaps && dataGaps.length > 0) return "INSUFFICIENT_INPUT";
+  const allOK = checklist && Object.values(checklist).every(Boolean);
+  return allOK ? "GO" : "NO_GO";
 }
 
 const API526_ORIFICES = [
@@ -256,7 +363,7 @@ function validateInputs(inp) {
 }
 
 // Engine — 입력만 받고 출력만 반환. 외부 state 접근 금지.
-function api520Engine(inp, deviceType) {
+function api520Engine(inp, deviceType, inletPiping) {
   const valid = validateInputs(inp);
   if (!valid.ok) return { valid: false, error: valid };
 
@@ -315,6 +422,13 @@ function api520Engine(inp, deviceType) {
   const actualAccumulationRatio = 1 + OP / 100;
   const accumulationOK = actualAccumulationRatio <= allowableAccumulationRatio;
 
+  // ── INLET-LOSS-001: 인입배관 압력손실 (sizing과는 완전히 별개) ──
+  // sizing 계산(P1abs/areaCm2/orifice 등)에는 이 결과를 절대 반영하지
+  // 않는다 — Physical Calculation과 Safety Acceptance Policy를 명확히
+  // 분리해서 호출한다.
+  const inletFric = computeInletFrictionLoss({ W, T, M, Pset, inletPiping });
+  const inletLoss = evaluateInletPressureLossPolicy(Pset, inletFric);
+
   const checklist = {
     capacityOK:     selected.area >= areaCm2,
     backPressureOK: backPressureRatio < allowableBackpressureRatio,
@@ -323,6 +437,15 @@ function api520Engine(inp, deviceType) {
     marginOK:       margin >= API_CONST.MARGIN_MIN,
     accumulationOK,
   };
+  // A안(C-3 확정): inletLossOK는 계산 가능할 때만 checklist에 포함한다.
+  // 입력 부족은 checklist.every(Boolean)을 통과시키는 방식(생략)이 아니라
+  // dataGaps로 명시하고, 최종 판정은 반드시 computeAdequacyVerdict()를
+  // 거치게 해서 "checklist 전부 true + dataGap"이 GO로 오판되지 않게 한다.
+  if (inletLoss.pressureLossAvailable) {
+    checklist.inletLossOK = inletLoss.pressureLossOK;
+  }
+  const dataGaps = [];
+  if (!inletLoss.pressureLossAvailable) dataGaps.push("inletPiping");
 
   // ── Calculation Trace — 감사/Report Evidence 전용, UI 표시용 아님 ──
   const trace = [
@@ -345,6 +468,17 @@ function api520Engine(inp, deviceType) {
     { step: "ACCUMULATION_GUARDRAIL", value: actualAccumulationRatio, unit: "",
       formula: "실제 축적압력비 = 1 + OP/100 (RELIEVING_PRESSURE의 OP와 동일 값, 다른 검증 목적)",
       inputs: { OP, actualRatio: actualAccumulationRatio, allowableRatio: allowableAccumulationRatio, ok: accumulationOK } },
+    { step: "INLET_LOSS_POLICY", value: inletLoss.allowablePressureLoss, unit: "bar",
+      formula: "allowablePressureLoss = Pset × INLET_PRESSURE_LOSS_POLICY.MAX_RATIO (KOSHA D-18-2020 §7.2(1))",
+      inputs: { Pset, maxRatio: API_CONST.INLET_PRESSURE_LOSS_POLICY.MAX_RATIO, source: API_CONST.INLET_PRESSURE_LOSS_POLICY_SOURCE } },
+    { step: "INLET_LOSS_CALCULATION", value: inletLoss.pressureLoss, unit: "bar",
+      formula: inletLoss.pressureLossAvailable
+        ? "computeFrictionLoss(inletPiping) — Darcy-Weisbach 마찰+fittings (backpressure.js와 공용 물리 계산부)"
+        : `계산 불가 — ${inletLoss.reason}`,
+      inputs: { available: inletLoss.pressureLossAvailable, inletPiping: inletPiping || null } },
+    { step: "INLET_LOSS_GUARDRAIL", value: inletLoss.pressureLossRatio, unit: "",
+      formula: "pressureLossRatio = pressureLoss / Pset ≤ MAX_RATIO — 계산 불가 시 자동 GO/NO-GO 아님(INSUFFICIENT_INPUT)",
+      inputs: { pressureLoss: inletLoss.pressureLoss, Pset, allowableRatio: API_CONST.INLET_PRESSURE_LOSS_POLICY.MAX_RATIO, ok: inletLoss.pressureLossOK } },
   ];
 
   const stepData = {
@@ -356,9 +490,12 @@ function api520Engine(inp, deviceType) {
     backpress: { ratio: backPressureRatio, valveType, allowableRatio: allowableBackpressureRatio, source: API_CONST.BACKPRESSURE_POLICY_SOURCE },
     accumulation: { fireScenario, valveCount, allowableRatio: allowableAccumulationRatio,
       actualRatio: actualAccumulationRatio, ok: accumulationOK, OP, source: API_CONST.ACCUMULATION_POLICY_SOURCE },
+    inletLoss,
   };
 
-  return { valid: true, areaCm2, selected, margin, C, P1abs, backPressureRatio, checklist, stepData, trace };
+  const verdict = computeAdequacyVerdict(checklist, dataGaps);
+
+  return { valid: true, areaCm2, selected, margin, C, P1abs, backPressureRatio, checklist, dataGaps, verdict, stepData, trace };
 }
 
 
@@ -375,8 +512,12 @@ const BP_CONST = {
 
 // 배관 형상 입력 — InputView에서 사용자가 결정하는 "물리적 사실"
 // (계산값이 아니라 실제 배관 도면 기준 입력)
-function validateGeometry(geo) {
-  const fields = ["L", "D", "fittingsK", "headerPressure"];
+// FRICTION-LOSS-001: L/D/fittingsK 3개는 배출측(DischargeSystem)과
+// 인입측(Equipment.inletPiping) 모두가 공유하는 순수 배관형상 계약 —
+// validatePipeGeometry()가 단일 출처. headerPressure는 배출측 전용
+// (정적 배압, superimposed backpressure)이라 별도로 검증한다.
+function validatePipeGeometry(geo) {
+  const fields = ["L", "D", "fittingsK"];
   for (const f of fields) {
     const v = Number(geo?.[f]);
     if (isNaN(v) || !isFinite(v)) return { ok:false, field:f, reason:"not_a_number" };
@@ -384,7 +525,15 @@ function validateGeometry(geo) {
   if (geo.D <= 0) return { ok:false, field:"D", reason:"must_be_positive" };
   if (geo.L <  0) return { ok:false, field:"L", reason:"must_be_non_negative" };
   if (geo.fittingsK < 0) return { ok:false, field:"fittingsK", reason:"must_be_non_negative" };
-  if (geo.headerPressure < 0) return { ok:false, field:"headerPressure", reason:"must_be_non_negative" };
+  return { ok:true };
+}
+
+function validateGeometry(geo) {
+  const pipeValid = validatePipeGeometry(geo);
+  if (!pipeValid.ok) return pipeValid;
+  const hp = Number(geo?.headerPressure);
+  if (isNaN(hp) || !isFinite(hp)) return { ok:false, field:"headerPressure", reason:"not_a_number" };
+  if (hp < 0) return { ok:false, field:"headerPressure", reason:"must_be_non_negative" };
   return { ok:true };
 }
 
@@ -394,6 +543,66 @@ function gasDensity(P_bar, T_K, M_gmol) {
   const P_Pa = P_bar * 1e5;
   const R = 8314; // J/(kmol·K), M은 g/mol = kg/kmol 이므로 그대로 사용
   return (P_Pa * M_gmol) / (R * T_K); // kg/m³
+}
+
+// ── computeFrictionLoss ─────────────────────────────────────────
+// FRICTION-LOSS-001: 배관 "마찰+fittings" 압력손실의 유일한 물리 계산
+// 코어 — Darcy-Weisbach(동압×f×L/D) + fittings(동압×ΣK). 배출측 전용
+// 개념(exit loss, 정적 헤더압, Kb, choked flow)은 이 함수에 넣지 않는다
+// — computeBackpressure()가 이 함수의 결과 위에 자신만의 정책을 얹는다.
+// 인입측(inlet loss)도 동일하게 이 함수만 호출하고 자신만의 정책
+// (KOSHA 3% 기준)을 별도로 얹는다 — 물리 계산 코드가 두 곳에 복제되지
+// 않는다.
+//
+// 입력: W(kg/h), T(K), M(g/mol), P_ref(barg — 밀도 산정 기준압력,
+//       배출측은 Pset, 인입측도 Pset 재사용), L(m), D(m), fittingsK(ΣK)
+// 출력: rho(kg/m³), velocity(m/s), 동압/마찰/fittings 손실 — Pa(원값)와
+//       bar(반올림 표시값) 둘 다 반환. Pa 원값은 상위 계산(exit loss 합산
+//       등)에서 반올림 오차 누적 없이 그대로 이어 쓸 수 있게 하기 위함.
+function computeFrictionLoss({ W, T, M, P_ref, L, D, fittingsK }) {
+  const geoValid = validatePipeGeometry({ L, D, fittingsK });
+  if (!geoValid.ok) {
+    return { valid:false, error: geoValid };
+  }
+  const Wn = Number(W), Tn = Number(T), Mn = Number(M), Pn = Number(P_ref);
+  if ([Wn,Tn,Mn,Pn].some(v => isNaN(v) || !isFinite(v))) {
+    return { valid:false, error:{ field:"W|T|M|P_ref", reason:"not_a_number" } };
+  }
+  if (Pn <= 0) return { valid:false, error:{ field:"P_ref", reason:"must_be_positive" } };
+
+  // UNIT-PRESSURE-002: 대기압 상수는 api520.js API_CONST.ATM_PRESSURE_BAR
+  // 단일 출처. 여기서는 OP를 더하지 않는다 — sizing용 relieving pressure
+  // (P1abs)와 별개의, 배관 유속/밀도 계산 전용 근사(의도적).
+  const P_ref_abs = Pn + API_CONST.ATM_PRESSURE_BAR;
+  const rho = gasDensity(P_ref_abs, Tn, Mn); // kg/m³
+
+  const W_kgs = Wn / 3600;
+  const A = Math.PI * (D * D) / 4;
+  const v = A > 0 ? W_kgs / (rho * A) : 0;
+
+  const dynHead_Pa = rho * v * v / 2;
+  const dP_pipe_Pa = D > 0 ? BP_CONST.DARCY_F_DEFAULT * (L / D) * dynHead_Pa : 0;
+  const dP_fit_Pa  = fittingsK * dynHead_Pa;
+  const totalFrictionLoss_Pa = dP_pipe_Pa + dP_fit_Pa;
+
+  return {
+    valid: true,
+    rho_kgm3:   rho,
+    velocity_ms: v,
+    frictionFactor: BP_CONST.DARCY_F_DEFAULT,
+    L_over_D: D > 0 ? L / D : 0,
+    // Pa 원값 — 상위 함수가 다른 손실항과 합산 후 한 번에 반올림할 때 사용
+    dynamicHead_Pa: dynHead_Pa,
+    dP_pipe_Pa,
+    dP_fit_Pa,
+    totalFrictionLoss_Pa,
+    // bar 반올림 표시값 — 그대로 evidence/PDF에 노출해도 되는 값
+    rho_kgm3_r:    Math.round(rho * 100) / 100,
+    velocity_ms_r: Math.round(v * 100) / 100,
+    dP_pipe_bar:   Math.round(dP_pipe_Pa / 1e5 * 10000) / 10000,
+    dP_fit_bar:    Math.round(dP_fit_Pa  / 1e5 * 10000) / 10000,
+    totalFrictionLoss_bar: Math.round(totalFrictionLoss_Pa / 1e5 * 10000) / 10000,
+  };
 }
 
 // ── computeBackpressure ───────────────────────────────────────
@@ -428,39 +637,31 @@ function computeBackpressure(inp, geometry) {
 
   const { L, D, fittingsK, headerPressure } = geometry;
 
-  // ── 1. 밀도 (방출 조건 기준, P1 절대압 근사) ──
-  // UNIT-PRESSURE-002: 대기압 상수는 api520.js API_CONST.ATM_PRESSURE_BAR
-  // 단일 출처 — 이 파일에서 값을 별도로 하드코딩하지 않는다. build.py
-  // BUILD_ORDER상 api520.js가 이 파일보다 먼저 로드되어 전역에서 참조 가능.
-  // 주의: 여기서는 OP(overpressure)를 더하지 않는다 — api520.js의 relieving
-  // pressure(P1abs, sizing용)와는 다른 값이다. 배관 유속/밀도 계산은 밸브가
-  // 막 열리는 시점(overpressure 이전) 기준 근사이므로 의도적으로 별개.
-  const P1_abs = P1 + API_CONST.ATM_PRESSURE_BAR; // barg → bara 근사 (OP 미포함, 의도적)
-  const rho = gasDensity(P1_abs, T, M); // kg/m³
+  // ── FRICTION-LOSS-001: 마찰+fittings 손실은 공용 계산부로 위임 ──
+  // (P1_abs/rho 계산은 computeFrictionLoss 내부에서 동일하게 수행됨)
+  const fric = computeFrictionLoss({ W, T, M, P_ref: P1, L, D, fittingsK });
+  if (!fric.valid) {
+    return { valid:false, error: fric.error };
+  }
+  const P1_abs = P1 + API_CONST.ATM_PRESSURE_BAR;
+  const rho = fric.rho_kgm3;
+  const v = fric.velocity_ms;
 
-  // ── 2. 유속 ──
-  const W_kgs = W / 3600;               // kg/h → kg/s (이 파일 유일한 변환 지점)
-  const A = Math.PI * (D * D) / 4;      // m²
-  const v = A > 0 ? W_kgs / (rho * A) : 0; // m/s
-
-  // ── 3. Choked flow 판정 ──
+  // ── Choked flow 판정 (배출측 전용 정책 — 공용 계산부에 없음) ──
   // 임계압력비 = (2/(k+1))^(k/(k-1))
   const criticalRatio = Math.pow(2/(k+1), k/(k-1));
   const pressureRatio = headerPressure > 0 ? (headerPressure + API_CONST.ATM_PRESSURE_BAR) / P1_abs : 0;
   const choked = pressureRatio <= criticalRatio;
 
-  // ── 4. 동적 배압 (Darcy-Weisbach + fittings + exit) ──
-  const dynHead = rho * v * v / 2; // Pa 단위 동압
-  const dP_pipe   = D > 0 ? BP_CONST.DARCY_F_DEFAULT * (L / D) * dynHead : 0;
-  const dP_fit    = fittingsK * dynHead;
-  const dP_exit   = BP_CONST.EXIT_K * dynHead;
-  const p_dynamic_Pa = dP_pipe + dP_fit + dP_exit;
+  // ── 동적 배압 = 공용 마찰손실(Pa 원값) + exit loss(배출측 전용) ──
+  const dP_exit_Pa   = BP_CONST.EXIT_K * fric.dynamicHead_Pa;
+  const p_dynamic_Pa = fric.dP_pipe_Pa + fric.dP_fit_Pa + dP_exit_Pa;
   const p_dynamic_bar = p_dynamic_Pa / 1e5;
 
-  // ── 5. 정적 배압 (header/flare 압력) ──
+  // ── 정적 배압 (header/flare 압력, 배출측 전용) ──
   const p_static = headerPressure;
 
-  // ── 6. 합산 + Kb ──
+  // ── 합산 + Kb ──
   const p_total = p_static + p_dynamic_bar;
   const kb = P1 > 0 ? Math.max(0, 1 - (p_total / P1) * 0.5) : 1.0;
   // 참고: 정밀 Kb 곡선은 API 520 Fig.31 실측 데이터 기반이며
@@ -473,7 +674,7 @@ function computeBackpressure(inp, geometry) {
     basis = `P_total/P1 = ${(ratio*100).toFixed(1)}% — 배압 영향 미미. 표준 스프링식 적용 가능.`;
   } else if (ratio < 0.30) {
     status = "calculated";
-    basis = `P_total/P1 = ${(ratio*100).toFixed(1)}% — 동적+정적 배압 합산 결과. Kb 보정 적용됨 (Pipe ΔP=${(dP_pipe/1e5).toFixed(3)}bar, Fittings ΔP=${(dP_fit/1e5).toFixed(3)}bar, Exit ΔP=${(dP_exit/1e5).toFixed(3)}bar).`;
+    basis = `P_total/P1 = ${(ratio*100).toFixed(1)}% — 동적+정적 배압 합산 결과. Kb 보정 적용됨 (Pipe ΔP=${(fric.dP_pipe_Pa/1e5).toFixed(3)}bar, Fittings ΔP=${(fric.dP_fit_Pa/1e5).toFixed(3)}bar, Exit ΔP=${(dP_exit_Pa/1e5).toFixed(3)}bar).`;
   } else {
     status = "out_of_range";
     basis = `P_total/P1 = ${(ratio*100).toFixed(1)}% — 스프링식 적용 범위(30%) 초과. 파일럿식 전환 또는 배관 재설계 검토 필요.`;
@@ -492,9 +693,9 @@ function computeBackpressure(inp, geometry) {
     choked,
     criticalRatio: Math.round(criticalRatio * 1000) / 1000,
     breakdown: {
-      dP_pipe_bar:  Math.round(dP_pipe/1e5 * 1000) / 1000,
-      dP_fit_bar:   Math.round(dP_fit/1e5  * 1000) / 1000,
-      dP_exit_bar:  Math.round(dP_exit/1e5 * 1000) / 1000,
+      dP_pipe_bar:  Math.round(fric.dP_pipe_Pa/1e5 * 1000) / 1000,
+      dP_fit_bar:   Math.round(fric.dP_fit_Pa /1e5 * 1000) / 1000,
+      dP_exit_bar:  Math.round(dP_exit_Pa/1e5 * 1000) / 1000,
       rho_kgm3:     Math.round(rho * 100) / 100,
     },
     status,
@@ -508,7 +709,7 @@ function computeBackpressure(inp, geometry) {
 // ════════════════════════════════════════════════════════════════
 function buildEvidence(sd) {
   if (!sd) return [];
-  const { fluid, cCoeff, pressure, orifice, selection, backpress, accumulation } = sd;
+  const { fluid, cCoeff, pressure, orifice, selection, backpress, accumulation, inletLoss } = sd;
   return [
     {
       id:1, title:"유체 물성 확인",
@@ -565,6 +766,21 @@ function buildEvidence(sd) {
         : "",
       ok: accumulation ? accumulation.ok : true,
     },
+    {
+      id:8, title:"인입배관 압력손실 검증 (Inlet Pressure Loss)",
+      formula:inletLoss
+        ? `pressureLoss / Pset ≤ ${(API_CONST.INLET_PRESSURE_LOSS_POLICY.MAX_RATIO*100).toFixed(0)}% (KOSHA GUIDE D-18-2020 §7.2(1))`
+        : "",
+      result:!inletLoss ? ""
+        : !inletLoss.pressureLossAvailable
+          ? `계산 불가 — 인입배관 형상(길이/내경/fittings) 데이터 없음 → INSUFFICIENT INPUT`
+          : `ΔP = ${inletLoss.pressureLoss.toFixed(4)} bar (${(inletLoss.pressureLossRatio*100).toFixed(2)}%) → ${inletLoss.pressureLossOK ? "GO ✓" : "NO-GO ✗ — 조치 필요"}`,
+      detail:!inletLoss ? ""
+        : !inletLoss.pressureLossAvailable
+          ? `Equipment에 inletPiping(L/D/fittingsK)이 등록되어 있지 않아 실제 압력손실을 계산할 수 없다. 임의 추정값을 대입하지 않고 판정을 보류한다 — 이 상태는 "적정"으로 취급되지 않는다(GO 아님).`
+          : `설치대상 용기에서 안전밸브 인입 플랜지까지의 배관 압력손실이 설정압력(Pset=${pressure.Pset} barg)의 ${(inletLoss.allowableRatio*100).toFixed(0)}%(=${inletLoss.allowablePressureLoss.toFixed(4)} bar) 이하인지 확인. 물리 계산은 backpressure.js와 동일한 검증된 Darcy-Weisbach 모델(computeFrictionLoss) 재사용 — sizing 결과(Required Area/Orifice)에는 영향 없음. 근거: ${inletLoss.source}`,
+      ok: inletLoss ? (inletLoss.pressureLossAvailable ? inletLoss.pressureLossOK : false) : true,
+    },
   ];
 }
 
@@ -590,6 +806,12 @@ function _assetHash(equipment, dischargeSystem) {
     tag: equipment.tag, mawp: equipment.mawp,
     setPressure: equipment.setPressure, orifice: equipment.orifice,
     deviceType: equipment.deviceType,
+    // INLET-LOSS-001: inletPiping이 바뀌면 assetFingerprint도 바뀌어야
+    // MOC 감지(detectMOC)가 반응한다 — 누락하면 인입배관을 바꿔도
+    // "변경 없음"으로 오판된다.
+    inletPiping: equipment.inletPiping
+      ? { L: equipment.inletPiping.L, D: equipment.inletPiping.D, fittingsK: equipment.inletPiping.fittingsK }
+      : null,
   } : null;
   const ds = dischargeSystem ? {
     name: dischargeSystem.name, L: dischargeSystem.L,
@@ -605,12 +827,13 @@ function _assetHash(equipment, dischargeSystem) {
   return (h >>> 0).toString(16).padStart(8, '0');
 }
 
-const SNAPSHOT_ENGINE_VERSION = "1.5.0";
+const SNAPSHOT_ENGINE_VERSION = "1.6.0";
 
 // Snapshot이 기록하는 trigger fields — 감사 시 "어떤 규칙으로 판단했는지" 재현용
 const WORKFLOW_TRIGGER_FIELDS_SNAPSHOT = [
   "headerPressure","L","D","fittingsK","destination",
   "setPressure","mawp","orifice","deviceType",
+  "inletPiping.L","inletPiping.D","inletPiping.fittingsK", // INLET-LOSS-001
 ];
 
 function createSnapshot({ caseId, valveTag, deviceType, inputs, engineResult,
@@ -707,6 +930,9 @@ function _wfAssetHash(equipment, dischargeSystem) {
     tag: equipment.tag, mawp: equipment.mawp,
     setPressure: equipment.setPressure, overpressure: equipment.overpressure,
     orifice: equipment.orifice, deviceType: equipment.deviceType,
+    inletPiping: equipment.inletPiping
+      ? { L: equipment.inletPiping.L, D: equipment.inletPiping.D, fittingsK: equipment.inletPiping.fittingsK }
+      : null,
   } : null;
   const ds = dischargeSystem ? {
     name: dischargeSystem.name, L: dischargeSystem.L,
@@ -746,6 +972,13 @@ function detectMOC(snap, currentEquipment, currentDischargeSystem) {
     if (eq.overpressure !== ceq.overpressure) diffs.push({ field:"overpressure", from:eq.overpressure, to:ceq.overpressure, unit:"%" });
     if (eq.orifice     !== ceq.orifice)     diffs.push({ field:"orifice",     from:eq.orifice,     to:ceq.orifice,     unit:"" });
     if (eq.deviceType  !== ceq.deviceType)  diffs.push({ field:"deviceType",  from:eq.deviceType,  to:ceq.deviceType,  unit:"" });
+    // INLET-LOSS-001: DischargeSystem의 L/D/fittingsK와 이름이 겹치므로
+    // "inletPiping." 접두사로 구분 — 감사 로그에서 어느 쪽 배관이 바뀐
+    // 것인지 모호하지 않아야 한다.
+    const eip = eq.inletPiping, cip = ceq.inletPiping;
+    if ((eip?.L ?? null)         !== (cip?.L ?? null))         diffs.push({ field:"inletPiping.L",         from:eip?.L ?? null,         to:cip?.L ?? null,         unit:"m" });
+    if ((eip?.D ?? null)         !== (cip?.D ?? null))         diffs.push({ field:"inletPiping.D",         from:eip?.D ?? null,         to:cip?.D ?? null,         unit:"m" });
+    if ((eip?.fittingsK ?? null) !== (cip?.fittingsK ?? null)) diffs.push({ field:"inletPiping.fittingsK", from:eip?.fittingsK ?? null, to:cip?.fittingsK ?? null, unit:"" });
   }
   if (ds && cds) {
     if (ds.headerPressure !== cds.headerPressure) diffs.push({ field:"headerPressure", from:ds.headerPressure, to:cds.headerPressure, unit:"barg" });
@@ -765,6 +998,7 @@ function detectMOC(snap, currentEquipment, currentDischargeSystem) {
 const WORKFLOW_TRIGGER_FIELDS = [
   "headerPressure", "L", "D", "fittingsK", "destination",
   "setPressure", "mawp", "overpressure", "orifice", "deviceType",
+  "inletPiping.L", "inletPiping.D", "inletPiping.fittingsK", // INLET-LOSS-001
 ];
 
 function evaluateSafetyImpact(diffs) {
@@ -1152,6 +1386,25 @@ function stepSim(prev, setPoint, mawp) {
 // ════════════════════════════════════════════════════════════════
 
 // ── PSVEquipment ─────────────────────────────────────────────
+// INLET-LOSS-001: inletPiping은 Equipment revision 데이터의 일부다 —
+// 별도 엔티티가 아니라 Equipment와 같은 (id, revision) 생명주기를 공유.
+// 값이 바뀌면 reviseEquipment()로만 개정 가능(mocId 필수) — Asset
+// Revision History/Diff/Impact Analysis가 그대로 적용된다.
+function validateInletPiping(ip) {
+  // 인입배관 데이터 자체가 없는 것은 허용(선택 항목) — 3% 판정을 아직
+  // 안 하는 설비도 있을 수 있다. 있는데 형식이 틀린 것만 거부한다.
+  if (ip === undefined || ip === null) return { ok:true };
+  const fields = ["L", "D", "fittingsK"];
+  for (const f of fields) {
+    const v = Number(ip[f]);
+    if (isNaN(v) || !isFinite(v)) return { ok:false, field:`inletPiping.${f}`, reason:"not_a_number" };
+  }
+  if (Number(ip.D) <= 0) return { ok:false, field:"inletPiping.D", reason:"must_be_positive" };
+  if (Number(ip.L) <  0) return { ok:false, field:"inletPiping.L", reason:"must_be_non_negative" };
+  if (Number(ip.fittingsK) < 0) return { ok:false, field:"inletPiping.fittingsK", reason:"must_be_non_negative" };
+  return { ok:true };
+}
+
 function validateEquipment(eq) {
   if (!eq.tag || !eq.tag.trim())
     return { ok:false, field:"tag", reason:"required" };
@@ -1168,6 +1421,8 @@ function validateEquipment(eq) {
     return { ok:false, field:"overpressure", reason:"required" };
   if (Number(eq.overpressure) < 0)
     return { ok:false, field:"overpressure", reason:"must_be_non_negative" };
+  const ipValid = validateInletPiping(eq.inletPiping);
+  if (!ipValid.ok) return ipValid;
   return { ok:true };
 }
 
@@ -1190,6 +1445,15 @@ function createEquipment(fields) {
     orifice:      fields.orifice || "",
     inletSize:    fields.inletSize || "",
     outletSize:   fields.outletSize || "",
+    // INLET-LOSS-001: 명목 배관 크기(inletSize)를 자동 변환하지 않는다 —
+    // 실제 L/D/fittingsK를 별도로 입력받은 경우에만 존재(선택 항목).
+    // 중첩 객체이므로 별도로 freeze — Equipment를 Object.freeze({...})
+    // 해도 내부 참조 객체는 얕은 freeze만 되므로 여기서 직접 고정한다.
+    inletPiping:  fields.inletPiping ? Object.freeze({
+      L:         Number(fields.inletPiping.L),
+      D:         Number(fields.inletPiping.D),
+      fittingsK: Number(fields.inletPiping.fittingsK),
+    }) : null,
     installedAt:  fields.installedAt || "",
     registeredAt: new Date().toISOString(),
   });
@@ -1217,6 +1481,11 @@ function reviseEquipment(existing, fields) {
       mawp:         Number(fields.mawp),
       setPressure:  Number(fields.setPressure),
       overpressure: Number(fields.overpressure),
+      inletPiping:  fields.inletPiping ? Object.freeze({
+        L:         Number(fields.inletPiping.L),
+        D:         Number(fields.inletPiping.D),
+        fittingsK: Number(fields.inletPiping.fittingsK),
+      }) : (fields.inletPiping === null ? null : existing.inletPiping),
       registeredAt: existing.registeredAt,     // 최초 등록일 유지
       revisedAt:    new Date().toISOString(),
     }),
@@ -1475,6 +1744,12 @@ const EQUIPMENT_DIFF_FIELDS = [
   ["inletSize",    null],
   ["outletSize",   null],
   ["installedAt",  null],
+  // INLET-LOSS-001: inletPiping.* — dot-path 필드. DischargeSystem의
+  // L/D/fittingsK와 이름이 겹치므로("L" vs "L") 반드시 접두사를 붙여
+  // 구분한다 — 감사 로그에서 "무엇의 L이 바뀌었는지" 모호하면 안 된다.
+  ["inletPiping.L",         "m"],
+  ["inletPiping.D",         "m"],
+  ["inletPiping.fittingsK", null],
 ];
 
 const DISCHARGE_DIFF_FIELDS = [
@@ -1502,13 +1777,22 @@ function _valuesEqual(a, b) {
   return a === b;
 }
 
+// ── _getPath (내부 전용) ──────────────────────────────────────
+// "inletPiping.L" 같은 1-depth 점(.) 경로를 읽는다. 중간 객체가
+// null/undefined면 undefined를 반환(값 없음 취급) — _emptyish와 호환.
+function _getPath(obj, path) {
+  if (!obj) return undefined;
+  if (path.indexOf(".") === -1) return obj[path];
+  return path.split(".").reduce((acc, key) => (acc == null ? acc : acc[key]), obj);
+}
+
 // ── _diffFields (내부 전용) ───────────────────────────────────
 function _diffFields(oldRev, newRev, fieldSpec) {
   if (!oldRev || !newRev) return Object.freeze([]);
   const changes = [];
   for (const [field, unit] of fieldSpec) {
-    const from = oldRev[field];
-    const to = newRev[field];
+    const from = _getPath(oldRev, field);
+    const to = _getPath(newRev, field);
     if (!_valuesEqual(from, to)) {
       changes.push(Object.freeze(
         unit ? { field, from, to, unit } : { field, from, to }
@@ -1876,6 +2160,13 @@ function buildReportPackage(snapshot, opts) {
         tag:      snapshot.assetRefs.equipmentTag,
         revision: snapshot.assetRefs.equipmentRevision,
         mocId:    snapshot.equipment?.mocId ?? null,
+        // INLET-LOSS-001: PDF/Evidence의 인입배관 형상 표시(pkg.asset.
+        // equipment.inletPiping)가 이 필드를 직접 읽는다 — 여기 없으면
+        // 실제 데이터가 있어도 "미등록"으로 잘못 표시된다. 재계산 없이
+        // snapshot에 이미 박제된 값을 그대로 복사(REPORT-PKG-005와 동일 원칙).
+        inletPiping: snapshot.equipment?.inletPiping
+          ? { L: snapshot.equipment.inletPiping.L, D: snapshot.equipment.inletPiping.D, fittingsK: snapshot.equipment.inletPiping.fittingsK }
+          : null,
       }),
       dischargeSystem: Object.freeze({
         id:       snapshot.assetRefs.dischargeSystemId,
@@ -2023,11 +2314,18 @@ const PDF_CHECKLIST_ITEMS = [
   { key:"marginOK",       label:"여유율 충분",     detail:"필요량보다 여유있게 설계됐는지 — 선정 오리피스 면적의 여유 정도(1.0배 이상)" },
   { key:"accumulationOK", label:"축적압력 허용 범위 이내 (Overpressure Guardrail)",
     detail:"실제 축적압력(1+OP/100)이 밸브 개수·화재 시나리오에 따른 허용 한도를 넘지 않는지 확인 — 초과 시 자동 보정 없이 NO-GO" },
+  { key:"inletLossOK",    label:"인입배관 압력손실 허용 범위 이내",
+    detail:"안전밸브 인입배관 내 압력손실이 설정압력의 허용 비율을 넘지 않는지 확인 (KOSHA D-18-2020 §7.2(1))" },
 ];
 
-function _pdfVerdictSection(checklist, backpress, accumulation) {
+function _pdfVerdictSection(checklist, backpress, accumulation, inletLoss, dataGaps, verdict) {
   if (!checklist) return "";
-  const allOK = Object.values(checklist).every(Boolean);
+  // INLET-LOSS-001: verdict는 Engine의 computeAdequacyVerdict() 결과를
+  // 그대로 받는다 — PDF가 checklist.every(Boolean)을 다시 계산하지 않는다
+  // (dataGaps 있으면 GO가 아니어야 하는데, 재계산하면 이 규칙이 깨진다).
+  const v = verdict || (Object.values(checklist).every(Boolean) ? "GO" : "NO_GO");
+  const allOK = v === "GO";
+  const insufficientInput = v === "INSUFFICIENT_INPUT";
   const vtLabel = backpress?.valveType==="BELLOWS" ? "벨로우즈형(밸런스형)" : "스프링식";
   const allowPct = backpress?.allowableRatio!=null ? (backpress.allowableRatio*100).toFixed(0) : "10";
   const accAllowPct = accumulation?.allowableRatio!=null ? (accumulation.allowableRatio*100).toFixed(0) : "110";
@@ -2035,15 +2333,24 @@ function _pdfVerdictSection(checklist, backpress, accumulation) {
     ? (accumulation.fireScenario ? "화재 보호 목적" : `비화재, 밸브 ${accumulation.valveCount>=2?"2개 이상":"1개"} 설치`)
     : "";
   const accActualPct = accumulation?.actualRatio!=null ? (accumulation.actualRatio*100).toFixed(0) : null;
-  const items = PDF_CHECKLIST_ITEMS.map(it => {
-    if (it.key === "backPressureOK") {
-      return { ...it, detail:`배출 배관에 걸리는 반대 압력이 밸브 작동을 방해하지 않는 범위인지 확인 — ${vtLabel} 기준 설정압력의 ${allowPct}% 이내 (KOSHA D-18 §7.2(4))` };
-    }
-    if (it.key === "accumulationOK") {
-      return { ...it, detail:`현재 축적압력 ${accActualPct ?? "—"}% — ${accScenarioLabel} 기준 허용 한도 ${accAllowPct}% 이내인지 확인 (KOSHA D-18 §4.4). 초과 시 자동 보정 없이 NO-GO` };
-    }
-    return it;
-  });
+  const items = PDF_CHECKLIST_ITEMS
+    // A안: inletLossOK는 계산 가능할 때만 checklist에 존재 — 없으면
+    // 항목 자체를 판정 리스트에서 빼고, 대신 아래 dataGaps 안내로 대체.
+    .filter(it => it.key !== "inletLossOK" || Object.prototype.hasOwnProperty.call(checklist, "inletLossOK"))
+    .map(it => {
+      if (it.key === "backPressureOK") {
+        return { ...it, detail:`배출 배관에 걸리는 반대 압력이 밸브 작동을 방해하지 않는 범위인지 확인 — ${vtLabel} 기준 설정압력의 ${allowPct}% 이내 (KOSHA D-18 §7.2(4))` };
+      }
+      if (it.key === "accumulationOK") {
+        return { ...it, detail:`현재 축적압력 ${accActualPct ?? "—"}% — ${accScenarioLabel} 기준 허용 한도 ${accAllowPct}% 이내인지 확인 (KOSHA D-18 §4.4). 초과 시 자동 보정 없이 NO-GO` };
+      }
+      if (it.key === "inletLossOK" && inletLoss?.pressureLossAvailable) {
+        const pct = inletLoss.pressureLossRatio!=null ? (inletLoss.pressureLossRatio*100).toFixed(2) : "—";
+        const allowPct = inletLoss.allowableRatio!=null ? (inletLoss.allowableRatio*100).toFixed(0) : "—";
+        return { ...it, detail:`실제 압력손실비 ${pct}% — 설정압력의 ${allowPct}% 이내인지 확인 (KOSHA D-18-2020 §7.2(1))` };
+      }
+      return it;
+    });
   const rows = items.map(({key,label,detail}) => {
     const ok = checklist[key];
     return `<div class="pdf-row" style="align-items:flex-start;">
@@ -2054,12 +2361,23 @@ function _pdfVerdictSection(checklist, backpress, accumulation) {
       <span class="${ok ? "pdf-badge-ok" : "pdf-badge-fail"}" style="font-family:'Pretendard','Malgun Gothic',sans-serif;white-space:nowrap;">${ok ? "충족" : "미충족"}</span>
     </div>`;
   }).join("");
-  const verdictLabel = allOK ? "적정 — API 520/521 기준을 모두 충족합니다" : "부적정 — 기준 미충족 항목이 있어 조치가 필요합니다";
-  const verdictColor = allOK ? "#2e7d32" : "#c0392b";
+  const dataGapNote = (dataGaps && dataGaps.length > 0)
+    ? `<div class="pdf-row" style="align-items:flex-start;background:#fff7e6;">
+         <span class="k" style="font-family:'Pretendard','Malgun Gothic',sans-serif;color:#92400e;">
+           <span style="font-weight:700;">! 판정 보류 — 입력 부족 (INSUFFICIENT INPUT)</span><br/>
+           <span style="font-weight:400;color:#92400e;font-size:9px;">${dataGaps.join(", ")} 데이터가 없어 전체 판정을 확정할 수 없습니다 — 이 상태는 적정(GO)으로 취급하지 않습니다.</span>
+         </span>
+       </div>`
+    : "";
+  const verdictLabel = insufficientInput
+    ? "판정 보류 — 입력 부족으로 적정성을 확정할 수 없습니다"
+    : allOK ? "적정 — API 520/521 기준을 모두 충족합니다" : "부적정 — 기준 미충족 항목이 있어 조치가 필요합니다";
+  const verdictColor = insufficientInput ? "#92400e" : allOK ? "#2e7d32" : "#c0392b";
   return `<div class="pdf-section">
     <div class="pdf-section-title">⓪ 최종 판정 — 이 검토의 결론</div>
     <div class="pdf-section-body">
       <div style="font-size:13px;font-weight:900;color:${verdictColor};margin-bottom:8px;">${verdictLabel}</div>
+      ${dataGapNote}
       ${rows}
     </div>
   </div>`;
@@ -2095,7 +2413,23 @@ function buildPDFHtml(reportPackage) {
     _pdfRow("초과압력 Overpressure (OP)", pkg.calculation.inputs?.OP != null ? `${pkg.calculation.inputs.OP}%` : "—") +
     _pdfRow("실제/허용 축적압력", pkg.calculation.result?.stepData?.accumulation
       ? `${(pkg.calculation.result.stepData.accumulation.actualRatio*100).toFixed(0)}% / ${(pkg.calculation.result.stepData.accumulation.allowableRatio*100).toFixed(0)}% 이하`
-      : "—");
+      : "—") +
+    `<div style="margin-top:6px;font-size:9px;font-weight:700;color:#64748b;letter-spacing:0.5px;">인입배관 압력손실 산정 근거 — 설치대상 용기~안전밸브 인입 플랜지 사이 (KOSHA D-18-2020 §7.2(1))</div>` +
+    _pdfRow("인입배관 길이/내경/저항계수(ΣK)", pkg.asset.equipment?.inletPiping
+      ? `${pkg.asset.equipment.inletPiping.L} m / ${Math.round(pkg.asset.equipment.inletPiping.D*1000)} mm / ${pkg.asset.equipment.inletPiping.fittingsK}`
+      : "미등록") +
+    _pdfRow("인입배관 압력손실", pkg.calculation.result?.stepData?.inletLoss?.pressureLossAvailable
+      ? `${pkg.calculation.result.stepData.inletLoss.pressureLoss.toFixed(4)} bar`
+      : "계산 불가 (입력 부족)") +
+    _pdfRow("허용 압력손실 (설정압력×허용비율)", pkg.calculation.result?.stepData?.inletLoss?.allowablePressureLoss != null
+      ? `${pkg.calculation.result.stepData.inletLoss.allowablePressureLoss.toFixed(4)} bar (${(pkg.calculation.result.stepData.inletLoss.allowableRatio*100).toFixed(0)}%)`
+      : "—") +
+    _pdfRow("판정", (() => {
+      const il = pkg.calculation.result?.stepData?.inletLoss;
+      if (!il) return "—";
+      if (!il.pressureLossAvailable) return "판정 보류 (INSUFFICIENT INPUT)";
+      return il.pressureLossOK ? `GO (${(il.pressureLossRatio*100).toFixed(2)}%)` : `NO-GO (${(il.pressureLossRatio*100).toFixed(2)}%)`;
+    })());
 
   const reasons = (pkg.workflow.decision?.reasons || [])
     .map(r => `<div class="pdf-reason-item">· ${r.field} ${r.from}${r.unit||""} → ${r.to}${r.unit||""}</div>`)
@@ -2132,7 +2466,7 @@ function buildPDFHtml(reportPackage) {
   <div class="pdf-title">PSV 검토 감사 보고서</div>
   <div class="pdf-subtitle">${pkg.identity.caseId} · ${pkg.identity.snapshotId}</div>
 
-  ${_pdfVerdictSection(pkg.calculation.result?.checklist, pkg.calculation.result?.stepData?.backpress, pkg.calculation.result?.stepData?.accumulation)}
+  ${_pdfVerdictSection(pkg.calculation.result?.checklist, pkg.calculation.result?.stepData?.backpress, pkg.calculation.result?.stepData?.accumulation, pkg.calculation.result?.stepData?.inletLoss, pkg.calculation.result?.dataGaps, pkg.calculation.result?.verdict)}
   ${_pdfSection("① 설비 정보", assetBody)}
   ${_pdfSection("② 계산 근거", calcBody)}
   ${_pdfSection("③ 검토 진행 상태", wfBody)}
@@ -2370,7 +2704,7 @@ function EvidenceCard({ step }) {
 }
 
 // ChecklistRenderer — Snapshot.result.checklist 렌더링
-function ChecklistRenderer({ checklist, backpress, accumulation }) {
+function ChecklistRenderer({ checklist, backpress, accumulation, inletLoss, dataGaps }) {
   const vtLabel = backpress?.valveType==="BELLOWS" ? "벨로우즈형(밸런스형)" : "스프링식";
   const allowPct = backpress?.allowableRatio!=null ? (backpress.allowableRatio*100).toFixed(0) : "10";
   const accAllowPct = accumulation?.allowableRatio!=null ? (accumulation.allowableRatio*100).toFixed(0) : "110";
@@ -2385,10 +2719,35 @@ function ChecklistRenderer({ checklist, backpress, accumulation }) {
     { key:"marginOK",       label:"여유율 충분 (≥ 1.0)",     detail:"필요량보다 여유있게 설계됐는지 — 선정 오리피스 면적의 여유 정도" },
     { key:"accumulationOK", label:"축적압력 허용 범위 이내 (Overpressure Guardrail)",
       detail:`1+OP/100 ≤ ${accAllowPct}% (${accScenarioLabel} 기준, KOSHA D-18 §4.4) — 초과 시 자동 보정 없이 NO-GO` },
+    { key:"inletLossOK",    label:"인입배관 압력손실 허용 범위 이내",
+      detail: inletLoss?.pressureLossAvailable
+        ? `ΔP/Pset ≤ ${(inletLoss.allowableRatio*100).toFixed(0)}% (KOSHA D-18 §7.2(1)) — 인입배관 내 압력손실이 설정압력의 ${(inletLoss.allowableRatio*100).toFixed(0)}%를 넘지 않는지 확인`
+        : "인입배관 형상(길이/내경/fittings) 데이터가 없어 판정 보류 — 입력 부족을 적정(GO)으로 취급하지 않음" },
   ];
   return (
     <div>
+      {(dataGaps && dataGaps.length > 0) && (
+        <div style={{display:"flex",gap:10,alignItems:"flex-start",padding:"10px 13px",borderRadius:10,marginBottom:8,background:T.amberBg||"#fff7e6",border:`1.5px solid ${T.amber||"#d97706"}`}}>
+          <div style={{width:24,height:24,borderRadius:"50%",background:T.amber||"#d97706",display:"flex",alignItems:"center",justifyContent:"center",color:T.white,fontWeight:900,fontSize:12,flexShrink:0}}>!</div>
+          <div>
+            <div style={{fontSize:12,fontWeight:700,color:T.text,fontFamily:font.mono}}>판정 보류 — 입력 부족 (INSUFFICIENT INPUT)</div>
+            <div style={{fontSize:10,color:T.sub,marginTop:2}}>{dataGaps.join(", ")} 데이터가 없어 전체 판정을 확정할 수 없음 — 개별 항목이 전부 충족이어도 "적정(GO)"으로 표시하지 않음</div>
+          </div>
+        </div>
+      )}
       {items.map(({ key, label, detail }) => {
+        const hasKey = checklist && Object.prototype.hasOwnProperty.call(checklist, key);
+        if (!hasKey) {
+          return (
+            <div key={key} style={{display:"flex",gap:10,alignItems:"flex-start",padding:"10px 13px",borderRadius:10,marginBottom:8,background:T.bg,border:`1.5px dashed ${T.border}`}}>
+              <div style={{width:24,height:24,borderRadius:"50%",background:T.gray||"#9ca3af",display:"flex",alignItems:"center",justifyContent:"center",color:T.white,fontWeight:900,fontSize:12,flexShrink:0}}>—</div>
+              <div>
+                <div style={{fontSize:12,fontWeight:700,color:T.sub,fontFamily:font.mono}}>{label}</div>
+                <div style={{fontSize:10,color:T.gray||"#9ca3af",marginTop:2}}>{detail}</div>
+              </div>
+            </div>
+          );
+        }
         const ok = checklist[key];
         return (
           <div key={key} style={{display:"flex",gap:10,alignItems:"flex-start",padding:"10px 13px",borderRadius:10,marginBottom:8,background:ok?T.greenBg:T.redBg,border:`1.5px solid ${ok?T.green:T.red}`}}>
@@ -2559,7 +2918,7 @@ const KB_OPTIONS_SPRING = [
   { id:"high", label:"배압 높음 — 감소 적용",   value:0.90, tag:"15~20%",       basis:"P2/P1 15~20% 구간. 스프링식 용량 10% 이상 감소. 파일럿식 전환 검토 필요." },
 ];
 
-function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dischargeSystem }) {
+function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dischargeSystem, equipment }) {
   const [fluidId, setFluidId]   = useState("co2");
   const [kdId,    setKdId]      = useState("sv_std");
   const [showCustomFluid, setShowCustomFluid] = useState(false);
@@ -2798,6 +3157,53 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
                 입력 축적압력이 적용 기준을 초과합니다 — 밸브 수량/화재 시나리오를 재확인하거나
                 설비대장에서 Overpressure 값을 낮춰야 합니다. 자동 보정하지 않습니다.
               </span>}
+            </div>
+          );
+        })()}
+      </div>
+
+      {/* ── INLET-LOSS-001: 인입배관 압력손실 — read-only, Engine이 판정 소유 ── */}
+      <div style={{background:T.cardBg,borderRadius:10,padding:"10px 12px",marginBottom:10,
+        border:`1.5px solid ${T.border}`}}>
+        <div style={{fontSize:9,color:T.gray,fontFamily:font.mono,marginBottom:6}}>
+          INLET PRESSURE LOSS — 인입배관 압력손실 ≤ 설정압력 × {(getAllowableInletLossRatio()*100).toFixed(0)}% (KOSHA D-18-2020 §7.2(1))
+        </div>
+        {(() => {
+          const ip = equipment?.inletPiping;
+          if (!ip) {
+            return (
+              <div style={{fontSize:11,fontWeight:700,color:T.gray,fontFamily:font.mono}}>
+                — 판정 보류 (INSUFFICIENT INPUT) — 설비대장에 인입배관(L/D/ΣK)이 등록되어 있지 않습니다.
+                <div style={{fontSize:9,color:T.sub,fontWeight:400,marginTop:3,fontFamily:font.sans}}>
+                  임의로 추정하지 않습니다 — 실제 판정이 필요하면 설비대장에서 등록하세요.
+                </div>
+              </div>
+            );
+          }
+          const Pset = inputs.P1;
+          const fric = computeInletFrictionLoss({ W:inputs.W, T:inputs.T, M:inputs.M, Pset, inletPiping: ip });
+          const result = evaluateInletPressureLossPolicy(Pset, fric);
+          if (!result.pressureLossAvailable) {
+            return (
+              <div style={{fontSize:11,fontWeight:700,color:T.gray,fontFamily:font.mono}}>
+                — 판정 보류 (INSUFFICIENT INPUT) — {result.reason}
+              </div>
+            );
+          }
+          const go = result.pressureLossOK;
+          return (
+            <div>
+              <div style={{fontSize:10,color:T.sub,fontFamily:font.mono,marginBottom:4}}>
+                L={ip.L}m · D={Math.round(ip.D*1000)}mm · ΣK={ip.fittingsK}
+              </div>
+              <div style={{fontSize:11,fontWeight:900,fontFamily:font.mono,color: go ? T.green : T.red}}>
+                {go ? "✓ GO" : "✗ NO-GO"} — ΔP {result.pressureLoss.toFixed(4)} bar
+                {" "}({(result.pressureLossRatio*100).toFixed(2)}%, 허용 {(result.allowablePressureLoss).toFixed(4)} bar = {(result.allowableRatio*100).toFixed(0)}%)
+                {!go && <span style={{display:"block",fontWeight:600,color:T.sub,marginTop:2}}>
+                  인입배관 압력손실이 기준을 초과합니다 — 배관 내경을 늘리거나 길이/부속을 줄이는 재설계가 필요합니다.
+                  자동 보정하지 않습니다.
+                </span>}
+              </div>
             </div>
           );
         })()}
@@ -3271,29 +3677,48 @@ function EquipmentForm({ onSave, onCancel, editing }) {
     inletSize: editing.inletSize, outletSize: editing.outletSize,
     manufacturer: editing.manufacturer, model: editing.model,
     serialNo: editing.serialNo, installedAt: editing.installedAt,
+    inletPiping: editing.inletPiping
+      ? { L: String(editing.inletPiping.L), D: String(editing.inletPiping.D), fittingsK: String(editing.inletPiping.fittingsK) }
+      : { L:"", D:"", fittingsK:"" },
     mocId: "",
   } : {
     tag:"", location:"", deviceType:"safetyValve",
     mawp:6.0, setPressure:5.5, overpressure:10,
     inletSize:"3\"", outletSize:"4\"", orifice:"",
     manufacturer:"", model:"", serialNo:"", installedAt:"",
+    inletPiping: { L:"", D:"", fittingsK:"" },
     mocId:"",
   });
   const upd = (k,v) => setF(p=>({...p,[k]:v}));
+  const updInlet = (k,v) => setF(p=>({...p, inletPiping:{...p.inletPiping, [k]:v}}));
   const psetErr = f.setPressure > f.mawp;
+  // INLET-LOSS-001: 인입배관은 선택 항목 — 3개 다 비어있으면 "미등록"으로
+  // 저장(null). 일부만 채워진 상태는 부정확한 판정으로 이어지므로 저장을
+  // 막는다(fail-fast) — 임의로 나머지를 기본값으로 채우지 않는다.
+  const ipAllEmpty = f.inletPiping.L === "" && f.inletPiping.D === "" && f.inletPiping.fittingsK === "";
+  const ipPartial = !ipAllEmpty && (f.inletPiping.L === "" || f.inletPiping.D === "" || f.inletPiping.fittingsK === "");
+  const ipInvalid = !ipAllEmpty && !ipPartial && (
+    isNaN(Number(f.inletPiping.L)) || isNaN(Number(f.inletPiping.D)) || isNaN(Number(f.inletPiping.fittingsK)) ||
+    Number(f.inletPiping.D) <= 0 || Number(f.inletPiping.L) < 0 || Number(f.inletPiping.fittingsK) < 0
+  );
   const valid = f.tag.trim() && f.mawp>0 && f.setPressure>0 && !psetErr &&
     f.overpressure !== "" && f.overpressure !== null && !isNaN(Number(f.overpressure)) && Number(f.overpressure) >= 0 &&
+    !ipPartial && !ipInvalid &&
     (!isRevision || f.mocId.trim().length > 0);
 
   const handleSave = () => {
     if (!valid) return;
+    const inletPipingPayload = ipAllEmpty ? null : {
+      L: Number(f.inletPiping.L), D: Number(f.inletPiping.D), fittingsK: Number(f.inletPiping.fittingsK),
+    };
+    const payload = { ...f, inletPiping: inletPipingPayload };
     if (isRevision) {
-      const result = reviseEquipment(editing, f);
+      const result = reviseEquipment(editing, payload);
       if (!result.ok) { alert(`${result.field}: ${result.reason}`); return; }
       onSave(result.equipment);
       return;
     }
-    try { onSave(createEquipment(f)); } catch(e) { alert(e.message); }
+    try { onSave(createEquipment(payload)); } catch(e) { alert(e.message); }
   };
 
   return (
@@ -3392,6 +3817,41 @@ function EquipmentForm({ onSave, onCancel, editing }) {
             </div>
           </Field>}
         />
+      </Section>
+
+      <Section title="인입배관 (선택 — KOSHA D-18-2020 §7.2(1) 압력손실 3% 판정용)">
+        <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginBottom:8,lineHeight:1.5}}>
+          설치대상 용기에서 이 안전밸브 인입 플랜지까지의 실제 배관 형상.
+          위 "입구 Size"({f.inletSize || "—"})는 명목 규격 표시일 뿐 — 여기 입력한
+          값만 계산에 실제로 쓰입니다. 3개 다 비워두면 미등록(판정 보류) 처리됩니다.
+        </div>
+        <Row2
+          a={<Field label="배관 길이 L (m)">
+            <input type="number" value={f.inletPiping.L} step={0.1}
+              onChange={e=>updInlet("L",e.target.value)}
+              placeholder="예: 3.5" style={iS()}/>
+          </Field>}
+          b={<Field label="배관 내경 D (m)">
+            <input type="number" value={f.inletPiping.D} step={0.001}
+              onChange={e=>updInlet("D",e.target.value)}
+              placeholder="예: 0.08" style={iS()}/>
+          </Field>}
+        />
+        <Field label="배관 부속 저항계수 ΣK">
+          <input type="number" value={f.inletPiping.fittingsK} step={0.1}
+            onChange={e=>updInlet("fittingsK",e.target.value)}
+            placeholder="예: 1.5" style={iS()}/>
+        </Field>
+        {ipPartial && (
+          <div style={{fontSize:10,color:T.red,fontFamily:font.sans,marginTop:-6,marginBottom:10}}>
+            L / D / ΣK 중 일부만 입력됐습니다 — 3개 모두 입력하거나 모두 비워두세요 (임의 기본값을 채우지 않습니다).
+          </div>
+        )}
+        {ipInvalid && (
+          <div style={{fontSize:10,color:T.red,fontFamily:font.sans,marginTop:-6,marginBottom:10}}>
+            내경(D)은 0보다 커야 하고, 길이(L)·ΣK는 0 이상이어야 합니다.
+          </div>
+        )}
       </Section>
 
       <Section title="제조사 정보 (선택)">
@@ -3596,6 +4056,10 @@ function RevisionHistoryPanel({ title, history, id, kind, allSnapshots, onClose 
     ["mawp","MAWP (barg)"], ["setPressure","설정압 (barg)"],
     ["overpressure","Overpressure (%)"], ["orifice","오리피스"],
     ["inletSize","입구 Size"], ["outletSize","출구 Size"],
+    // INLET-LOSS-001: dot-path 필드 — _getPath()로 읽어야 값이 나온다
+    // (일반 selected[k] 방식은 중첩 객체라 undefined가 됨).
+    ["inletPiping.L","인입배관 길이 L (m)"], ["inletPiping.D","인입배관 내경 D (m)"],
+    ["inletPiping.fittingsK","인입배관 ΣK"],
     ["manufacturer","제조사"], ["model","모델"],
     ["serialNo","Serial No."], ["installedAt","설치일"],
   ];
@@ -3691,8 +4155,8 @@ function RevisionHistoryPanel({ title, history, id, kind, allSnapshots, onClose 
               <div key={k}>
                 <div style={{fontSize:9,color:T.gray,fontFamily:font.mono}}>{label}</div>
                 <div style={{fontSize:11,fontWeight:700,color:T.navyLight,fontFamily:font.mono}}>
-                  {Array.isArray(selected[k]) ? (selected[k].join(", ") || "—")
-                    : (selected[k] ?? "—") === "" ? "—" : String(selected[k] ?? "—")}
+                  {Array.isArray(_getPath(selected,k)) ? (_getPath(selected,k).join(", ") || "—")
+                    : (_getPath(selected,k) ?? "—") === "" ? "—" : String(_getPath(selected,k) ?? "—")}
                 </div>
               </div>
             ))}
@@ -4363,7 +4827,13 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
   };
 
   const r = snap.result;
-  const allOK = r.checklist && Object.values(r.checklist).every(Boolean);
+  // INLET-LOSS-001: allOK를 checklist.every(Boolean)로 직접 계산하지 않는다.
+  // dataGaps(예: inletPiping 미등록)가 있으면 개별 항목이 전부 true여도
+  // "적정"이 아니다 — Engine의 computeAdequacyVerdict() 단일 출처를 그대로
+  // 쓴다. 구버전 Snapshot(verdict 필드 없음) 호환을 위해 폴백만 유지한다.
+  const verdict = r.verdict || (r.checklist && Object.values(r.checklist).every(Boolean) ? "GO" : "NO_GO");
+  const allOK = verdict === "GO";
+  const insufficientInput = verdict === "INSUFFICIENT_INPUT";
   const failCount = r.checklist ? Object.values(r.checklist).filter(v=>!v).length : 0;
   const nextStates = WF_TRANSITIONS[snap.workflow] || [];
 
@@ -4403,8 +4873,12 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
             <div style={{padding:"5px 12px",borderRadius:20,background:WF_COLOR[snap.workflow]+"22",border:`1.5px solid ${WF_COLOR[snap.workflow]}`,fontSize:11,fontWeight:700,color:WF_COLOR[snap.workflow],fontFamily:font.mono}}>
               {WF_LABEL[snap.workflow]}
             </div>
-            <div style={{padding:"5px 12px",borderRadius:20,background:allOK?T.greenBg:T.redBg,border:`1.5px solid ${allOK?T.green:T.red}`,fontSize:11,fontWeight:700,color:allOK?T.green:T.red,fontFamily:font.mono}}>
-              {allOK?"적정":"부적정"}
+            <div style={{padding:"5px 12px",borderRadius:20,
+              background:insufficientInput?(T.amberBg||"#fff7e6"):(allOK?T.greenBg:T.redBg),
+              border:`1.5px solid ${insufficientInput?(T.amber||"#d97706"):(allOK?T.green:T.red)}`,
+              fontSize:11,fontWeight:700,
+              color:insufficientInput?(T.amber||"#d97706"):(allOK?T.green:T.red),fontFamily:font.mono}}>
+              {insufficientInput ? "판정 보류" : (allOK?"적정":"부적정")}
             </div>
           </div>
         </div>
@@ -4425,16 +4899,21 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
       </div>
 
       {/* 적정성 결론 — 화면 진입 즉시 보이는 최종 판정 */}
-      <div style={{background:allOK?T.greenBg:T.redBg,border:`2px solid ${allOK?T.green:T.red}`,
+      <div style={{background:insufficientInput?(T.amberBg||"#fff7e6"):(allOK?T.greenBg:T.redBg),
+        border:`2px solid ${insufficientInput?(T.amber||"#d97706"):(allOK?T.green:T.red)}`,
         borderRadius:14,padding:"14px 16px",marginBottom:12,display:"flex",alignItems:"center",
         justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <div style={{width:34,height:34,borderRadius:"50%",background:allOK?T.green:T.red,
+          <div style={{width:34,height:34,borderRadius:"50%",
+            background:insufficientInput?(T.amber||"#d97706"):(allOK?T.green:T.red),
             color:T.white,display:"flex",alignItems:"center",justifyContent:"center",
-            fontSize:17,fontWeight:900,flexShrink:0}}>{allOK?"✓":"✗"}</div>
+            fontSize:17,fontWeight:900,flexShrink:0}}>{insufficientInput?"!":(allOK?"✓":"✗")}</div>
           <div>
-            <div style={{fontSize:14,fontWeight:900,color:allOK?T.greenDk:T.redDk,fontFamily:font.sans}}>
-              {allOK
+            <div style={{fontSize:14,fontWeight:900,
+              color:insufficientInput?(T.amber||"#d97706"):(allOK?T.greenDk:T.redDk),fontFamily:font.sans}}>
+              {insufficientInput
+                ? `판정 보류 — 입력 부족(${(r.dataGaps||[]).join(", ")})으로 전체 적정성을 확정할 수 없습니다`
+                : allOK
                 ? "적정 — 이 사양은 API 520/521 기준을 모두 충족합니다"
                 : `부적정 — 기준 미충족 항목이 있어 조치가 필요합니다 (${failCount}건)`}
             </div>
@@ -4490,7 +4969,7 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
 
       {reportTab === "checklist" && (
         <div style={{background:T.cardBg,borderRadius:14,padding:14,border:`1px solid ${T.border}`}}>
-          <ChecklistRenderer checklist={snap.result.checklist} backpress={snap.result.stepData?.backpress} accumulation={snap.result.stepData?.accumulation}/>
+          <ChecklistRenderer checklist={snap.result.checklist} backpress={snap.result.stepData?.backpress} accumulation={snap.result.stepData?.accumulation} inletLoss={snap.result.stepData?.inletLoss} dataGaps={snap.result.dataGaps}/>
         </div>
       )}
 
@@ -4556,7 +5035,7 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   const handleInputChange = (key, val) => setInputs(p => ({ ...p, [key]: val }));
 
   const handleCalculate = () => {
-    const engineResult = api520Engine(inputs, deviceType);
+    const engineResult = api520Engine(inputs, deviceType, equipment?.inletPiping || null);
     if (!engineResult.valid) {
       alert(`입력 오류: ${engineResult.error.field} — ${engineResult.error.reason}`);
       return;
@@ -4848,7 +5327,7 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
 
       {screen === "input" && (
         <InputView inputs={inputs} deviceType={deviceType}
-          dischargeSystem={dischargeSystem}
+          dischargeSystem={dischargeSystem} equipment={equipment}
           onChange={handleInputChange} onDeviceChange={setDeviceType}
           onSubmit={handleCalculate}/>
       )}
@@ -4886,8 +5365,15 @@ const INITIAL_CASES = [];  // 설비대장에서 선택 후 생성
 
 function CaseCard({ c, onOpen }) {
   const hasSnap = !!c.latestSnap;
-  const allOK   = hasSnap && c.latestSnap.result?.checklist &&
-                  Object.values(c.latestSnap.result.checklist).every(Boolean);
+  // INLET-LOSS-001: verdict가 단일 출처 — checklist.every(Boolean)를
+  // 여기서 다시 계산하지 않는다(dataGaps가 있으면 GO가 아니어야 함).
+  // 구버전 Snapshot(verdict 필드 없음) 호환 폴백만 유지.
+  const verdict = hasSnap
+    ? (c.latestSnap.result?.verdict
+        || (c.latestSnap.result?.checklist && Object.values(c.latestSnap.result.checklist).every(Boolean) ? "GO" : "NO_GO"))
+    : null;
+  const allOK = verdict === "GO";
+  const insufficientInput = verdict === "INSUFFICIENT_INPUT";
   return (
     <button onClick={()=>onOpen(c)}
       style={{display:"block",width:"100%",textAlign:"left",background:T.cardBg,
@@ -4908,10 +5394,11 @@ function CaseCard({ c, onOpen }) {
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
           {hasSnap && (
             <span style={{padding:"3px 9px",borderRadius:12,
-              background:allOK?T.greenBg:T.redBg,
-              border:`1px solid ${allOK?T.green:T.red}`,
-              fontSize:10,fontWeight:700,color:allOK?T.green:T.red,fontFamily:font.mono}}>
-              {allOK?"적정":"부적정"}
+              background:insufficientInput?(T.amberBg||"#fff7e6"):(allOK?T.greenBg:T.redBg),
+              border:`1px solid ${insufficientInput?(T.amber||"#d97706"):(allOK?T.green:T.red)}`,
+              fontSize:10,fontWeight:700,
+              color:insufficientInput?(T.amber||"#d97706"):(allOK?T.green:T.red),fontFamily:font.mono}}>
+              {insufficientInput ? "판정 보류" : (allOK?"적정":"부적정")}
             </span>
           )}
           <span style={{padding:"3px 9px",borderRadius:12,

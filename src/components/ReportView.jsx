@@ -45,7 +45,13 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
   };
 
   const r = snap.result;
-  const allOK = r.checklist && Object.values(r.checklist).every(Boolean);
+  // INLET-LOSS-001: allOK를 checklist.every(Boolean)로 직접 계산하지 않는다.
+  // dataGaps(예: inletPiping 미등록)가 있으면 개별 항목이 전부 true여도
+  // "적정"이 아니다 — Engine의 computeAdequacyVerdict() 단일 출처를 그대로
+  // 쓴다. 구버전 Snapshot(verdict 필드 없음) 호환을 위해 폴백만 유지한다.
+  const verdict = r.verdict || (r.checklist && Object.values(r.checklist).every(Boolean) ? "GO" : "NO_GO");
+  const allOK = verdict === "GO";
+  const insufficientInput = verdict === "INSUFFICIENT_INPUT";
   const failCount = r.checklist ? Object.values(r.checklist).filter(v=>!v).length : 0;
   const nextStates = WF_TRANSITIONS[snap.workflow] || [];
 
@@ -85,8 +91,12 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
             <div style={{padding:"5px 12px",borderRadius:20,background:WF_COLOR[snap.workflow]+"22",border:`1.5px solid ${WF_COLOR[snap.workflow]}`,fontSize:11,fontWeight:700,color:WF_COLOR[snap.workflow],fontFamily:font.mono}}>
               {WF_LABEL[snap.workflow]}
             </div>
-            <div style={{padding:"5px 12px",borderRadius:20,background:allOK?T.greenBg:T.redBg,border:`1.5px solid ${allOK?T.green:T.red}`,fontSize:11,fontWeight:700,color:allOK?T.green:T.red,fontFamily:font.mono}}>
-              {allOK?"적정":"부적정"}
+            <div style={{padding:"5px 12px",borderRadius:20,
+              background:insufficientInput?(T.amberBg||"#fff7e6"):(allOK?T.greenBg:T.redBg),
+              border:`1.5px solid ${insufficientInput?(T.amber||"#d97706"):(allOK?T.green:T.red)}`,
+              fontSize:11,fontWeight:700,
+              color:insufficientInput?(T.amber||"#d97706"):(allOK?T.green:T.red),fontFamily:font.mono}}>
+              {insufficientInput ? "판정 보류" : (allOK?"적정":"부적정")}
             </div>
           </div>
         </div>
@@ -107,16 +117,21 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
       </div>
 
       {/* 적정성 결론 — 화면 진입 즉시 보이는 최종 판정 */}
-      <div style={{background:allOK?T.greenBg:T.redBg,border:`2px solid ${allOK?T.green:T.red}`,
+      <div style={{background:insufficientInput?(T.amberBg||"#fff7e6"):(allOK?T.greenBg:T.redBg),
+        border:`2px solid ${insufficientInput?(T.amber||"#d97706"):(allOK?T.green:T.red)}`,
         borderRadius:14,padding:"14px 16px",marginBottom:12,display:"flex",alignItems:"center",
         justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <div style={{width:34,height:34,borderRadius:"50%",background:allOK?T.green:T.red,
+          <div style={{width:34,height:34,borderRadius:"50%",
+            background:insufficientInput?(T.amber||"#d97706"):(allOK?T.green:T.red),
             color:T.white,display:"flex",alignItems:"center",justifyContent:"center",
-            fontSize:17,fontWeight:900,flexShrink:0}}>{allOK?"✓":"✗"}</div>
+            fontSize:17,fontWeight:900,flexShrink:0}}>{insufficientInput?"!":(allOK?"✓":"✗")}</div>
           <div>
-            <div style={{fontSize:14,fontWeight:900,color:allOK?T.greenDk:T.redDk,fontFamily:font.sans}}>
-              {allOK
+            <div style={{fontSize:14,fontWeight:900,
+              color:insufficientInput?(T.amber||"#d97706"):(allOK?T.greenDk:T.redDk),fontFamily:font.sans}}>
+              {insufficientInput
+                ? `판정 보류 — 입력 부족(${(r.dataGaps||[]).join(", ")})으로 전체 적정성을 확정할 수 없습니다`
+                : allOK
                 ? "적정 — 이 사양은 API 520/521 기준을 모두 충족합니다"
                 : `부적정 — 기준 미충족 항목이 있어 조치가 필요합니다 (${failCount}건)`}
             </div>
@@ -172,7 +187,7 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
 
       {reportTab === "checklist" && (
         <div style={{background:T.cardBg,borderRadius:14,padding:14,border:`1px solid ${T.border}`}}>
-          <ChecklistRenderer checklist={snap.result.checklist} backpress={snap.result.stepData?.backpress} accumulation={snap.result.stepData?.accumulation}/>
+          <ChecklistRenderer checklist={snap.result.checklist} backpress={snap.result.stepData?.backpress} accumulation={snap.result.stepData?.accumulation} inletLoss={snap.result.stepData?.inletLoss} dataGaps={snap.result.dataGaps}/>
         </div>
       )}
 

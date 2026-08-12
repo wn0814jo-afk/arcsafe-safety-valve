@@ -33,7 +33,24 @@
 //   (밸런스형) 50%. 파일럿식은 원문에 수치 기준이 없어 이번 버전에서
 //   지원하지 않음 — 미지정/미지원 valveType은 SPRING(더 엄격한 기준,
 //   안전측)으로 처리한다. Pilot 기준은 별도 확인 후 후속 버전에서 추가.
-const ENGINE_VERSION = "1.5.0";
+// ENGINE_VERSION 1.6.0 — INLET-LOSS-001
+//   KOSHA GUIDE D-18-2020 §7.2(1) — 인입배관 압력손실 ≤ 설정압력의 3%.
+//   Physical Calculation(computeInletFrictionLoss, backpressure.js의
+//   검증된 computeFrictionLoss 공용 재사용)과 Safety Acceptance Policy
+//   (evaluateInletPressureLossPolicy, INLET_PRESSURE_LOSS_POLICY.MAX_RATIO
+//   단일 출처)를 명확히 분리. 계산에 필요한 inletPiping(L/D/fittingsK)이
+//   Equipment에 없으면 임의 추정하지 않고 pressureLossOK=null +
+//   dataGaps:["inletPiping"]로 명시(INSUFFICIENT_INPUT) — A안: checklist.
+//   inletLossOK는 계산 가능할 때만 존재, "계산 불가"를 GO로 취급하지
+//   않는다. computeAdequacyVerdict()가 checklist.every(Boolean)과
+//   dataGaps를 함께 봐서 최종 GO/NO_GO/INSUFFICIENT_INPUT을 단일 소스로
+//   판정 — Dashboard/ReportView/PDF는 각자 재계산하지 않고 이 함수만
+//   호출한다. backpressure.js의 Darcy-Weisbach 계산부(computeFrictionLoss)
+//   를 신설 공용 함수로 추출했고, computeBackpressure()의 기존 결과값은
+//   리팩터링 전후 회귀 테스트로 동일함을 확인(REFACTOR-REGRESSION-001).
+//   sizing(P1abs/Required Area/Orifice/Kd/Kb/Z/W)은 inlet loss 판정과
+//   완전히 독립 — NO-GO/INSUFFICIENT_INPUT이어도 자동 변경하지 않는다.
+const ENGINE_VERSION = "1.6.0";
 
 // ── TRACE-SCHEMA-001: Calculation Trace 스키마 고정 ────────────
 // Trace는 단순 로그가 아니라 감사 증거(Report Evidence)다. 각 항목은
@@ -88,6 +105,14 @@ const API_CONST = {
     FIRE:            1.21,
   },
   ACCUMULATION_POLICY_SOURCE: "KOSHA GUIDE D-18-2020 §4.4, <표 1>",
+  // INLET-LOSS-001: 인입배관 압력손실 허용비율 — 단일 정책 소스.
+  // 출처: KOSHA GUIDE D-18-2020 §7.2(1) — "설치대상 용기 등에서 안전밸브
+  // 등의 인입 플랜지까지의 인입배관 내에서의 압력손실은 설정 압력의 3%
+  // 이하이어야 한다." 분모는 설정압력(Pset, barg) — MAWP도 P1abs도 아님.
+  INLET_PRESSURE_LOSS_POLICY: {
+    MAX_RATIO: 0.03,
+  },
+  INLET_PRESSURE_LOSS_POLICY_SOURCE: "KOSHA GUIDE D-18-2020 §7.2(1)",
   RD_KD_FACTOR:        0.9,
   KD_MIN:              0.9,
   MARGIN_MIN:          1.0,
@@ -115,6 +140,88 @@ function getAllowableAccumulationRatio(fireScenario, valveCount) {
   return (Number.isFinite(vc) && vc >= 2)
     ? API_CONST.ACCUMULATION_POLICY.NON_FIRE_MULTI
     : API_CONST.ACCUMULATION_POLICY.NON_FIRE_SINGLE;
+}
+
+// INLET-LOSS-001: 정책 비율 단일 접근점 — UI가 0.03을 직접 참조하지 않고
+// 이 함수(→ API_CONST 단일 출처)를 호출한다. C-1의
+// getAllowableBackpressureRatio(), C-2의 getAllowableAccumulationRatio()와
+// 동일한 패턴.
+function getAllowableInletLossRatio() {
+  return API_CONST.INLET_PRESSURE_LOSS_POLICY.MAX_RATIO;
+}
+
+// ── INLET-LOSS-001: 두 개의 명확히 분리된 층 ─────────────────────
+//   Physical Calculation → computeInletFrictionLoss()
+//     backpressure.js의 검증된 computeFrictionLoss()를 그대로 호출한다.
+//     새로운 상관식을 여기서 발명하지 않는다. 입력이 부족/부정확하면
+//     "계산 불가"를 반환할 뿐 추정하지 않는다(임의 기본값 금지).
+//   Safety Acceptance Policy → evaluateInletPressureLossPolicy()
+//     "3% 이하인가"만 판정한다. 물리 계산과 이 정책은 서로 다른 함수 —
+//     계산식이 바뀌어도 정책 함수는 손대지 않고, 정책(3%)이 바뀌어도
+//     계산 함수는 손대지 않는다.
+function computeInletFrictionLoss({ W, T, M, Pset, inletPiping }) {
+  if (!inletPiping || inletPiping.L == null || inletPiping.D == null || inletPiping.fittingsK == null) {
+    return { available:false, reason:"missing_inlet_piping_data" };
+  }
+  const fric = computeFrictionLoss({ W, T, M, P_ref: Pset, L: inletPiping.L, D: inletPiping.D, fittingsK: inletPiping.fittingsK });
+  if (!fric.valid) {
+    return { available:false, reason:"invalid_inlet_piping_geometry", error: fric.error };
+  }
+  return {
+    available: true,
+    // KOSHA 3% 기준은 "인입배관 내 압력손실"만 다룬다 — exit loss(밸브
+    // 출구 이후 개념)는 여기 해당하지 않으므로 마찰+fittings까지만 사용.
+    pressureLoss_bar: fric.totalFrictionLoss_bar,
+    rho_kgm3:    fric.rho_kgm3_r,
+    velocity_ms: fric.velocity_ms_r,
+    dP_pipe_bar: fric.dP_pipe_bar,
+    dP_fit_bar:  fric.dP_fit_bar,
+    L_over_D:    fric.L_over_D,
+  };
+}
+
+function evaluateInletPressureLossPolicy(Pset, physCalc) {
+  const allowablePressureLoss = Pset * API_CONST.INLET_PRESSURE_LOSS_POLICY.MAX_RATIO;
+  if (!physCalc.available) {
+    // ACCUMULATION-A안과 동일 원칙: 계산 불가 상태를 GO로 취급하지 않는다.
+    // pressureLossOK를 false가 아니라 null로 둔다 — "부적정"이 아니라
+    // "판정 불가"이며, 상위 checklist에는 아예 포함하지 않고 dataGaps로
+    // 별도 표현한다(engine 본문에서 처리).
+    return {
+      pressureLossAvailable: false,
+      pressureLoss: null,
+      allowablePressureLoss,
+      allowableRatio: API_CONST.INLET_PRESSURE_LOSS_POLICY.MAX_RATIO,
+      pressureLossRatio: null,
+      pressureLossOK: null,
+      reason: physCalc.reason,
+      source: API_CONST.INLET_PRESSURE_LOSS_POLICY_SOURCE,
+    };
+  }
+  const pressureLossRatio = Pset > 0 ? physCalc.pressureLoss_bar / Pset : null;
+  const pressureLossOK = pressureLossRatio != null
+    ? pressureLossRatio <= API_CONST.INLET_PRESSURE_LOSS_POLICY.MAX_RATIO
+    : null;
+  return {
+    pressureLossAvailable: true,
+    pressureLoss: physCalc.pressureLoss_bar,
+    allowablePressureLoss,
+    allowableRatio: API_CONST.INLET_PRESSURE_LOSS_POLICY.MAX_RATIO,
+    pressureLossRatio,
+    pressureLossOK,
+    source: API_CONST.INLET_PRESSURE_LOSS_POLICY_SOURCE,
+  };
+}
+
+// ── computeAdequacyVerdict — 화면/PDF 공용 최종 판정 단일 출처 ──
+// GO ≠ checklist.every(Boolean)만으로 결정하지 않는다. dataGaps가
+// 있으면(판정에 필요한 입력이 부족하면) 아무리 checklist가 전부 true여도
+// GO가 아니라 INSUFFICIENT_INPUT이다. Dashboard/ReportView/PDF는 각자
+// allOK를 다시 계산하지 말고 반드시 이 함수를 호출한다.
+function computeAdequacyVerdict(checklist, dataGaps) {
+  if (dataGaps && dataGaps.length > 0) return "INSUFFICIENT_INPUT";
+  const allOK = checklist && Object.values(checklist).every(Boolean);
+  return allOK ? "GO" : "NO_GO";
 }
 
 const API526_ORIFICES = [
@@ -168,7 +275,7 @@ function validateInputs(inp) {
 }
 
 // Engine — 입력만 받고 출력만 반환. 외부 state 접근 금지.
-function api520Engine(inp, deviceType) {
+function api520Engine(inp, deviceType, inletPiping) {
   const valid = validateInputs(inp);
   if (!valid.ok) return { valid: false, error: valid };
 
@@ -227,6 +334,13 @@ function api520Engine(inp, deviceType) {
   const actualAccumulationRatio = 1 + OP / 100;
   const accumulationOK = actualAccumulationRatio <= allowableAccumulationRatio;
 
+  // ── INLET-LOSS-001: 인입배관 압력손실 (sizing과는 완전히 별개) ──
+  // sizing 계산(P1abs/areaCm2/orifice 등)에는 이 결과를 절대 반영하지
+  // 않는다 — Physical Calculation과 Safety Acceptance Policy를 명확히
+  // 분리해서 호출한다.
+  const inletFric = computeInletFrictionLoss({ W, T, M, Pset, inletPiping });
+  const inletLoss = evaluateInletPressureLossPolicy(Pset, inletFric);
+
   const checklist = {
     capacityOK:     selected.area >= areaCm2,
     backPressureOK: backPressureRatio < allowableBackpressureRatio,
@@ -235,6 +349,15 @@ function api520Engine(inp, deviceType) {
     marginOK:       margin >= API_CONST.MARGIN_MIN,
     accumulationOK,
   };
+  // A안(C-3 확정): inletLossOK는 계산 가능할 때만 checklist에 포함한다.
+  // 입력 부족은 checklist.every(Boolean)을 통과시키는 방식(생략)이 아니라
+  // dataGaps로 명시하고, 최종 판정은 반드시 computeAdequacyVerdict()를
+  // 거치게 해서 "checklist 전부 true + dataGap"이 GO로 오판되지 않게 한다.
+  if (inletLoss.pressureLossAvailable) {
+    checklist.inletLossOK = inletLoss.pressureLossOK;
+  }
+  const dataGaps = [];
+  if (!inletLoss.pressureLossAvailable) dataGaps.push("inletPiping");
 
   // ── Calculation Trace — 감사/Report Evidence 전용, UI 표시용 아님 ──
   const trace = [
@@ -257,6 +380,17 @@ function api520Engine(inp, deviceType) {
     { step: "ACCUMULATION_GUARDRAIL", value: actualAccumulationRatio, unit: "",
       formula: "실제 축적압력비 = 1 + OP/100 (RELIEVING_PRESSURE의 OP와 동일 값, 다른 검증 목적)",
       inputs: { OP, actualRatio: actualAccumulationRatio, allowableRatio: allowableAccumulationRatio, ok: accumulationOK } },
+    { step: "INLET_LOSS_POLICY", value: inletLoss.allowablePressureLoss, unit: "bar",
+      formula: "allowablePressureLoss = Pset × INLET_PRESSURE_LOSS_POLICY.MAX_RATIO (KOSHA D-18-2020 §7.2(1))",
+      inputs: { Pset, maxRatio: API_CONST.INLET_PRESSURE_LOSS_POLICY.MAX_RATIO, source: API_CONST.INLET_PRESSURE_LOSS_POLICY_SOURCE } },
+    { step: "INLET_LOSS_CALCULATION", value: inletLoss.pressureLoss, unit: "bar",
+      formula: inletLoss.pressureLossAvailable
+        ? "computeFrictionLoss(inletPiping) — Darcy-Weisbach 마찰+fittings (backpressure.js와 공용 물리 계산부)"
+        : `계산 불가 — ${inletLoss.reason}`,
+      inputs: { available: inletLoss.pressureLossAvailable, inletPiping: inletPiping || null } },
+    { step: "INLET_LOSS_GUARDRAIL", value: inletLoss.pressureLossRatio, unit: "",
+      formula: "pressureLossRatio = pressureLoss / Pset ≤ MAX_RATIO — 계산 불가 시 자동 GO/NO-GO 아님(INSUFFICIENT_INPUT)",
+      inputs: { pressureLoss: inletLoss.pressureLoss, Pset, allowableRatio: API_CONST.INLET_PRESSURE_LOSS_POLICY.MAX_RATIO, ok: inletLoss.pressureLossOK } },
   ];
 
   const stepData = {
@@ -268,9 +402,12 @@ function api520Engine(inp, deviceType) {
     backpress: { ratio: backPressureRatio, valveType, allowableRatio: allowableBackpressureRatio, source: API_CONST.BACKPRESSURE_POLICY_SOURCE },
     accumulation: { fireScenario, valveCount, allowableRatio: allowableAccumulationRatio,
       actualRatio: actualAccumulationRatio, ok: accumulationOK, OP, source: API_CONST.ACCUMULATION_POLICY_SOURCE },
+    inletLoss,
   };
 
-  return { valid: true, areaCm2, selected, margin, C, P1abs, backPressureRatio, checklist, stepData, trace };
+  const verdict = computeAdequacyVerdict(checklist, dataGaps);
+
+  return { valid: true, areaCm2, selected, margin, C, P1abs, backPressureRatio, checklist, dataGaps, verdict, stepData, trace };
 }
 
 // ════════════════════════════════════════════════════════════════

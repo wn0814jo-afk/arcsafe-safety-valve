@@ -15,6 +15,9 @@ function _wfAssetHash(equipment, dischargeSystem) {
     tag: equipment.tag, mawp: equipment.mawp,
     setPressure: equipment.setPressure, overpressure: equipment.overpressure,
     orifice: equipment.orifice, deviceType: equipment.deviceType,
+    inletPiping: equipment.inletPiping
+      ? { L: equipment.inletPiping.L, D: equipment.inletPiping.D, fittingsK: equipment.inletPiping.fittingsK }
+      : null,
   } : null;
   const ds = dischargeSystem ? {
     name: dischargeSystem.name, L: dischargeSystem.L,
@@ -54,6 +57,13 @@ function detectMOC(snap, currentEquipment, currentDischargeSystem) {
     if (eq.overpressure !== ceq.overpressure) diffs.push({ field:"overpressure", from:eq.overpressure, to:ceq.overpressure, unit:"%" });
     if (eq.orifice     !== ceq.orifice)     diffs.push({ field:"orifice",     from:eq.orifice,     to:ceq.orifice,     unit:"" });
     if (eq.deviceType  !== ceq.deviceType)  diffs.push({ field:"deviceType",  from:eq.deviceType,  to:ceq.deviceType,  unit:"" });
+    // INLET-LOSS-001: DischargeSystem의 L/D/fittingsK와 이름이 겹치므로
+    // "inletPiping." 접두사로 구분 — 감사 로그에서 어느 쪽 배관이 바뀐
+    // 것인지 모호하지 않아야 한다.
+    const eip = eq.inletPiping, cip = ceq.inletPiping;
+    if ((eip?.L ?? null)         !== (cip?.L ?? null))         diffs.push({ field:"inletPiping.L",         from:eip?.L ?? null,         to:cip?.L ?? null,         unit:"m" });
+    if ((eip?.D ?? null)         !== (cip?.D ?? null))         diffs.push({ field:"inletPiping.D",         from:eip?.D ?? null,         to:cip?.D ?? null,         unit:"m" });
+    if ((eip?.fittingsK ?? null) !== (cip?.fittingsK ?? null)) diffs.push({ field:"inletPiping.fittingsK", from:eip?.fittingsK ?? null, to:cip?.fittingsK ?? null, unit:"" });
   }
   if (ds && cds) {
     if (ds.headerPressure !== cds.headerPressure) diffs.push({ field:"headerPressure", from:ds.headerPressure, to:cds.headerPressure, unit:"barg" });
@@ -73,6 +83,7 @@ function detectMOC(snap, currentEquipment, currentDischargeSystem) {
 const WORKFLOW_TRIGGER_FIELDS = [
   "headerPressure", "L", "D", "fittingsK", "destination",
   "setPressure", "mawp", "overpressure", "orifice", "deviceType",
+  "inletPiping.L", "inletPiping.D", "inletPiping.fittingsK", // INLET-LOSS-001
 ];
 
 function evaluateSafetyImpact(diffs) {

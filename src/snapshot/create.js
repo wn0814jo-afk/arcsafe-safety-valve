@@ -18,6 +18,12 @@ function _assetHash(equipment, dischargeSystem) {
     tag: equipment.tag, mawp: equipment.mawp,
     setPressure: equipment.setPressure, orifice: equipment.orifice,
     deviceType: equipment.deviceType,
+    // INLET-LOSS-001: inletPiping이 바뀌면 assetFingerprint도 바뀌어야
+    // MOC 감지(detectMOC)가 반응한다 — 누락하면 인입배관을 바꿔도
+    // "변경 없음"으로 오판된다.
+    inletPiping: equipment.inletPiping
+      ? { L: equipment.inletPiping.L, D: equipment.inletPiping.D, fittingsK: equipment.inletPiping.fittingsK }
+      : null,
   } : null;
   const ds = dischargeSystem ? {
     name: dischargeSystem.name, L: dischargeSystem.L,
@@ -33,12 +39,13 @@ function _assetHash(equipment, dischargeSystem) {
   return (h >>> 0).toString(16).padStart(8, '0');
 }
 
-const SNAPSHOT_ENGINE_VERSION = "1.5.0";
+const SNAPSHOT_ENGINE_VERSION = "1.6.0";
 
 // Snapshot이 기록하는 trigger fields — 감사 시 "어떤 규칙으로 판단했는지" 재현용
 const WORKFLOW_TRIGGER_FIELDS_SNAPSHOT = [
   "headerPressure","L","D","fittingsK","destination",
   "setPressure","mawp","orifice","deviceType",
+  "inletPiping.L","inletPiping.D","inletPiping.fittingsK", // INLET-LOSS-001
 ];
 
 function createSnapshot({ caseId, valveTag, deviceType, inputs, engineResult,

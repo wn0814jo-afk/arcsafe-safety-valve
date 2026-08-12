@@ -49,29 +49,48 @@ function EquipmentForm({ onSave, onCancel, editing }) {
     inletSize: editing.inletSize, outletSize: editing.outletSize,
     manufacturer: editing.manufacturer, model: editing.model,
     serialNo: editing.serialNo, installedAt: editing.installedAt,
+    inletPiping: editing.inletPiping
+      ? { L: String(editing.inletPiping.L), D: String(editing.inletPiping.D), fittingsK: String(editing.inletPiping.fittingsK) }
+      : { L:"", D:"", fittingsK:"" },
     mocId: "",
   } : {
     tag:"", location:"", deviceType:"safetyValve",
     mawp:6.0, setPressure:5.5, overpressure:10,
     inletSize:"3\"", outletSize:"4\"", orifice:"",
     manufacturer:"", model:"", serialNo:"", installedAt:"",
+    inletPiping: { L:"", D:"", fittingsK:"" },
     mocId:"",
   });
   const upd = (k,v) => setF(p=>({...p,[k]:v}));
+  const updInlet = (k,v) => setF(p=>({...p, inletPiping:{...p.inletPiping, [k]:v}}));
   const psetErr = f.setPressure > f.mawp;
+  // INLET-LOSS-001: 인입배관은 선택 항목 — 3개 다 비어있으면 "미등록"으로
+  // 저장(null). 일부만 채워진 상태는 부정확한 판정으로 이어지므로 저장을
+  // 막는다(fail-fast) — 임의로 나머지를 기본값으로 채우지 않는다.
+  const ipAllEmpty = f.inletPiping.L === "" && f.inletPiping.D === "" && f.inletPiping.fittingsK === "";
+  const ipPartial = !ipAllEmpty && (f.inletPiping.L === "" || f.inletPiping.D === "" || f.inletPiping.fittingsK === "");
+  const ipInvalid = !ipAllEmpty && !ipPartial && (
+    isNaN(Number(f.inletPiping.L)) || isNaN(Number(f.inletPiping.D)) || isNaN(Number(f.inletPiping.fittingsK)) ||
+    Number(f.inletPiping.D) <= 0 || Number(f.inletPiping.L) < 0 || Number(f.inletPiping.fittingsK) < 0
+  );
   const valid = f.tag.trim() && f.mawp>0 && f.setPressure>0 && !psetErr &&
     f.overpressure !== "" && f.overpressure !== null && !isNaN(Number(f.overpressure)) && Number(f.overpressure) >= 0 &&
+    !ipPartial && !ipInvalid &&
     (!isRevision || f.mocId.trim().length > 0);
 
   const handleSave = () => {
     if (!valid) return;
+    const inletPipingPayload = ipAllEmpty ? null : {
+      L: Number(f.inletPiping.L), D: Number(f.inletPiping.D), fittingsK: Number(f.inletPiping.fittingsK),
+    };
+    const payload = { ...f, inletPiping: inletPipingPayload };
     if (isRevision) {
-      const result = reviseEquipment(editing, f);
+      const result = reviseEquipment(editing, payload);
       if (!result.ok) { alert(`${result.field}: ${result.reason}`); return; }
       onSave(result.equipment);
       return;
     }
-    try { onSave(createEquipment(f)); } catch(e) { alert(e.message); }
+    try { onSave(createEquipment(payload)); } catch(e) { alert(e.message); }
   };
 
   return (
@@ -170,6 +189,41 @@ function EquipmentForm({ onSave, onCancel, editing }) {
             </div>
           </Field>}
         />
+      </Section>
+
+      <Section title="인입배관 (선택 — KOSHA D-18-2020 §7.2(1) 압력손실 3% 판정용)">
+        <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginBottom:8,lineHeight:1.5}}>
+          설치대상 용기에서 이 안전밸브 인입 플랜지까지의 실제 배관 형상.
+          위 "입구 Size"({f.inletSize || "—"})는 명목 규격 표시일 뿐 — 여기 입력한
+          값만 계산에 실제로 쓰입니다. 3개 다 비워두면 미등록(판정 보류) 처리됩니다.
+        </div>
+        <Row2
+          a={<Field label="배관 길이 L (m)">
+            <input type="number" value={f.inletPiping.L} step={0.1}
+              onChange={e=>updInlet("L",e.target.value)}
+              placeholder="예: 3.5" style={iS()}/>
+          </Field>}
+          b={<Field label="배관 내경 D (m)">
+            <input type="number" value={f.inletPiping.D} step={0.001}
+              onChange={e=>updInlet("D",e.target.value)}
+              placeholder="예: 0.08" style={iS()}/>
+          </Field>}
+        />
+        <Field label="배관 부속 저항계수 ΣK">
+          <input type="number" value={f.inletPiping.fittingsK} step={0.1}
+            onChange={e=>updInlet("fittingsK",e.target.value)}
+            placeholder="예: 1.5" style={iS()}/>
+        </Field>
+        {ipPartial && (
+          <div style={{fontSize:10,color:T.red,fontFamily:font.sans,marginTop:-6,marginBottom:10}}>
+            L / D / ΣK 중 일부만 입력됐습니다 — 3개 모두 입력하거나 모두 비워두세요 (임의 기본값을 채우지 않습니다).
+          </div>
+        )}
+        {ipInvalid && (
+          <div style={{fontSize:10,color:T.red,fontFamily:font.sans,marginTop:-6,marginBottom:10}}>
+            내경(D)은 0보다 커야 하고, 길이(L)·ΣK는 0 이상이어야 합니다.
+          </div>
+        )}
       </Section>
 
       <Section title="제조사 정보 (선택)">
@@ -374,6 +428,10 @@ function RevisionHistoryPanel({ title, history, id, kind, allSnapshots, onClose 
     ["mawp","MAWP (barg)"], ["setPressure","설정압 (barg)"],
     ["overpressure","Overpressure (%)"], ["orifice","오리피스"],
     ["inletSize","입구 Size"], ["outletSize","출구 Size"],
+    // INLET-LOSS-001: dot-path 필드 — _getPath()로 읽어야 값이 나온다
+    // (일반 selected[k] 방식은 중첩 객체라 undefined가 됨).
+    ["inletPiping.L","인입배관 길이 L (m)"], ["inletPiping.D","인입배관 내경 D (m)"],
+    ["inletPiping.fittingsK","인입배관 ΣK"],
     ["manufacturer","제조사"], ["model","모델"],
     ["serialNo","Serial No."], ["installedAt","설치일"],
   ];
@@ -469,8 +527,8 @@ function RevisionHistoryPanel({ title, history, id, kind, allSnapshots, onClose 
               <div key={k}>
                 <div style={{fontSize:9,color:T.gray,fontFamily:font.mono}}>{label}</div>
                 <div style={{fontSize:11,fontWeight:700,color:T.navyLight,fontFamily:font.mono}}>
-                  {Array.isArray(selected[k]) ? (selected[k].join(", ") || "—")
-                    : (selected[k] ?? "—") === "" ? "—" : String(selected[k] ?? "—")}
+                  {Array.isArray(_getPath(selected,k)) ? (_getPath(selected,k).join(", ") || "—")
+                    : (_getPath(selected,k) ?? "—") === "" ? "—" : String(_getPath(selected,k) ?? "—")}
                 </div>
               </div>
             ))}

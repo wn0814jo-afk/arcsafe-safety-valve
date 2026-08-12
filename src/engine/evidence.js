@@ -2,7 +2,7 @@
 // ════════════════════════════════════════════════════════════════
 function buildEvidence(sd) {
   if (!sd) return [];
-  const { fluid, cCoeff, pressure, orifice, selection, backpress, accumulation } = sd;
+  const { fluid, cCoeff, pressure, orifice, selection, backpress, accumulation, inletLoss } = sd;
   return [
     {
       id:1, title:"유체 물성 확인",
@@ -58,6 +58,21 @@ function buildEvidence(sd) {
         ? `sizing(Relieving Pressure) 산정에 쓰인 것과 같은 Overpressure(OP=${accumulation.OP}%)를 여기서는 다른 질문에 사용 — "이 시나리오(밸브개수·화재여부)에서 허용되는 축적압력 상한을 넘는가?"를 검증한다. sizing 결과(오리피스/필요면적)에는 영향 없음. 초과 시 자동 보정하지 않고 NO-GO로 표시. 근거: ${accumulation.source}`
         : "",
       ok: accumulation ? accumulation.ok : true,
+    },
+    {
+      id:8, title:"인입배관 압력손실 검증 (Inlet Pressure Loss)",
+      formula:inletLoss
+        ? `pressureLoss / Pset ≤ ${(API_CONST.INLET_PRESSURE_LOSS_POLICY.MAX_RATIO*100).toFixed(0)}% (KOSHA GUIDE D-18-2020 §7.2(1))`
+        : "",
+      result:!inletLoss ? ""
+        : !inletLoss.pressureLossAvailable
+          ? `계산 불가 — 인입배관 형상(길이/내경/fittings) 데이터 없음 → INSUFFICIENT INPUT`
+          : `ΔP = ${inletLoss.pressureLoss.toFixed(4)} bar (${(inletLoss.pressureLossRatio*100).toFixed(2)}%) → ${inletLoss.pressureLossOK ? "GO ✓" : "NO-GO ✗ — 조치 필요"}`,
+      detail:!inletLoss ? ""
+        : !inletLoss.pressureLossAvailable
+          ? `Equipment에 inletPiping(L/D/fittingsK)이 등록되어 있지 않아 실제 압력손실을 계산할 수 없다. 임의 추정값을 대입하지 않고 판정을 보류한다 — 이 상태는 "적정"으로 취급되지 않는다(GO 아님).`
+          : `설치대상 용기에서 안전밸브 인입 플랜지까지의 배관 압력손실이 설정압력(Pset=${pressure.Pset} barg)의 ${(inletLoss.allowableRatio*100).toFixed(0)}%(=${inletLoss.allowablePressureLoss.toFixed(4)} bar) 이하인지 확인. 물리 계산은 backpressure.js와 동일한 검증된 Darcy-Weisbach 모델(computeFrictionLoss) 재사용 — sizing 결과(Required Area/Orifice)에는 영향 없음. 근거: ${inletLoss.source}`,
+      ok: inletLoss ? (inletLoss.pressureLossAvailable ? inletLoss.pressureLossOK : false) : true,
     },
   ];
 }

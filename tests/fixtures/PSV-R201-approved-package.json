@@ -2,19 +2,24 @@
   "meta": {
     "packageVersion": "1.0.0",
     "generatedAt": "2026-07-10T10:10:00.000Z",
-    "engineVersion": "1.5.0"
+    "engineVersion": "1.6.0"
   },
   "identity": {
     "caseId": "C-2026-001",
-    "snapshotId": "SNAP-C-2026-001-1786311180111",
-    "snapshotHash": "917566c8"
+    "snapshotId": "SNAP-C-2026-001-1786573757720",
+    "snapshotHash": "d753052a"
   },
   "asset": {
     "equipment": {
       "id": "EQ-PSVR201-GOLDEN",
       "tag": "PSV-R201",
       "revision": 1,
-      "mocId": null
+      "mocId": null,
+      "inletPiping": {
+        "L": 3,
+        "D": 0.08,
+        "fittingsK": 1.5
+      }
     },
     "dischargeSystem": {
       "id": "DS-LPFLARE01-GOLDEN",
@@ -27,10 +32,10 @@
       "headerPressure": 0.5,
       "destination": "flare"
     },
-    "assetFingerprint": "fb2bb5d0"
+    "assetFingerprint": "ceb2da2b"
   },
   "calculation": {
-    "engineVersion": "1.5.0",
+    "engineVersion": "1.6.0",
     "inputs": {
       "W": 2500,
       "P1": 5.5,
@@ -64,8 +69,11 @@
         "mawpOK": true,
         "kdOK": true,
         "marginOK": true,
-        "accumulationOK": true
+        "accumulationOK": true,
+        "inletLossOK": true
       },
+      "dataGaps": [],
+      "verdict": "GO",
       "stepData": {
         "fluid": {
           "M": 44,
@@ -114,6 +122,15 @@
           "ok": true,
           "OP": 10,
           "source": "KOSHA GUIDE D-18-2020 §4.4, <표 1>"
+        },
+        "inletLoss": {
+          "pressureLossAvailable": true,
+          "pressureLoss": 0.0232,
+          "allowablePressureLoss": 0.16499999999999998,
+          "allowableRatio": 0.03,
+          "pressureLossRatio": 0.004218181818181818,
+          "pressureLossOK": true,
+          "source": "KOSHA GUIDE D-18-2020 §7.2(1)"
         }
       },
       "trace": [
@@ -217,6 +234,43 @@
             "allowableRatio": 1.1,
             "ok": true
           }
+        },
+        {
+          "step": "INLET_LOSS_POLICY",
+          "value": 0.16499999999999998,
+          "unit": "bar",
+          "formula": "allowablePressureLoss = Pset × INLET_PRESSURE_LOSS_POLICY.MAX_RATIO (KOSHA D-18-2020 §7.2(1))",
+          "inputs": {
+            "Pset": 5.5,
+            "maxRatio": 0.03,
+            "source": "KOSHA GUIDE D-18-2020 §7.2(1)"
+          }
+        },
+        {
+          "step": "INLET_LOSS_CALCULATION",
+          "value": 0.0232,
+          "unit": "bar",
+          "formula": "computeFrictionLoss(inletPiping) — Darcy-Weisbach 마찰+fittings (backpressure.js와 공용 물리 계산부)",
+          "inputs": {
+            "available": true,
+            "inletPiping": {
+              "L": 3,
+              "D": 0.08,
+              "fittingsK": 1.5
+            }
+          }
+        },
+        {
+          "step": "INLET_LOSS_GUARDRAIL",
+          "value": 0.004218181818181818,
+          "unit": "",
+          "formula": "pressureLossRatio = pressureLoss / Pset ≤ MAX_RATIO — 계산 불가 시 자동 GO/NO-GO 아님(INSUFFICIENT_INPUT)",
+          "inputs": {
+            "pressureLoss": 0.0232,
+            "Pset": 5.5,
+            "allowableRatio": 0.03,
+            "ok": true
+          }
         }
       ]
     }
@@ -225,25 +279,25 @@
     "state": "APPROVED",
     "decision": {
       "reasons": [],
-      "evaluatedAt": "2026-08-09T21:33:00.111Z",
-      "engineVersion": "1.5.0"
+      "evaluatedAt": "2026-08-12T22:29:17.720Z",
+      "engineVersion": "1.6.0"
     }
   },
   "approvals": [
     {
-      "approvalId": "APPR-SNAP-C-2026-001-1786311180111-1786311180122",
+      "approvalId": "APPR-SNAP-C-2026-001-1786573757720-1786573757726",
       "signer": "홍길동",
       "role": "senior_engineer",
-      "approvedAt": "2026-08-09T21:33:00.111Z",
+      "approvedAt": "2026-08-12T22:29:17.720Z",
       "decision": "approve",
       "comment": "배관 개정(MOC-2026-017) 검토 완료, 이상 없음",
-      "signature": "305868a1766f395270d29ae85e0874cf4c47515f69ba63807caab2334f39cb4d",
+      "signature": "e902b434c8ed18dd7eb7d46cbfbd2b63a5c5b08835fdfbdba108e77da333d460",
       "verified": true
     }
   ],
   "_fixtureMeta": {
-    "engineVersion": "1.5.0",
-    "buildHash": "ab68153a15a4",
+    "engineVersion": "1.6.0",
+    "buildHash": "af2c7099fd39",
     "generatedAt": "2026-07-10T10:10:00.000Z",
     "fixtureName": "PSV-R201-approved"
   }

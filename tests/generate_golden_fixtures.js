@@ -73,6 +73,10 @@ async function main() {
     mawp: 6.0, setPressure: 5.5, overpressure: 10, orifice: "P",
     inletSize: "3\"", outletSize: "4\"",
     manufacturer: "Crosby", model: "JOS-E",
+    // INLET-LOSS-001: 골든 픽스처가 C-3 경로(계산 가능한 GO 케이스)를
+    // 실제로 exercise하도록 실측 배관 형상을 부여 — 3% 이내가 되도록
+    // 충분히 짧고 굵은 배관(L=3m, D=80mm, ΣK=1.5)으로 설정.
+    inletPiping: Object.freeze({ L: 3, D: 0.08, fittingsK: 1.5 }),
   });
 
   const dsRev1 = Object.freeze({
@@ -89,7 +93,7 @@ async function main() {
     valveType: "SPRING", // VALVE-TYPE-001
     valveCount: 1, fireScenario: false, // ACCUMULATION-001
   });
-  const engineResult = api520Engine(inputs, equipment.deviceType);
+  const engineResult = api520Engine(inputs, equipment.deviceType, equipment.inletPiping);
   if (!engineResult.valid) throw new Error("engine invalid: " + JSON.stringify(engineResult.error));
 
   const wfDec0 = computeWorkflowState(null, equipment, dsRev1);

@@ -4,8 +4,15 @@ const INITIAL_CASES = [];  // 설비대장에서 선택 후 생성
 
 function CaseCard({ c, onOpen }) {
   const hasSnap = !!c.latestSnap;
-  const allOK   = hasSnap && c.latestSnap.result?.checklist &&
-                  Object.values(c.latestSnap.result.checklist).every(Boolean);
+  // INLET-LOSS-001: verdict가 단일 출처 — checklist.every(Boolean)를
+  // 여기서 다시 계산하지 않는다(dataGaps가 있으면 GO가 아니어야 함).
+  // 구버전 Snapshot(verdict 필드 없음) 호환 폴백만 유지.
+  const verdict = hasSnap
+    ? (c.latestSnap.result?.verdict
+        || (c.latestSnap.result?.checklist && Object.values(c.latestSnap.result.checklist).every(Boolean) ? "GO" : "NO_GO"))
+    : null;
+  const allOK = verdict === "GO";
+  const insufficientInput = verdict === "INSUFFICIENT_INPUT";
   return (
     <button onClick={()=>onOpen(c)}
       style={{display:"block",width:"100%",textAlign:"left",background:T.cardBg,
@@ -26,10 +33,11 @@ function CaseCard({ c, onOpen }) {
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
           {hasSnap && (
             <span style={{padding:"3px 9px",borderRadius:12,
-              background:allOK?T.greenBg:T.redBg,
-              border:`1px solid ${allOK?T.green:T.red}`,
-              fontSize:10,fontWeight:700,color:allOK?T.green:T.red,fontFamily:font.mono}}>
-              {allOK?"적정":"부적정"}
+              background:insufficientInput?(T.amberBg||"#fff7e6"):(allOK?T.greenBg:T.redBg),
+              border:`1px solid ${insufficientInput?(T.amber||"#d97706"):(allOK?T.green:T.red)}`,
+              fontSize:10,fontWeight:700,
+              color:insufficientInput?(T.amber||"#d97706"):(allOK?T.green:T.red),fontFamily:font.mono}}>
+              {insufficientInput ? "판정 보류" : (allOK?"적정":"부적정")}
             </span>
           )}
           <span style={{padding:"3px 9px",borderRadius:12,

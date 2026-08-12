@@ -79,6 +79,13 @@ function buildReportPackage(snapshot, opts) {
         tag:      snapshot.assetRefs.equipmentTag,
         revision: snapshot.assetRefs.equipmentRevision,
         mocId:    snapshot.equipment?.mocId ?? null,
+        // INLET-LOSS-001: PDF/Evidence의 인입배관 형상 표시(pkg.asset.
+        // equipment.inletPiping)가 이 필드를 직접 읽는다 — 여기 없으면
+        // 실제 데이터가 있어도 "미등록"으로 잘못 표시된다. 재계산 없이
+        // snapshot에 이미 박제된 값을 그대로 복사(REPORT-PKG-005와 동일 원칙).
+        inletPiping: snapshot.equipment?.inletPiping
+          ? { L: snapshot.equipment.inletPiping.L, D: snapshot.equipment.inletPiping.D, fittingsK: snapshot.equipment.inletPiping.fittingsK }
+          : null,
       }),
       dischargeSystem: Object.freeze({
         id:       snapshot.assetRefs.dischargeSystemId,
