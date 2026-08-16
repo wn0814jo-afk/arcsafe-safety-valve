@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:af2c7099fd39\n\n' +
+    box.textContent = '[ERROR] BUILD:9420704fcfec\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:af2c7099fd39\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:9420704fcfec\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:af2c7099fd39 | 2026-08-12T22:29:18Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:9420704fcfec | 2026-08-16T00:34:01Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "af2c7099fd39";
+const __BUILD_HASH__ = "9420704fcfec";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -4844,9 +4844,46 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
   });
   const pkgValid = validateReportPackage(pkg);
   const pkgIdentityMatch = pkg.identity?.snapshotHash === snap.snapshotHash;
-  const handleExportPDF = () => {
+
+  // Pro 게이트(2026-08-14) — AUTH_INTEGRATION_STANDARD.md 6항("Engine 격리
+  // 원칙")에 따라 plan 체크는 이 컴포넌트(UI/Adapter 레이어)에서만 수행하고,
+  // renderPDF()/buildReportPackage() 등 Engine/Snapshot/Report 레이어에는
+  // plan을 절대 넘기지 않는다 — renderPDF(pkg) 호출 자체는 기존과 완전히
+  // 동일, 그 앞에 게이트만 하나 얹은 것.
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [upgradeStatus, setUpgradeStatus] = useState("");
+  const handleExportPDF = async () => {
+    let plan = "free";
+    try {
+      const res = await fetch("https://policy.archsafe.co.kr/policy/me", { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        plan = data?.billing?.plan || "free";
+      }
+    } catch (e) {
+      // 정책 조회 실패 시 Free로 안전하게 취급 — Pro를 오인 부여하는 쪽이
+      // Free를 오인 거부하는 쪽보다 위험하므로 fail-closed.
+    }
+    if (plan !== "pro") { setShowUpgradeModal(true); return; }
     const res = renderPDF(pkg);
     if (!res.ok) alert(`PDF 생성 실패: ${res.reason}`);
+  };
+  const requestUpgrade = async () => {
+    setUpgradeStatus("신청 중…");
+    try {
+      const res = await fetch("https://api.archsafe.co.kr/billing/manual/request", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ planId: "PRO_MONTHLY", memo: "PSV PDF export upsell" }),
+      });
+      const envelope = await res.json();
+      if (res.status === 409) { setUpgradeStatus("이미 대기 중인 신청이 있습니다. 확인 후 안내드릴게요."); return; }
+      if (!res.ok || !envelope.success) throw new Error(envelope.error?.message || `요청 실패 (${res.status})`);
+      setUpgradeStatus("Pro 전환 신청이 접수되었습니다. 확인 후 안내드릴게요.");
+    } catch (e) {
+      setUpgradeStatus(`신청에 실패했습니다: ${e.message}`);
+    }
   };
 
   const TAB = (id, label) => (
@@ -4991,6 +5028,22 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
       )}
 
       <ApprovalHistory approvals={approvals} verifiedResults={verifiedResults} />
+
+      {showUpgradeModal && (
+        <div onClick={()=>setShowUpgradeModal(false)}
+          style={{position:"fixed",inset:0,background:"rgba(15,23,42,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999,padding:20}}>
+          <div onClick={e=>e.stopPropagation()}
+            style={{background:T.white,borderRadius:14,maxWidth:420,width:"100%",padding:24}}>
+            <h2 style={{margin:"0 0 12px",fontSize:16,fontWeight:900,color:T.navy,fontFamily:font.mono}}>🔒 PDF 리포트는 Pro 기능입니다</h2>
+            <p style={{color:T.sub,fontSize:13,marginBottom:16,lineHeight:1.5}}>MOC 이력·전자서명 검증 결과가 포함된 정식 PDF 리포트는 Pro 플랜에서 제공됩니다. 아래 버튼으로 전환을 신청하시면 확인 후 안내드립니다.</p>
+            <button onClick={requestUpgrade}
+              style={{width:"100%",padding:12,border:"none",borderRadius:8,background:T.navyLight,color:T.white,fontWeight:700,fontSize:13,cursor:"pointer"}}>
+              Pro 전환 신청하기
+            </button>
+            <p style={{marginTop:10,fontSize:11,color:T.sub}}>{upgradeStatus}</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
