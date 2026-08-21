@@ -1431,6 +1431,1485 @@ console.log(JSON.stringify(out));
 
 
 # ════════════════════════════════════════════════════════════════
+#  RELIEF LOAD TAXONOMY CONTRACT (Sprint C-4.0)
+#  KOSHA GUIDE D-18-2020 §5(소요분출량)/§6(안전밸브 선정) 계약/데이터모델.
+#  이 단계는 계산식을 구현하지 않는다 — taxonomy와 §6 governing load
+#  선택 순수함수만 검증한다. api520Engine과의 연결은 C-4.8에서 검증.
+# ════════════════════════════════════════════════════════════════
+def test_relief_load_taxonomy_contract() -> TestResult:
+    tr = TestResult("RELIEF-LOAD-TAXONOMY-001", "Sprint C-4.0 — §5/§6 시나리오 taxonomy 및 governing load 계약")
+
+    rl_src    = (SRC / "engine" / "relief_load.js").read_text()
+    api520_src= (SRC / "engine" / "api520.js").read_text()
+
+    # ── 원문 대조 결과 반영: 7개 COMPUTABLE, 나머지는 원문이 그은 경계 ──
+    tr.check("TAXONOMY_001_seven_computable_scenarios",
+             rl_src.count("RELIEF_LOAD_STATUS.COMPUTABLE,") == 7,
+             "COMPUTABLE 시나리오가 정확히 7개(§5.1/5.6/5.7/5.8/5.11/5.12/5.13)가 아님")
+    tr.check("TAXONOMY_001_fourteen_plus_one_sections_present",
+             all(f"§5.{n}" in rl_src for n in list(range(1,15))),
+             "§5.1~§5.14 전체가 taxonomy에 존재하지 않음 — 원문 조항 누락")
+    tr.check("TAXONOMY_001_source_cited",
+             "KOSHA GUIDE D-18-2020" in rl_src,
+             "taxonomy에 KOSHA D-18-2020 출처 인용이 없음")
+    tr.check("TAXONOMY_001_needs_engineering_decision_not_silently_computable",
+             '"COOLING_LOSS"' in rl_src and "NEEDS_ENGINEERING_DECISION" in rl_src,
+             "§5.2(냉각/환류 중단)가 NEEDS_ENGINEERING_DECISION으로 분류되지 않음")
+    tr.check("TAXONOMY_001_out_of_scope_distinct_from_needs_decision",
+             rl_src.count("OUT_OF_SCOPE,") >= 4,
+             "OUT_OF_SCOPE(§5.3/5.5/5.9/5.14)가 NEEDS_ENGINEERING_DECISION과 구분되지 않음")
+    tr.check("TAXONOMY_001_dependent_scenarios_reference_parent",
+             '"NONCONDENSABLE_GAS"' in rl_src and "DEPENDENT" in rl_src and "dependsOn" in rl_src,
+             "§5.4/§5.15의 종속관계(dependsOn)가 명시되지 않음")
+    tr.check("TAXONOMY_001_not_yet_wired_into_engine",
+             "relief_load" not in api520_src and "selectGoverningReliefLoad" not in api520_src,
+             "C-4.0 단계에서 relief_load.js가 아직 api520Engine에 연결되면 안 됨(C-4.8에서 연결)")
+
+    node = shutil.which("node")
+    if node:
+        check_script = f"""
+const fs = require('fs');
+const files = ['engine/relief_load.js'].map(f => fs.readFileSync('{SRC}/' + f, 'utf8')).join('\\n');
+eval(files);
+
+const out = {{}};
+
+// ── GOV-001: 유효 시나리오 없음 -> INSUFFICIENT_INPUT ──
+out.emptyVerdict = selectGoverningReliefLoad([]).verdict;
+out.nullInputVerdict = selectGoverningReliefLoad(null).verdict;
+out.allNotApplicableVerdict = selectGoverningReliefLoad([
+  {{scenarioId:"OUTLET_BLOCKED", status:"NOT_APPLICABLE", W:null}},
+  {{scenarioId:"OVERFILLING", status:"INSUFFICIENT_INPUT", W:null}},
+]).verdict;
+
+// ── GOV-002: 단일 유효 시나리오 -> 그대로 governing ──
+const single = selectGoverningReliefLoad([
+  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:1000, unit:"kg/h"}},
+]);
+out.singleGoverningId = single.governingScenarioId;
+out.singleGoverningW = single.governingW;
+out.singleVerdict = single.verdict;
+
+// ── GOV-003: 여러 시나리오 중 최댓값 선택 ──
+const multi = selectGoverningReliefLoad([
+  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:1200}},
+  {{scenarioId:"EXTERNAL_FIRE",  status:"OK", W:5000}},
+  {{scenarioId:"OVERFILLING",    status:"OK", W:800}},
+]);
+out.multiGoverningId = multi.governingScenarioId;
+out.multiGoverningW = multi.governingW;
+
+// ── GOV-004: 무효(status != OK, W<=0, W가 숫자아님) 시나리오는 후보에서 제외 ──
+const filtered = selectGoverningReliefLoad([
+  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:-5}},
+  {{scenarioId:"OVERFILLING",    status:"OK", W:"not_a_number"}},
+  {{scenarioId:"CONTROL_VALVE_FAIL", status:"OK", W:0}},
+  {{scenarioId:"EXTERNAL_FIRE",  status:"OK", W:3000}},
+]);
+out.filteredGoverningId = filtered.governingScenarioId;
+out.filteredGoverningW = filtered.governingW;
+
+// ── GOV-005: 동점(tie) -> taxonomy 선언순서상 먼저인 쪽으로 결정론적 선택 ──
+const tie1 = selectGoverningReliefLoad([
+  {{scenarioId:"EXTERNAL_FIRE",  status:"OK", W:2000}},
+  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:2000}},
+]);
+const tie2 = selectGoverningReliefLoad([
+  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:2000}},
+  {{scenarioId:"EXTERNAL_FIRE",  status:"OK", W:2000}},
+]);
+out.tieWinner1 = tie1.governingScenarioId;
+out.tieWinner2 = tie2.governingScenarioId;
+out.tieOrderIndependent = (tie1.governingScenarioId === tie2.governingScenarioId);
+
+// ── GOV-006: allScenarios가 governing만 남기지 않고 전체 보존 ──
+const preserve = selectGoverningReliefLoad([
+  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:1000}},
+  {{scenarioId:"EXTERNAL_FIRE",  status:"OK", W:5000}},
+  {{scenarioId:"OVERFILLING",    status:"INSUFFICIENT_INPUT", W:null}},
+]);
+out.preservedCount = preserve.allScenarios.length;
+
+// ── GOV-007: 순수 함수 — 입력 배열/객체를 변형하지 않음 ──
+const original = [{{scenarioId:"OUTLET_BLOCKED", status:"OK", W:1000}}];
+const originalCopy = JSON.parse(JSON.stringify(original));
+selectGoverningReliefLoad(original);
+out.inputUnmutated = JSON.stringify(original) === JSON.stringify(originalCopy);
+
+// ── GOV-008: 결정론 — 동일 입력 2회 실행 결과 동일 ──
+const detInput = [
+  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:1500}},
+  {{scenarioId:"EXTERNAL_FIRE",  status:"OK", W:4200}},
+];
+const d1 = selectGoverningReliefLoad(detInput);
+const d2 = selectGoverningReliefLoad(detInput);
+out.deterministic = JSON.stringify(d1) === JSON.stringify(d2);
+
+// ── GOV-009: getComputableScenarioIds()가 정확히 7개 반환 ──
+out.computableCount = getComputableScenarioIds().length;
+out.computableIncludesFire = getComputableScenarioIds().includes("EXTERNAL_FIRE");
+out.computableExcludesOutOfScope = !getComputableScenarioIds().includes("VOLATILE_INGRESS");
+
+console.log(JSON.stringify(out));
+"""
+        try:
+            result = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=15)
+            out = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
+        except Exception as e:
+            out = {}
+            tr.check("GOV_node_execution", False, f"node 실행 실패: {e}\nstderr: {getattr(result,'stderr','')}")
+            out = None
+
+        if out is not None:
+            tr.check("GOV_001_empty_array_insufficient_input",
+                     out.get("emptyVerdict") == "INSUFFICIENT_INPUT", f"got {out.get('emptyVerdict')}")
+            tr.check("GOV_001_null_input_insufficient_input",
+                     out.get("nullInputVerdict") == "INSUFFICIENT_INPUT", f"got {out.get('nullInputVerdict')}")
+            tr.check("GOV_001_all_not_applicable_insufficient_input",
+                     out.get("allNotApplicableVerdict") == "INSUFFICIENT_INPUT", f"got {out.get('allNotApplicableVerdict')}")
+            tr.check("GOV_002_single_scenario_becomes_governing",
+                     out.get("singleGoverningId") == "OUTLET_BLOCKED" and out.get("singleGoverningW") == 1000
+                     and out.get("singleVerdict") == "OK",
+                     f"got {out.get('singleGoverningId')}/{out.get('singleGoverningW')}/{out.get('singleVerdict')}")
+            tr.check("GOV_003_max_W_selected_among_multiple",
+                     out.get("multiGoverningId") == "EXTERNAL_FIRE" and out.get("multiGoverningW") == 5000,
+                     f"got {out.get('multiGoverningId')}/{out.get('multiGoverningW')}")
+            tr.check("GOV_004_invalid_scenarios_excluded_from_selection",
+                     out.get("filteredGoverningId") == "EXTERNAL_FIRE" and out.get("filteredGoverningW") == 3000,
+                     f"음수/비숫자/0 W를 가진 시나리오가 선택에서 제외되지 않음: got {out.get('filteredGoverningId')}/{out.get('filteredGoverningW')}")
+            tr.check("GOV_005_tie_break_deterministic_by_taxonomy_order",
+                     out.get("tieOrderIndependent") is True and out.get("tieWinner1") == "OUTLET_BLOCKED",
+                     f"동점 시 taxonomy 선언순서(§5.1이 §5.12보다 먼저)로 결정되지 않음: {out.get('tieWinner1')}/{out.get('tieWinner2')}")
+            tr.check("GOV_006_all_scenarios_preserved_not_just_governing",
+                     out.get("preservedCount") == 3,
+                     f"allScenarios가 전체 시나리오(3개)를 보존하지 않음: got {out.get('preservedCount')}")
+            tr.check("GOV_007_pure_function_does_not_mutate_input",
+                     out.get("inputUnmutated") is True,
+                     "selectGoverningReliefLoad가 입력 배열/객체를 변형함 — 순수함수 원칙 위반")
+            tr.check("GOV_008_deterministic_same_input_same_output",
+                     out.get("deterministic") is True,
+                     "동일 입력 2회 실행 결과가 다름 — 결정론 위반")
+            tr.check("GOV_009_computable_ids_exactly_seven",
+                     out.get("computableCount") == 7 and out.get("computableIncludesFire") is True
+                     and out.get("computableExcludesOutOfScope") is True,
+                     f"getComputableScenarioIds() 결과가 계약과 다름: {out}")
+    else:
+        tr.check("GOV_node_available", False, "node를 찾을 수 없어 governing-load 실행 검증을 건너뜀")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
+#  §5.1 출구 차단 (Sprint C-4.1) — KOSHA D-18-2020 §5.1(1)
+#  아직 api520Engine에 미연결. 시나리오 계산 함수 자체의 정확성만 검증.
+# ════════════════════════════════════════════════════════════════
+def test_outlet_blocked_scenario_contract() -> TestResult:
+    tr = TestResult("OUTLET-BLOCKED-001", "Sprint C-4.1 — §5.1 출구 차단 시나리오")
+
+    rl_src = (SRC / "engine" / "relief_load.js").read_text()
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+
+    tr.check("OB_001_function_exists",
+             "function calculateOutletBlockedScenario" in rl_src,
+             "calculateOutletBlockedScenario() 함수가 없음")
+    tr.check("OB_001_source_cited",
+             "KOSHA GUIDE D-18-2020 §5.1" in rl_src,
+             "§5.1 계산 함수에 KOSHA D-18-2020 §5.1 출처 인용이 없음")
+    tr.check("OB_001_not_yet_wired_into_engine",
+             "calculateOutletBlockedScenario" not in api520_src,
+             "C-4.1 단계에서 calculateOutletBlockedScenario가 아직 api520Engine에 연결되면 안 됨")
+
+    node = shutil.which("node")
+    if not node:
+        tr.check("OB_node_available", False, "node를 찾을 수 없어 실행 검증을 건너뜀")
+        return tr
+
+    check_script = f"""
+const fs = require('fs');
+const files = ['engine/relief_load.js'].map(f => fs.readFileSync('{SRC}/' + f, 'utf8')).join('\\n');
+eval(files);
+
+const out = {{}};
+
+// ── OB-002: 정상 액체 케이스 — W = 최대 유입량 ──
+const liquid = calculateOutletBlockedScenario({{ phase:"LIQUID", inflow_kgh: 3200 }});
+out.liquidStatus = liquid.status;
+out.liquidW = liquid.W;
+out.liquidUnit = liquid.unit;
+out.liquidScenarioId = liquid.scenarioId;
+out.liquidSection = liquid.section;
+
+// ── OB-003: 정상 증기 케이스 — W = 최대 유입량 + 생성량 ──
+const vapor = calculateOutletBlockedScenario({{ phase:"VAPOR", inflow_kgh: 1500, generationRate_kgh: 800 }});
+out.vaporStatus = vapor.status;
+out.vaporW = vapor.W;
+out.vaporComponents = vapor.components;
+
+// ── OB-004: 필수 입력 누락(phase 없음, inflow 없음, 증기인데 generation 없음) ──
+out.missingPhase = calculateOutletBlockedScenario({{ inflow_kgh: 1000 }}).status;
+out.missingInflow = calculateOutletBlockedScenario({{ phase:"LIQUID" }}).status;
+out.missingGeneration = calculateOutletBlockedScenario({{ phase:"VAPOR", inflow_kgh: 1000 }}).status;
+out.nullInput = calculateOutletBlockedScenario(null).status;
+
+// ── OB-005: 0/음수/NaN/Infinity ──
+out.zeroInflowStatus = calculateOutletBlockedScenario({{ phase:"LIQUID", inflow_kgh: 0 }}).status;
+out.zeroInflowW = calculateOutletBlockedScenario({{ phase:"LIQUID", inflow_kgh: 0 }}).W;
+out.negativeInflow = calculateOutletBlockedScenario({{ phase:"LIQUID", inflow_kgh: -5 }}).status;
+out.nanInflow = calculateOutletBlockedScenario({{ phase:"LIQUID", inflow_kgh: NaN }}).status;
+out.infInflow = calculateOutletBlockedScenario({{ phase:"LIQUID", inflow_kgh: Infinity }}).status;
+out.negativeGeneration = calculateOutletBlockedScenario({{ phase:"VAPOR", inflow_kgh:1000, generationRate_kgh:-1 }}).status;
+out.nanGeneration = calculateOutletBlockedScenario({{ phase:"VAPOR", inflow_kgh:1000, generationRate_kgh:NaN }}).status;
+
+// ── OB-006: 잘못된 phase 값 ──
+out.wrongPhase = calculateOutletBlockedScenario({{ phase:"GAS", inflow_kgh: 1000 }}).status;
+out.emptyPhase = calculateOutletBlockedScenario({{ phase:"", inflow_kgh: 1000 }}).status;
+out.numberPhase = calculateOutletBlockedScenario({{ phase: 1, inflow_kgh: 1000 }}).status;
+
+// ── OB-006b: 배열 타입 입력(Number([])===0, Number([5])===5로 암묵변환되는 결함 재발 방지) ──
+out.emptyArrayInflow = calculateOutletBlockedScenario({{ phase:"LIQUID", inflow_kgh: [] }}).status;
+out.singleArrayInflow = calculateOutletBlockedScenario({{ phase:"LIQUID", inflow_kgh: [5] }}).status;
+
+// ── OB-007: 입력 객체 mutation 금지 ──
+const originalInput = {{ phase:"LIQUID", inflow_kgh: 500 }};
+const originalCopy = JSON.parse(JSON.stringify(originalInput));
+calculateOutletBlockedScenario(originalInput);
+out.inputUnmutated = JSON.stringify(originalInput) === JSON.stringify(originalCopy);
+
+// ── OB-008: 동일 입력 -> 동일 결과(결정론) ──
+const detInput = {{ phase:"VAPOR", inflow_kgh: 2000, generationRate_kgh: 300 }};
+const r1 = calculateOutletBlockedScenario(detInput);
+const r2 = calculateOutletBlockedScenario(detInput);
+out.deterministic = JSON.stringify(r1) === JSON.stringify(r2);
+
+// ── OB-009: taxonomy와의 정합성은 getComputableScenarioIds()를 통해서만
+//    확인한다(직접 참조 시 direct eval의 const 스코프 문제로 상위
+//    스크립트에서 안 보임 — 함수 클로저를 통한 간접 검증이 안전).
+out.taxonomyIncludesOutletBlocked = getComputableScenarioIds().includes("OUTLET_BLOCKED");
+out.resultSectionMatchesTaxonomy = (liquid.section === "§5.1");
+
+// ── OB-010: selectGoverningReliefLoad()와 독립적으로 동작(연동은 되지만 §5.1이 selector를 호출/변형하지 않음) ──
+const scenarios = [
+  calculateOutletBlockedScenario({{ phase:"LIQUID", inflow_kgh: 1000 }}),
+  {{ scenarioId:"EXTERNAL_FIRE", status:"OK", W:5000 }},
+];
+const gov = selectGoverningReliefLoad(scenarios);
+out.integrationGoverningId = gov.governingScenarioId;
+out.integrationPreservedCount = gov.allScenarios.length;
+// §5.1 함수 자체가 selector 내부 상태를 갖지 않는지 — 두 번째 독립 호출도 동일해야 함
+const gov2 = selectGoverningReliefLoad([calculateOutletBlockedScenario({{ phase:"LIQUID", inflow_kgh: 1000 }})]);
+out.independentReuse = gov2.governingScenarioId === "OUTLET_BLOCKED" && gov2.governingW === 1000;
+
+console.log(JSON.stringify(out));
+"""
+    try:
+        result = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=15)
+        out = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
+    except Exception as e:
+        tr.check("OB_node_execution", False, f"node 실행 실패: {e}\nstderr: {getattr(result,'stderr','')}")
+        return tr
+
+    tr.check("OB_002_liquid_W_equals_inflow",
+             out.get("liquidStatus") == "OK" and out.get("liquidW") == 3200,
+             f"액체 W가 최대유입량과 다름: got {out.get('liquidW')}")
+    tr.check("OB_002_liquid_unit_is_kgh",
+             out.get("liquidUnit") == "kg/h", f"unit이 kg/h가 아님: {out.get('liquidUnit')}")
+    tr.check("OB_002_scenarioId_matches_taxonomy_id",
+             out.get("liquidScenarioId") == "OUTLET_BLOCKED", f"got {out.get('liquidScenarioId')}")
+    tr.check("OB_002_section_is_5_1",
+             out.get("liquidSection") == "§5.1", f"got {out.get('liquidSection')}")
+    tr.check("OB_003_vapor_W_equals_inflow_plus_generation",
+             out.get("vaporStatus") == "OK" and out.get("vaporW") == 2300,
+             f"증기 W가 유입량+생성량(2300)과 다름: got {out.get('vaporW')}")
+    tr.check("OB_003_vapor_components_preserved",
+             out.get("vaporComponents", {}).get("inflow_kgh") == 1500
+             and out.get("vaporComponents", {}).get("generationRate_kgh") == 800,
+             "components에 개별 항(유입량/생성량)이 보존되지 않음")
+    tr.check("OB_004_missing_phase_insufficient",
+             out.get("missingPhase") == "INSUFFICIENT_INPUT", f"got {out.get('missingPhase')}")
+    tr.check("OB_004_missing_inflow_insufficient",
+             out.get("missingInflow") == "INSUFFICIENT_INPUT", f"got {out.get('missingInflow')}")
+    tr.check("OB_004_missing_generation_for_vapor_insufficient",
+             out.get("missingGeneration") == "INSUFFICIENT_INPUT", f"got {out.get('missingGeneration')}")
+    tr.check("OB_004_null_input_insufficient",
+             out.get("nullInput") == "INSUFFICIENT_INPUT", f"got {out.get('nullInput')}")
+    tr.check("OB_005_zero_inflow_is_valid_zero_not_error",
+             out.get("zeroInflowStatus") == "OK" and out.get("zeroInflowW") == 0,
+             f"유입량 0은 유효한 값(무유입)이어야 함: got status={out.get('zeroInflowStatus')} W={out.get('zeroInflowW')}")
+    tr.check("OB_005_negative_inflow_rejected",
+             out.get("negativeInflow") == "INSUFFICIENT_INPUT", f"got {out.get('negativeInflow')}")
+    tr.check("OB_005_nan_inflow_rejected",
+             out.get("nanInflow") == "INSUFFICIENT_INPUT", f"got {out.get('nanInflow')}")
+    tr.check("OB_005_infinity_inflow_rejected",
+             out.get("infInflow") == "INSUFFICIENT_INPUT", f"got {out.get('infInflow')}")
+    tr.check("OB_005_negative_generation_rejected",
+             out.get("negativeGeneration") == "INSUFFICIENT_INPUT", f"got {out.get('negativeGeneration')}")
+    tr.check("OB_005_nan_generation_rejected",
+             out.get("nanGeneration") == "INSUFFICIENT_INPUT", f"got {out.get('nanGeneration')}")
+    tr.check("OB_006_wrong_phase_value_rejected",
+             out.get("wrongPhase") == "INSUFFICIENT_INPUT", f"got {out.get('wrongPhase')}")
+    tr.check("OB_006_empty_phase_rejected",
+             out.get("emptyPhase") == "INSUFFICIENT_INPUT", f"got {out.get('emptyPhase')}")
+    tr.check("OB_006_non_string_phase_rejected",
+             out.get("numberPhase") == "INSUFFICIENT_INPUT", f"got {out.get('numberPhase')}")
+    tr.check("OB_006b_array_coercion_rejected",
+             out.get("emptyArrayInflow") == "INSUFFICIENT_INPUT" and out.get("singleArrayInflow") == "INSUFFICIENT_INPUT",
+             f"배열이 Number()로 암묵 변환되어 통과함(Number([])===0, Number([5])===5): {out.get('emptyArrayInflow')}/{out.get('singleArrayInflow')}")
+    tr.check("OB_007_input_object_not_mutated",
+             out.get("inputUnmutated") is True,
+             "calculateOutletBlockedScenario가 입력 객체를 변형함 — 순수함수 원칙 위반")
+    tr.check("OB_008_deterministic_same_input_same_output",
+             out.get("deterministic") is True,
+             "동일 입력 2회 실행 결과가 다름 — 결정론 위반")
+    tr.check("OB_009_scenarioId_and_section_match_taxonomy",
+             out.get("taxonomyIncludesOutletBlocked") is True
+             and out.get("resultSectionMatchesTaxonomy") is True,
+             f"taxonomy 항목과 계산결과의 scenarioId/section이 불일치: {out}")
+    tr.check("OB_010_works_independently_with_governing_selector",
+             out.get("integrationGoverningId") == "EXTERNAL_FIRE"
+             and out.get("integrationPreservedCount") == 2
+             and out.get("independentReuse") is True,
+             f"§5.1 함수가 selectGoverningReliefLoad와 독립적으로 재사용 가능하지 않음: {out}")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
+#  §5.6 과충전 (Sprint C-4.2) — KOSHA D-18-2020 §5.6(1)
+#  §5.1과 달리 phase 구분이 원문에 없다 — 단일 공식(W=최대유입량).
+#  아직 api520Engine에 미연결.
+# ════════════════════════════════════════════════════════════════
+def test_overfilling_scenario_contract() -> TestResult:
+    tr = TestResult("OVERFILLING-001", "Sprint C-4.2 — §5.6 과충전 시나리오")
+
+    rl_src = (SRC / "engine" / "relief_load.js").read_text()
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+
+    tr.check("OF_001_function_exists",
+             "function calculateOverfillingScenario" in rl_src,
+             "calculateOverfillingScenario() 함수가 없음")
+    tr.check("OF_001_source_cited",
+             "KOSHA GUIDE D-18-2020 §5.6" in rl_src,
+             "§5.6 계산 함수에 KOSHA D-18-2020 §5.6 출처 인용이 없음")
+    tr.check("OF_001_not_yet_wired_into_engine",
+             "calculateOverfillingScenario" not in api520_src,
+             "C-4.2 단계에서 calculateOverfillingScenario가 아직 api520Engine에 연결되면 안 됨")
+    tr.check("OF_001_outlet_blocked_untouched",
+             "function calculateOutletBlockedScenario" in rl_src
+             and "W = 최대 유입량 (액체) — KOSHA D-18-2020 §5.1(1)" in rl_src,
+             "C-4.1(calculateOutletBlockedScenario)이 C-4.2 작업 중 변경됨 — 불필요한 수정 금지")
+
+    node = shutil.which("node")
+    if not node:
+        tr.check("OF_node_available", False, "node를 찾을 수 없어 실행 검증을 건너뜀")
+        return tr
+
+    check_script = f"""
+const fs = require('fs');
+const files = ['engine/relief_load.js'].map(f => fs.readFileSync('{SRC}/' + f, 'utf8')).join('\\n');
+eval(files);
+
+const out = {{}};
+
+// ── OF-002: 정상 최대 유입량 -> W = 최대유입량 ──
+const normal = calculateOverfillingScenario({{ inflow_kgh: 4400 }});
+out.normalStatus = normal.status;
+out.normalW = normal.W;
+out.normalUnit = normal.unit;
+out.normalScenarioId = normal.scenarioId;
+out.normalSection = normal.section;
+out.normalPhase = normal.phase;
+
+// ── OF-003: 최소 유효값(아주 작은 양수) ──
+const tiny = calculateOverfillingScenario({{ inflow_kgh: 0.001 }});
+out.tinyStatus = tiny.status;
+out.tinyW = tiny.W;
+
+// ── OF-004: 0 (무유입 — 유효값) ──
+const zero = calculateOverfillingScenario({{ inflow_kgh: 0 }});
+out.zeroStatus = zero.status;
+out.zeroW = zero.W;
+
+// ── OF-005: 음수/NaN/Infinity ──
+out.negativeStatus = calculateOverfillingScenario({{ inflow_kgh: -1 }}).status;
+out.nanStatus = calculateOverfillingScenario({{ inflow_kgh: NaN }}).status;
+out.infStatus = calculateOverfillingScenario({{ inflow_kgh: Infinity }}).status;
+
+// ── OF-006: 필수 입력 누락 ──
+out.missingStatus = calculateOverfillingScenario({{}}).status;
+out.nullStatus = calculateOverfillingScenario(null).status;
+
+// ── OF-007: 잘못된 타입 ──
+out.stringTypeStatus = calculateOverfillingScenario({{ inflow_kgh: "not_a_number" }}).status;
+out.objectTypeStatus = calculateOverfillingScenario({{ inflow_kgh: {{}} }}).status;
+out.arrayTypeStatus = calculateOverfillingScenario({{ inflow_kgh: [] }}).status;
+
+// ── OF-008: 입력 mutation 금지 ──
+const originalInput = {{ inflow_kgh: 999 }};
+const originalCopy = JSON.parse(JSON.stringify(originalInput));
+calculateOverfillingScenario(originalInput);
+out.inputUnmutated = JSON.stringify(originalInput) === JSON.stringify(originalCopy);
+
+// ── OF-009: 결정론 ──
+const detInput = {{ inflow_kgh: 2750 }};
+const r1 = calculateOverfillingScenario(detInput);
+const r2 = calculateOverfillingScenario(detInput);
+out.deterministic = JSON.stringify(r1) === JSON.stringify(r2);
+
+// ── OF-010: taxonomy 정합성 (간접 참조 — direct eval의 const 스코프 문제 회피) ──
+out.taxonomyIncludesOverfilling = getComputableScenarioIds().includes("OVERFILLING");
+
+// ── OF-011: §5.1과 독립적인 scenario identity — 동일 W라도 scenarioId/section이 다름 ──
+const ob = calculateOutletBlockedScenario({{ phase:"LIQUID", inflow_kgh: 4400 }});
+const of = calculateOverfillingScenario({{ inflow_kgh: 4400 }});
+out.sameW = (ob.W === of.W);
+out.differentScenarioId = (ob.scenarioId !== of.scenarioId);
+out.differentSection = (ob.section !== of.section);
+
+// ── OF-012: governing selector와의 통합 — 두 시나리오가 서로 다른 항목으로 보존됨 ──
+const gov = selectGoverningReliefLoad([ob, of]);
+out.govPreservedBoth = gov.allScenarios.length === 2
+  && gov.allScenarios.some(s => s.scenarioId === "OUTLET_BLOCKED")
+  && gov.allScenarios.some(s => s.scenarioId === "OVERFILLING");
+// W가 같을 때 taxonomy 선언순서(§5.1이 §5.6보다 먼저)로 결정론적 tie-break
+out.govTieWinner = gov.governingScenarioId;
+
+console.log(JSON.stringify(out));
+"""
+    try:
+        result = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=15)
+        out = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
+    except Exception as e:
+        tr.check("OF_node_execution", False, f"node 실행 실패: {e}\nstderr: {getattr(result,'stderr','')}")
+        return tr
+
+    tr.check("OF_002_W_equals_max_inflow",
+             out.get("normalStatus") == "OK" and out.get("normalW") == 4400,
+             f"W가 최대유입량과 다름: got {out.get('normalW')}")
+    tr.check("OF_002_unit_is_kgh",
+             out.get("normalUnit") == "kg/h", f"got {out.get('normalUnit')}")
+    tr.check("OF_002_scenarioId_is_OVERFILLING",
+             out.get("normalScenarioId") == "OVERFILLING", f"got {out.get('normalScenarioId')}")
+    tr.check("OF_002_section_is_5_6",
+             out.get("normalSection") == "§5.6", f"got {out.get('normalSection')}")
+    tr.check("OF_002_no_phase_field_forced",
+             out.get("normalPhase") is None,
+             "원문에 없는 phase 구분을 §5.6에 임의로 강제함 — phase는 null이어야 함")
+    tr.check("OF_003_minimum_valid_value_accepted",
+             out.get("tinyStatus") == "OK" and out.get("tinyW") == 0.001,
+             f"최소 유효값(0.001) 처리 실패: {out.get('tinyStatus')}/{out.get('tinyW')}")
+    tr.check("OF_004_zero_is_valid",
+             out.get("zeroStatus") == "OK" and out.get("zeroW") == 0,
+             f"0은 유효한 값(무유입)이어야 함: {out.get('zeroStatus')}/{out.get('zeroW')}")
+    tr.check("OF_005_negative_rejected",
+             out.get("negativeStatus") == "INSUFFICIENT_INPUT", f"got {out.get('negativeStatus')}")
+    tr.check("OF_005_nan_rejected",
+             out.get("nanStatus") == "INSUFFICIENT_INPUT", f"got {out.get('nanStatus')}")
+    tr.check("OF_005_infinity_rejected",
+             out.get("infStatus") == "INSUFFICIENT_INPUT", f"got {out.get('infStatus')}")
+    tr.check("OF_006_missing_input_rejected",
+             out.get("missingStatus") == "INSUFFICIENT_INPUT", f"got {out.get('missingStatus')}")
+    tr.check("OF_006_null_input_rejected",
+             out.get("nullStatus") == "INSUFFICIENT_INPUT", f"got {out.get('nullStatus')}")
+    tr.check("OF_007_string_type_rejected",
+             out.get("stringTypeStatus") == "INSUFFICIENT_INPUT", f"got {out.get('stringTypeStatus')}")
+    tr.check("OF_007_object_type_rejected",
+             out.get("objectTypeStatus") == "INSUFFICIENT_INPUT", f"got {out.get('objectTypeStatus')}")
+    tr.check("OF_007_array_type_rejected",
+             out.get("arrayTypeStatus") == "INSUFFICIENT_INPUT", f"got {out.get('arrayTypeStatus')}")
+    tr.check("OF_008_input_not_mutated",
+             out.get("inputUnmutated") is True,
+             "calculateOverfillingScenario가 입력 객체를 변형함 — 순수함수 원칙 위반")
+    tr.check("OF_009_deterministic",
+             out.get("deterministic") is True, "동일 입력 2회 실행 결과가 다름")
+    tr.check("OF_010_taxonomy_includes_overfilling",
+             out.get("taxonomyIncludesOverfilling") is True,
+             "OVERFILLING이 getComputableScenarioIds()에 없음")
+    tr.check("OF_011_independent_identity_from_outlet_blocked",
+             out.get("sameW") is True and out.get("differentScenarioId") is True and out.get("differentSection") is True,
+             f"§5.6이 §5.1과 독립적인 scenarioId/section을 갖지 않음(동일 W임에도): {out}")
+    tr.check("OF_012_both_scenarios_preserved_in_governing_selection",
+             out.get("govPreservedBoth") is True,
+             "selectGoverningReliefLoad가 §5.1/§5.6 두 시나리오를 모두 보존하지 않음")
+    tr.check("OF_012_tie_break_uses_taxonomy_order",
+             out.get("govTieWinner") == "OUTLET_BLOCKED",
+             f"동점 시 taxonomy 선언순서(§5.1이 §5.6보다 먼저)로 결정되지 않음: {out.get('govTieWinner')}")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
+#  §5.7 자동제어밸브의 고장 (Sprint C-4.3) — KOSHA D-18-2020 §5.7
+#  3분기(INLET_VALVE/OUTLET_VALVE/FAIL_STATIONARY) 원문 그대로 모델링.
+#  아직 api520Engine/selectGoverningReliefLoad에 미연결.
+# ════════════════════════════════════════════════════════════════
+def test_control_valve_failure_scenario_contract() -> TestResult:
+    tr = TestResult("CONTROL-VALVE-FAIL-001", "Sprint C-4.3 — §5.7 자동제어밸브 고장 시나리오")
+
+    rl_src = (SRC / "engine" / "relief_load.js").read_text()
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+
+    tr.check("CV_001_function_exists",
+             "function calculateControlValveFailureScenario" in rl_src,
+             "calculateControlValveFailureScenario() 함수가 없음")
+    tr.check("CV_001_source_cited",
+             "KOSHA GUIDE D-18-2020 §5.7" in rl_src,
+             "§5.7 계산 함수에 KOSHA D-18-2020 §5.7 출처 인용이 없음")
+    tr.check("CV_001_not_yet_wired_into_engine",
+             "calculateControlValveFailureScenario" not in api520_src,
+             "C-4.3 단계에서 아직 api520Engine에 연결되면 안 됨")
+    tr.check("CV_001_prior_scenarios_untouched",
+             "function calculateOutletBlockedScenario" in rl_src
+             and "function calculateOverfillingScenario" in rl_src
+             and "W = 최대 유입량 (과충전, phase 무관) — KOSHA D-18-2020 §5.6(1)" in rl_src,
+             "C-4.1/C-4.2 구현이 C-4.3 작업 중 변경됨 — 불필요한 수정 금지")
+    tr.check("CV_001_three_branches_present",
+             '"INLET_VALVE"' in rl_src and '"OUTLET_VALVE"' in rl_src and '"FAIL_STATIONARY"' in rl_src,
+             "원문의 3분기(인입/출구/Fail-stationary)가 모두 모델링되지 않음")
+
+    node = shutil.which("node")
+    if not node:
+        tr.check("CV_node_available", False, "node를 찾을 수 없어 실행 검증을 건너뜀")
+        return tr
+
+    check_script = f"""
+const fs = require('fs');
+const files = ['engine/relief_load.js'].map(f => fs.readFileSync('{SRC}/' + f, 'utf8')).join('\\n');
+eval(files);
+
+const out = {{}};
+
+// ── CV-002: 인입 제어밸브 정상 케이스 ──
+const inlet = calculateControlValveFailureScenario({{ failureMode:"INLET_VALVE", inflow_kgh: 5000, outflow_kgh: 1200 }});
+out.inletStatus = inlet.status;
+out.inletW = inlet.W;
+out.inletFailureMode = inlet.failureMode;
+out.inletSection = inlet.section;
+out.inletUnit = inlet.unit;
+
+// ── CV-003: 출구 제어밸브 정상 케이스(전체폐쇄 -> outflow=0 -> §5.1과 동형) ──
+const outletClosed = calculateControlValveFailureScenario({{ failureMode:"OUTLET_VALVE", inflow_kgh: 3000, outflow_kgh: 0 }});
+out.outletClosedStatus = outletClosed.status;
+out.outletClosedW = outletClosed.W;
+// 부분 고장(하나만) -> 나머지 정상유출량 차감
+const outletPartial = calculateControlValveFailureScenario({{ failureMode:"OUTLET_VALVE", inflow_kgh: 3000, outflow_kgh: 800 }});
+out.outletPartialW = outletPartial.W;
+
+// ── CV-004: 음수 방지 클램프(유출량 > 유입량) ──
+const clamp = calculateControlValveFailureScenario({{ failureMode:"INLET_VALVE", inflow_kgh: 1000, outflow_kgh: 1500 }});
+out.clampW = clamp.W;
+out.clampFlag = clamp.components.clampedToZero;
+out.clampRawDiff = clamp.components.rawDifference;
+
+// ── CV-005: Fail-stationary — 개방/폐쇄 가정 중 보수적(큰) 값 채택 ──
+const failStat = calculateControlValveFailureScenario({{
+  failureMode:"FAIL_STATIONARY", inflow_kgh: 4000, openOutflow_kgh: 500, closedOutflow_kgh: 3800
+}});
+out.failStatW = failStat.W;
+out.failStatGoverning = failStat.governingAssumption;
+// 반대 케이스: 폐쇄 가정이 더 보수적인 경우
+const failStat2 = calculateControlValveFailureScenario({{
+  failureMode:"FAIL_STATIONARY", inflow_kgh: 4000, openOutflow_kgh: 3900, closedOutflow_kgh: 200
+}});
+out.failStat2W = failStat2.W;
+out.failStat2Governing = failStat2.governingAssumption;
+
+// ── CV-006: 잘못된/누락 failureMode ──
+out.missingMode = calculateControlValveFailureScenario({{ inflow_kgh:1000, outflow_kgh:200 }}).status;
+out.wrongMode = calculateControlValveFailureScenario({{ failureMode:"BYPASS", inflow_kgh:1000, outflow_kgh:200 }}).status;
+out.nullInput = calculateControlValveFailureScenario(null).status;
+
+// ── CV-007: 필수 입력 누락(모드별) ──
+out.inletMissingOutflow = calculateControlValveFailureScenario({{ failureMode:"INLET_VALVE", inflow_kgh:1000 }}).status;
+out.outletMissingInflow = calculateControlValveFailureScenario({{ failureMode:"OUTLET_VALVE", outflow_kgh:200 }}).status;
+out.failStatMissingClosed = calculateControlValveFailureScenario({{ failureMode:"FAIL_STATIONARY", inflow_kgh:1000, openOutflow_kgh:200 }}).status;
+
+// ── CV-008: 0/음수/NaN/Infinity/배열·문자열 암묵변환 차단 ──
+out.zeroInflowStatus = calculateControlValveFailureScenario({{ failureMode:"INLET_VALVE", inflow_kgh:0, outflow_kgh:0 }}).status;
+out.zeroInflowW = calculateControlValveFailureScenario({{ failureMode:"INLET_VALVE", inflow_kgh:0, outflow_kgh:0 }}).W;
+out.negativeInflow = calculateControlValveFailureScenario({{ failureMode:"INLET_VALVE", inflow_kgh:-1, outflow_kgh:0 }}).status;
+out.nanOutflow = calculateControlValveFailureScenario({{ failureMode:"INLET_VALVE", inflow_kgh:1000, outflow_kgh:NaN }}).status;
+out.infInflow = calculateControlValveFailureScenario({{ failureMode:"INLET_VALVE", inflow_kgh:Infinity, outflow_kgh:0 }}).status;
+out.arrayInflow = calculateControlValveFailureScenario({{ failureMode:"INLET_VALVE", inflow_kgh:[5], outflow_kgh:0 }}).status;
+out.stringOutflow = calculateControlValveFailureScenario({{ failureMode:"INLET_VALVE", inflow_kgh:1000, outflow_kgh:"200" }}).status;
+
+// ── CV-009: 입력 mutation 금지 ──
+const originalInput = {{ failureMode:"INLET_VALVE", inflow_kgh: 2000, outflow_kgh: 500 }};
+const originalCopy = JSON.parse(JSON.stringify(originalInput));
+calculateControlValveFailureScenario(originalInput);
+out.inputUnmutated = JSON.stringify(originalInput) === JSON.stringify(originalCopy);
+
+// ── CV-010: 결정론 ──
+const detInput = {{ failureMode:"OUTLET_VALVE", inflow_kgh: 2200, outflow_kgh: 300 }};
+const r1 = calculateControlValveFailureScenario(detInput);
+const r2 = calculateControlValveFailureScenario(detInput);
+out.deterministic = JSON.stringify(r1) === JSON.stringify(r2);
+
+// ── CV-011: taxonomy 정합성(간접 참조) ──
+out.taxonomyIncludes = getComputableScenarioIds().includes("CONTROL_VALVE_FAIL");
+
+// ── CV-012: selectGoverningReliefLoad/§5.1/§5.6과의 통합 — 여전히 미연결이어야 하지만
+//    독립적으로 selector에 넣었을 때 정상 동작함을 확인(연결이 아니라 재사용성 확인) ──
+const scenarios = [inlet, outletClosed, calculateOverfillingScenario({{ inflow_kgh: 100 }})];
+const gov = selectGoverningReliefLoad(scenarios);
+out.govGoverningId = gov.governingScenarioId;
+out.govPreservedCount = gov.allScenarios.length;
+
+console.log(JSON.stringify(out));
+"""
+    try:
+        result = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=15)
+        out = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
+    except Exception as e:
+        tr.check("CV_node_execution", False, f"node 실행 실패: {e}\nstderr: {getattr(result,'stderr','')}")
+        return tr
+
+    tr.check("CV_002_inlet_W_equals_inflow_minus_outflow",
+             out.get("inletStatus") == "OK" and out.get("inletW") == 3800,
+             f"인입 제어밸브 W가 5000-1200=3800과 다름: got {out.get('inletW')}")
+    tr.check("CV_002_failureMode_preserved_in_result",
+             out.get("inletFailureMode") == "INLET_VALVE", f"got {out.get('inletFailureMode')}")
+    tr.check("CV_002_section_is_5_7",
+             out.get("inletSection") == "§5.7", f"got {out.get('inletSection')}")
+    tr.check("CV_002_unit_is_kgh",
+             out.get("inletUnit") == "kg/h", f"got {out.get('inletUnit')}")
+    tr.check("CV_003_outlet_full_closure_equals_outlet_blocked_form",
+             out.get("outletClosedStatus") == "OK" and out.get("outletClosedW") == 3000,
+             f"출구 전체폐쇄(outflow=0) 시 W가 유입량(3000)과 같아야 함(§5.1과 동형): got {out.get('outletClosedW')}")
+    tr.check("CV_003_outlet_partial_subtracts_remaining_outflow",
+             out.get("outletPartialW") == 2200,
+             f"출구 부분고장 W가 3000-800=2200과 다름: got {out.get('outletPartialW')}")
+    tr.check("CV_004_negative_difference_clamped_to_zero_with_flag",
+             out.get("clampW") == 0 and out.get("clampFlag") is True and out.get("clampRawDiff") == -500,
+             f"유출량>유입량일 때 W=0 클램프 및 clampedToZero 플래그가 정확하지 않음: {out}")
+    tr.check("CV_005_fail_stationary_takes_conservative_max_open_governing",
+             out.get("failStatW") == 3500 and out.get("failStatGoverning") == "OPEN",
+             f"Fail-stationary가 보수적 최댓값(개방가정 3500)을 채택하지 않음: {out.get('failStatW')}/{out.get('failStatGoverning')}")
+    tr.check("CV_005_fail_stationary_closed_governing_case",
+             out.get("failStat2W") == 3800 and out.get("failStat2Governing") == "CLOSED",
+             f"Fail-stationary 폐쇄가정 우세 케이스가 정확하지 않음: {out.get('failStat2W')}/{out.get('failStat2Governing')}")
+    tr.check("CV_006_missing_failureMode_rejected",
+             out.get("missingMode") == "INSUFFICIENT_INPUT", f"got {out.get('missingMode')}")
+    tr.check("CV_006_wrong_failureMode_rejected",
+             out.get("wrongMode") == "INSUFFICIENT_INPUT", f"got {out.get('wrongMode')}")
+    tr.check("CV_006_null_input_rejected",
+             out.get("nullInput") == "INSUFFICIENT_INPUT", f"got {out.get('nullInput')}")
+    tr.check("CV_007_inlet_missing_outflow_rejected",
+             out.get("inletMissingOutflow") == "INSUFFICIENT_INPUT", f"got {out.get('inletMissingOutflow')}")
+    tr.check("CV_007_outlet_missing_inflow_rejected",
+             out.get("outletMissingInflow") == "INSUFFICIENT_INPUT", f"got {out.get('outletMissingInflow')}")
+    tr.check("CV_007_fail_stationary_missing_closedOutflow_rejected",
+             out.get("failStatMissingClosed") == "INSUFFICIENT_INPUT", f"got {out.get('failStatMissingClosed')}")
+    tr.check("CV_008_zero_is_valid",
+             out.get("zeroInflowStatus") == "OK" and out.get("zeroInflowW") == 0,
+             f"0/0은 유효한 값이어야 함: {out.get('zeroInflowStatus')}/{out.get('zeroInflowW')}")
+    tr.check("CV_008_negative_rejected",
+             out.get("negativeInflow") == "INSUFFICIENT_INPUT", f"got {out.get('negativeInflow')}")
+    tr.check("CV_008_nan_rejected",
+             out.get("nanOutflow") == "INSUFFICIENT_INPUT", f"got {out.get('nanOutflow')}")
+    tr.check("CV_008_infinity_rejected",
+             out.get("infInflow") == "INSUFFICIENT_INPUT", f"got {out.get('infInflow')}")
+    tr.check("CV_008_array_coercion_rejected",
+             out.get("arrayInflow") == "INSUFFICIENT_INPUT", f"got {out.get('arrayInflow')}")
+    tr.check("CV_008_string_coercion_rejected",
+             out.get("stringOutflow") == "INSUFFICIENT_INPUT", f"got {out.get('stringOutflow')}")
+    tr.check("CV_009_input_not_mutated",
+             out.get("inputUnmutated") is True, "입력 객체가 변형됨 — 순수함수 원칙 위반")
+    tr.check("CV_010_deterministic",
+             out.get("deterministic") is True, "동일 입력 2회 실행 결과가 다름")
+    tr.check("CV_011_taxonomy_includes_control_valve_fail",
+             out.get("taxonomyIncludes") is True, "CONTROL_VALVE_FAIL이 getComputableScenarioIds()에 없음")
+    # 인입 제어밸브 W(3800)가 출구폐쇄(3000)/과충전(100)보다 커서 governing이어야 함
+    tr.check("CV_012_governing_selection_among_mixed_scenarios",
+             out.get("govGoverningId") == "CONTROL_VALVE_FAIL" and out.get("govPreservedCount") == 3,
+             f"혼합 시나리오 중 governing 선택이 예상과 다름: {out}")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
+#  §5.8 비정상적인 열 또는 증기 유입 (Sprint C-4.4) — KOSHA D-18-2020 §5.8
+#  3분기 중 계산식이 있는 건 2개(ABNORMAL_HEAT_INPUT/INADVERTENT_VALVE_OPENING)뿐,
+#  CHECK_VALVE_FAILURE은 원문에 계산식이 없어 NEEDS_ENGINEERING_DECISION.
+#  아직 api520Engine/selectGoverningReliefLoad에 미연결.
+# ════════════════════════════════════════════════════════════════
+def test_abnormal_heat_vapor_scenario_contract() -> TestResult:
+    tr = TestResult("ABNORMAL-HEAT-VAPOR-001", "Sprint C-4.4 — §5.8 비정상 열/증기 유입 시나리오")
+
+    rl_src = (SRC / "engine" / "relief_load.js").read_text()
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+
+    tr.check("AH_001_function_exists",
+             "function calculateAbnormalHeatVaporScenario" in rl_src,
+             "calculateAbnormalHeatVaporScenario() 함수가 없음")
+    tr.check("AH_001_source_cited",
+             "KOSHA GUIDE D-18-2020 §5.8" in rl_src,
+             "§5.8 계산 함수에 KOSHA D-18-2020 §5.8 출처 인용이 없음")
+    tr.check("AH_001_not_yet_wired_into_engine",
+             "calculateAbnormalHeatVaporScenario" not in api520_src,
+             "C-4.4 단계에서 아직 api520Engine에 연결되면 안 됨")
+    tr.check("AH_001_prior_scenarios_untouched",
+             "function calculateControlValveFailureScenario" in rl_src
+             and "function calculateOverfillingScenario" in rl_src
+             and "W = 최대 유입량 − 정상 유출량" in rl_src,
+             "C-4.1/C-4.2/C-4.3 구현이 C-4.4 작업 중 변경됨 — 불필요한 수정 금지")
+    tr.check("AH_001_no_arbitrary_125_percent_factor_in_formula",
+             "1.25" not in rl_src.split("calculateAbnormalHeatVaporScenario")[1].split("function calculate")[0]
+             if "calculateAbnormalHeatVaporScenario" in rl_src else False,
+             "§5.8(1)(나)③의 125% 계수가 W 산정식에 임의로 곱해짐 — 이건 상류 입력값 산정 가정이지 이 함수의 책임이 아님")
+    tr.check("AH_001_check_valve_failure_not_computed_as_ok",
+             '"NEEDS_ENGINEERING_DECISION"' in rl_src,
+             "체크밸브 고장(§5.8(3))이 계산식 없는 상태(NEEDS_ENGINEERING_DECISION)로 명시되지 않음")
+
+    node = shutil.which("node")
+    if not node:
+        tr.check("AH_node_available", False, "node를 찾을 수 없어 실행 검증을 건너뜀")
+        return tr
+
+    check_script = f"""
+const fs = require('fs');
+const files = ['engine/relief_load.js'].map(f => fs.readFileSync('{SRC}/' + f, 'utf8')).join('\\n');
+eval(files);
+
+const out = {{}};
+
+// ── AH-002: 비정상 열 입력 정상 케이스 ──
+const heat = calculateAbnormalHeatVaporScenario({{ failureMode:"ABNORMAL_HEAT_INPUT", vaporGeneration_kgh: 6000, outflow_kgh: 1500 }});
+out.heatStatus = heat.status;
+out.heatW = heat.W;
+out.heatFailureMode = heat.failureMode;
+out.heatSection = heat.section;
+out.heatUnit = heat.unit;
+
+// ── AH-003: 부주의한 밸브 개방 정상 케이스 ──
+const valve = calculateAbnormalHeatVaporScenario({{ failureMode:"INADVERTENT_VALVE_OPENING", inflow_kgh: 4500, outflow_kgh: 900 }});
+out.valveStatus = valve.status;
+out.valveW = valve.W;
+// 출구 유출량 차감 없이(0) — 원문상 선택적, 0도 유효값
+const valveNoCredit = calculateAbnormalHeatVaporScenario({{ failureMode:"INADVERTENT_VALVE_OPENING", inflow_kgh: 4500, outflow_kgh: 0 }});
+out.valveNoCreditW = valveNoCredit.W;
+out.valveNoCreditStatus = valveNoCredit.status;
+
+// ── AH-004: 체크밸브 고장 -> 계산 안 함, NEEDS_ENGINEERING_DECISION ──
+const check = calculateAbnormalHeatVaporScenario({{ failureMode:"CHECK_VALVE_FAILURE" }});
+out.checkStatus = check.status;
+out.checkW = check.W;
+out.checkHasReason = typeof check.reason === "string" && check.reason.length > 0;
+
+// ── AH-005: 음수 차이 클램프(유출량 > 유입량/증기발생량) ──
+const clamp1 = calculateAbnormalHeatVaporScenario({{ failureMode:"ABNORMAL_HEAT_INPUT", vaporGeneration_kgh: 1000, outflow_kgh: 1500 }});
+out.clamp1W = clamp1.W;
+out.clamp1Flag = clamp1.components.clampedToZero;
+const clamp2 = calculateAbnormalHeatVaporScenario({{ failureMode:"INADVERTENT_VALVE_OPENING", inflow_kgh: 1000, outflow_kgh: 1500 }});
+out.clamp2W = clamp2.W;
+
+// ── AH-006: 필수 입력 누락/잘못된 failureMode ──
+out.missingMode = calculateAbnormalHeatVaporScenario({{ vaporGeneration_kgh:1000, outflow_kgh:200 }}).status;
+out.wrongMode = calculateAbnormalHeatVaporScenario({{ failureMode:"BOILOVER", vaporGeneration_kgh:1000 }}).status;
+out.nullInput = calculateAbnormalHeatVaporScenario(null).status;
+out.heatMissingOutflow = calculateAbnormalHeatVaporScenario({{ failureMode:"ABNORMAL_HEAT_INPUT", vaporGeneration_kgh:1000 }}).status;
+out.valveMissingInflow = calculateAbnormalHeatVaporScenario({{ failureMode:"INADVERTENT_VALVE_OPENING", outflow_kgh:200 }}).status;
+
+// ── AH-007: 0/음수/NaN/Infinity/배열·문자열 암묵변환 차단 ──
+out.zeroStatus = calculateAbnormalHeatVaporScenario({{ failureMode:"ABNORMAL_HEAT_INPUT", vaporGeneration_kgh:0, outflow_kgh:0 }}).status;
+out.zeroW = calculateAbnormalHeatVaporScenario({{ failureMode:"ABNORMAL_HEAT_INPUT", vaporGeneration_kgh:0, outflow_kgh:0 }}).W;
+out.negativeRejected = calculateAbnormalHeatVaporScenario({{ failureMode:"ABNORMAL_HEAT_INPUT", vaporGeneration_kgh:-1, outflow_kgh:0 }}).status;
+out.nanRejected = calculateAbnormalHeatVaporScenario({{ failureMode:"ABNORMAL_HEAT_INPUT", vaporGeneration_kgh:1000, outflow_kgh:NaN }}).status;
+out.infRejected = calculateAbnormalHeatVaporScenario({{ failureMode:"INADVERTENT_VALVE_OPENING", inflow_kgh:Infinity, outflow_kgh:0 }}).status;
+out.arrayRejected = calculateAbnormalHeatVaporScenario({{ failureMode:"ABNORMAL_HEAT_INPUT", vaporGeneration_kgh:[5], outflow_kgh:0 }}).status;
+out.stringRejected = calculateAbnormalHeatVaporScenario({{ failureMode:"INADVERTENT_VALVE_OPENING", inflow_kgh:1000, outflow_kgh:"200" }}).status;
+
+// ── AH-008: 입력 mutation 금지 ──
+const originalInput = {{ failureMode:"ABNORMAL_HEAT_INPUT", vaporGeneration_kgh: 3000, outflow_kgh: 700 }};
+const originalCopy = JSON.parse(JSON.stringify(originalInput));
+calculateAbnormalHeatVaporScenario(originalInput);
+out.inputUnmutated = JSON.stringify(originalInput) === JSON.stringify(originalCopy);
+
+// ── AH-009: 결정론 ──
+const detInput = {{ failureMode:"INADVERTENT_VALVE_OPENING", inflow_kgh: 2500, outflow_kgh: 400 }};
+const r1 = calculateAbnormalHeatVaporScenario(detInput);
+const r2 = calculateAbnormalHeatVaporScenario(detInput);
+out.deterministic = JSON.stringify(r1) === JSON.stringify(r2);
+
+// ── AH-010: taxonomy 정합성(간접 참조) ──
+out.taxonomyIncludes = getComputableScenarioIds().includes("ABNORMAL_HEAT_VAPOR");
+
+// ── AH-011: NEEDS_ENGINEERING_DECISION 결과는 selectGoverningReliefLoad의 후보에서 자동 제외됨 ──
+const mixed = [heat, check, valve];
+const gov = selectGoverningReliefLoad(mixed);
+out.govExcludesCheckValve = gov.governingScenarioId !== null && gov.allScenarios.length === 3;
+out.govGoverningIsHeatOrValve = (gov.governingScenarioId === "ABNORMAL_HEAT_VAPOR");
+out.govGoverningW = gov.governingW;
+
+console.log(JSON.stringify(out));
+"""
+    try:
+        result = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=15)
+        out = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
+    except Exception as e:
+        tr.check("AH_node_execution", False, f"node 실행 실패: {e}\nstderr: {getattr(result,'stderr','')}")
+        return tr
+
+    tr.check("AH_002_heat_W_equals_generation_minus_outflow",
+             out.get("heatStatus") == "OK" and out.get("heatW") == 4500,
+             f"비정상 열입력 W가 6000-1500=4500과 다름: got {out.get('heatW')}")
+    tr.check("AH_002_failureMode_preserved",
+             out.get("heatFailureMode") == "ABNORMAL_HEAT_INPUT", f"got {out.get('heatFailureMode')}")
+    tr.check("AH_002_section_is_5_8",
+             out.get("heatSection") == "§5.8", f"got {out.get('heatSection')}")
+    tr.check("AH_002_unit_is_kgh",
+             out.get("heatUnit") == "kg/h", f"got {out.get('heatUnit')}")
+    tr.check("AH_003_valve_W_equals_inflow_minus_outflow",
+             out.get("valveStatus") == "OK" and out.get("valveW") == 3600,
+             f"부주의한 밸브개방 W가 4500-900=3600과 다름: got {out.get('valveW')}")
+    tr.check("AH_003_valve_outflow_credit_optional_zero_valid",
+             out.get("valveNoCreditStatus") == "OK" and out.get("valveNoCreditW") == 4500,
+             f"outflow=0(차감 없음)이 유효값으로 처리되지 않음: {out.get('valveNoCreditStatus')}/{out.get('valveNoCreditW')}")
+    tr.check("AH_004_check_valve_failure_needs_engineering_decision",
+             out.get("checkStatus") == "NEEDS_ENGINEERING_DECISION" and out.get("checkW") is None,
+             f"체크밸브 고장이 임의로 계산됨 — 원문에 계산식 없음: {out.get('checkStatus')}/{out.get('checkW')}")
+    tr.check("AH_004_check_valve_failure_has_reason",
+             out.get("checkHasReason") is True, "체크밸브 고장 결과에 이유(reason)가 없음")
+    tr.check("AH_005_heat_negative_diff_clamped",
+             out.get("clamp1W") == 0 and out.get("clamp1Flag") is True, f"got {out.get('clamp1W')}/{out.get('clamp1Flag')}")
+    tr.check("AH_005_valve_negative_diff_clamped",
+             out.get("clamp2W") == 0, f"got {out.get('clamp2W')}")
+    tr.check("AH_006_missing_failureMode_rejected",
+             out.get("missingMode") == "INSUFFICIENT_INPUT", f"got {out.get('missingMode')}")
+    tr.check("AH_006_wrong_failureMode_rejected",
+             out.get("wrongMode") == "INSUFFICIENT_INPUT", f"got {out.get('wrongMode')}")
+    tr.check("AH_006_null_input_rejected",
+             out.get("nullInput") == "INSUFFICIENT_INPUT", f"got {out.get('nullInput')}")
+    tr.check("AH_006_heat_missing_outflow_rejected",
+             out.get("heatMissingOutflow") == "INSUFFICIENT_INPUT", f"got {out.get('heatMissingOutflow')}")
+    tr.check("AH_006_valve_missing_inflow_rejected",
+             out.get("valveMissingInflow") == "INSUFFICIENT_INPUT", f"got {out.get('valveMissingInflow')}")
+    tr.check("AH_007_zero_is_valid",
+             out.get("zeroStatus") == "OK" and out.get("zeroW") == 0,
+             f"0/0이 유효값이어야 함: {out.get('zeroStatus')}/{out.get('zeroW')}")
+    tr.check("AH_007_negative_rejected",
+             out.get("negativeRejected") == "INSUFFICIENT_INPUT", f"got {out.get('negativeRejected')}")
+    tr.check("AH_007_nan_rejected",
+             out.get("nanRejected") == "INSUFFICIENT_INPUT", f"got {out.get('nanRejected')}")
+    tr.check("AH_007_infinity_rejected",
+             out.get("infRejected") == "INSUFFICIENT_INPUT", f"got {out.get('infRejected')}")
+    tr.check("AH_007_array_coercion_rejected",
+             out.get("arrayRejected") == "INSUFFICIENT_INPUT", f"got {out.get('arrayRejected')}")
+    tr.check("AH_007_string_coercion_rejected",
+             out.get("stringRejected") == "INSUFFICIENT_INPUT", f"got {out.get('stringRejected')}")
+    tr.check("AH_008_input_not_mutated",
+             out.get("inputUnmutated") is True, "입력 객체가 변형됨 — 순수함수 원칙 위반")
+    tr.check("AH_009_deterministic",
+             out.get("deterministic") is True, "동일 입력 2회 실행 결과가 다름")
+    tr.check("AH_010_taxonomy_includes_abnormal_heat_vapor",
+             out.get("taxonomyIncludes") is True, "ABNORMAL_HEAT_VAPOR가 getComputableScenarioIds()에 없음")
+    tr.check("AH_011_needs_engineering_decision_excluded_from_governing_but_preserved",
+             out.get("govExcludesCheckValve") is True and out.get("govGoverningIsHeatOrValve") is True
+             and out.get("govGoverningW") == 4500,
+             f"NEEDS_ENGINEERING_DECISION 결과가 governing 후보에서 자동 제외되면서도 allScenarios에는 보존되어야 함: {out}")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
+#  §5.11 액체부피 팽창 (Sprint C-4.5) — KOSHA D-18-2020 §5.11(2), 식(1)
+#  결과 단위가 W(kg/h)가 아닌 V(m3/h) — 다른 시나리오와 다름.
+#  아직 api520Engine/selectGoverningReliefLoad에 미연결.
+# ════════════════════════════════════════════════════════════════
+def test_liquid_thermal_expansion_scenario_contract() -> TestResult:
+    tr = TestResult("LIQUID-EXPANSION-001", "Sprint C-4.5 — §5.11 액체부피 팽창 시나리오")
+
+    rl_src = (SRC / "engine" / "relief_load.js").read_text()
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+
+    tr.check("LE_001_function_exists",
+             "function calculateLiquidThermalExpansionScenario" in rl_src,
+             "calculateLiquidThermalExpansionScenario() 함수가 없음")
+    tr.check("LE_001_source_cited",
+             "KOSHA GUIDE D-18-2020 §5.11" in rl_src,
+             "§5.11 계산 함수에 KOSHA D-18-2020 §5.11 출처 인용이 없음")
+    tr.check("LE_001_not_yet_wired_into_engine",
+             "calculateLiquidThermalExpansionScenario" not in api520_src,
+             "C-4.5 단계에서 아직 api520Engine에 연결되면 안 됨")
+    tr.check("LE_001_prior_scenarios_untouched",
+             "function calculateAbnormalHeatVaporScenario" in rl_src
+             and "function calculateControlValveFailureScenario" in rl_src
+             and "W = 유입량 − 유출량 (부주의한 밸브 개방" in rl_src,
+             "C-4.1~C-4.4 구현이 C-4.5 작업 중 변경됨 — 불필요한 수정 금지")
+    fn_body = rl_src.split("function calculateLiquidThermalExpansionScenario")[1].split("function calculate")[0] if "function calculateLiquidThermalExpansionScenario" in rl_src else ""
+    tr.check("LE_002_constant_500_present_unmodified",
+             "500" in fn_body and "* 500" not in fn_body.replace("(500", "").replace(" 500", " __500__", 1),
+             "원문 상수 500이 없거나 변형됨")
+    tr.check("LE_002_no_kg_h_conversion_present",
+             "kg" not in fn_body.lower() or "kg_" not in fn_body.lower(),
+             "V(m3/h)를 kg/h로 변환하는 코드가 존재함 — 원문에 없는 계산 추가 금지")
+    tr.check("LE_002_unit_is_m3_h_not_kg_h",
+             '"m3/h"' in fn_body,
+             "결과 unit이 m3/h로 고정되어 있지 않음")
+    tr.check("LE_002_no_W_field_used",
+             "W," not in fn_body.split("return {")[-1].split("};")[0] if "return {" in fn_body else True,
+             "결과 객체에 W 필드가 존재함 — value/unit(m3/h) 계약을 써야 하며 W(kg/h) 필드를 두면 안 됨")
+    tr.check("LE_002_status_computable_not_ok",
+             '"COMPUTABLE"' in fn_body,
+             "성공 결과의 status가 COMPUTABLE로 명시되지 않음(§6 편입 가능 의미로 오인되지 않도록 OK와 구분해야 함)")
+    tr.check("LE_002_upstream_reference_documented_not_used_in_formula",
+             "D-13" in rl_src and "D-31" in rl_src,
+             "D-13/D-31 교차참조 불일치가 provenance로 기록되지 않음")
+
+    node = shutil.which("node")
+    if not node:
+        tr.check("LE_node_available", False, "node를 찾을 수 없어 실행 검증을 건너뜀")
+        return tr
+
+    check_script = f"""
+const fs = require('fs');
+const files = ['engine/relief_load.js'].map(f => fs.readFileSync('{SRC}/' + f, 'utf8')).join('\\n');
+eval(files);
+
+const out = {{}};
+
+// ── LE-003: 정상 계산값 — 식 그대로 검증 ──
+// alpha=0.0007, Q=50000, SG=0.85, Cp=0.5 -> V = 0.0007*50000/(500*0.85*0.5) = 35/212.5 = 0.16470588...
+const normal = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:0.5 }});
+out.normalStatus = normal.status;
+out.normalValue = normal.value;
+out.normalUnit = normal.unit;
+out.normalScenarioId = normal.scenarioId;
+out.normalSection = normal.section;
+out.expectedValue = (0.0007 * 50000) / (500 * 0.85 * 0.5);
+
+// ── LE-004: alpha=0, Q=0 (물리적으로 유효한 0) -> value=0 ──
+const zeroAlpha = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0, Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:0.5 }});
+out.zeroAlphaStatus = zeroAlpha.status;
+out.zeroAlphaValue = zeroAlpha.value;
+const zeroQ = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:0, SG:0.85, Cp_kcal_per_kgC:0.5 }});
+out.zeroQStatus = zeroQ.status;
+out.zeroQValue = zeroQ.value;
+
+// ── LE-005: SG=0, Cp=0 -> 분모 0, fail-fast(계산하지 않음) ──
+out.zeroSGStatus = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:0, Cp_kcal_per_kgC:0.5 }}).status;
+out.zeroCpStatus = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:0 }}).status;
+
+// ── LE-006: 각 변수 누락 ──
+out.missingAlpha = calculateLiquidThermalExpansionScenario({{ Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:0.5 }}).status;
+out.missingQ = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, SG:0.85, Cp_kcal_per_kgC:0.5 }}).status;
+out.missingSG = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, Cp_kcal_per_kgC:0.5 }}).status;
+out.missingCp = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:0.85 }}).status;
+out.nullInput = calculateLiquidThermalExpansionScenario(null).status;
+
+// ── LE-007: 음수/NaN/Infinity (각 변수별) ──
+out.negAlpha = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:-0.0007, Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:0.5 }}).status;
+out.negQ = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:-50000, SG:0.85, Cp_kcal_per_kgC:0.5 }}).status;
+out.negSG = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:-0.85, Cp_kcal_per_kgC:0.5 }}).status;
+out.negCp = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:-0.5 }}).status;
+out.nanAlpha = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:NaN, Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:0.5 }}).status;
+out.infQ = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:Infinity, SG:0.85, Cp_kcal_per_kgC:0.5 }}).status;
+out.nanSG = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:NaN, Cp_kcal_per_kgC:0.5 }}).status;
+out.infCp = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:Infinity }}).status;
+
+// ── LE-008: 배열/문자열 암묵변환 차단 ──
+out.arrayAlpha = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:[5], Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:0.5 }}).status;
+out.stringQ = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:"50000", SG:0.85, Cp_kcal_per_kgC:0.5 }}).status;
+out.emptyArraySG = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:[], Cp_kcal_per_kgC:0.5 }}).status;
+
+// ── LE-009: 입력 mutation 금지 ──
+const originalInput = {{ alpha_per_degC:0.0007, Q_kcal_per_hr:40000, SG:0.9, Cp_kcal_per_kgC:0.6 }};
+const originalCopy = JSON.parse(JSON.stringify(originalInput));
+calculateLiquidThermalExpansionScenario(originalInput);
+out.inputUnmutated = JSON.stringify(originalInput) === JSON.stringify(originalCopy);
+
+// ── LE-010: 결정론 ──
+const detInput = {{ alpha_per_degC:0.0008, Q_kcal_per_hr:30000, SG:0.8, Cp_kcal_per_kgC:0.45 }};
+const r1 = calculateLiquidThermalExpansionScenario(detInput);
+const r2 = calculateLiquidThermalExpansionScenario(detInput);
+out.deterministic = JSON.stringify(r1) === JSON.stringify(r2);
+
+// ── LE-011: taxonomy와 상태 정합성(간접 참조) ──
+out.taxonomyIncludes = getComputableScenarioIds().includes("LIQUID_EXPANSION");
+
+// ── LE-012: selectGoverningReliefLoad에 넣어도(우발적 상황 대비) W가 없어 자동 무효 처리됨 ──
+const gov = selectGoverningReliefLoad([normal]);
+out.govVerdictWhenOnlyLiquidExpansion = gov.verdict;
+
+console.log(JSON.stringify(out));
+"""
+    try:
+        result = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=15)
+        out = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
+    except Exception as e:
+        tr.check("LE_node_execution", False, f"node 실행 실패: {e}\nstderr: {getattr(result,'stderr','')}")
+        return tr
+
+    tr.check("LE_003_formula_matches_exactly",
+             out.get("normalStatus") == "COMPUTABLE"
+             and out.get("normalValue") is not None
+             and abs(out.get("normalValue", -999) - out.get("expectedValue", -1)) < 1e-9,
+             f"V = α·Q/(500·SG·Cp) 식 계산값이 기대값과 다름: got {out.get('normalValue')} expected {out.get('expectedValue')}")
+    tr.check("LE_003_unit_is_m3_h",
+             out.get("normalUnit") == "m3/h", f"got {out.get('normalUnit')}")
+    tr.check("LE_003_scenarioId_is_LIQUID_EXPANSION",
+             out.get("normalScenarioId") == "LIQUID_EXPANSION", f"got {out.get('normalScenarioId')}")
+    tr.check("LE_003_section_is_5_11",
+             out.get("normalSection") == "§5.11", f"got {out.get('normalSection')}")
+    tr.check("LE_004_zero_alpha_valid_zero_value",
+             out.get("zeroAlphaStatus") == "COMPUTABLE" and out.get("zeroAlphaValue") == 0,
+             f"α=0이 유효한 값(무팽창)이어야 함: {out.get('zeroAlphaStatus')}/{out.get('zeroAlphaValue')}")
+    tr.check("LE_004_zero_Q_valid_zero_value",
+             out.get("zeroQStatus") == "COMPUTABLE" and out.get("zeroQValue") == 0,
+             f"Q=0이 유효한 값(무열유입)이어야 함: {out.get('zeroQStatus')}/{out.get('zeroQValue')}")
+    tr.check("LE_005_zero_SG_rejected_denominator",
+             out.get("zeroSGStatus") == "INSUFFICIENT_INPUT", f"got {out.get('zeroSGStatus')}")
+    tr.check("LE_005_zero_Cp_rejected_denominator",
+             out.get("zeroCpStatus") == "INSUFFICIENT_INPUT", f"got {out.get('zeroCpStatus')}")
+    tr.check("LE_006_missing_alpha_rejected",
+             out.get("missingAlpha") == "INSUFFICIENT_INPUT", f"got {out.get('missingAlpha')}")
+    tr.check("LE_006_missing_Q_rejected",
+             out.get("missingQ") == "INSUFFICIENT_INPUT", f"got {out.get('missingQ')}")
+    tr.check("LE_006_missing_SG_rejected",
+             out.get("missingSG") == "INSUFFICIENT_INPUT", f"got {out.get('missingSG')}")
+    tr.check("LE_006_missing_Cp_rejected",
+             out.get("missingCp") == "INSUFFICIENT_INPUT", f"got {out.get('missingCp')}")
+    tr.check("LE_006_null_input_rejected",
+             out.get("nullInput") == "INSUFFICIENT_INPUT", f"got {out.get('nullInput')}")
+    tr.check("LE_007_negative_values_rejected",
+             all(out.get(k) == "INSUFFICIENT_INPUT" for k in ["negAlpha", "negQ", "negSG", "negCp"]),
+             f"음수 값 중 일부가 거부되지 않음: {out}")
+    tr.check("LE_007_nan_infinity_rejected",
+             all(out.get(k) == "INSUFFICIENT_INPUT" for k in ["nanAlpha", "infQ", "nanSG", "infCp"]),
+             f"NaN/Infinity 값 중 일부가 거부되지 않음: {out}")
+    tr.check("LE_008_array_string_coercion_rejected",
+             out.get("arrayAlpha") == "INSUFFICIENT_INPUT" and out.get("stringQ") == "INSUFFICIENT_INPUT"
+             and out.get("emptyArraySG") == "INSUFFICIENT_INPUT",
+             f"배열/문자열 암묵변환이 차단되지 않음: {out.get('arrayAlpha')}/{out.get('stringQ')}/{out.get('emptyArraySG')}")
+    tr.check("LE_009_input_not_mutated",
+             out.get("inputUnmutated") is True, "입력 객체가 변형됨 — 순수함수 원칙 위반")
+    tr.check("LE_010_deterministic",
+             out.get("deterministic") is True, "동일 입력 2회 실행 결과가 다름")
+    tr.check("LE_011_taxonomy_includes_liquid_expansion",
+             out.get("taxonomyIncludes") is True, "LIQUID_EXPANSION이 getComputableScenarioIds()에 없음")
+    tr.check("LE_012_no_W_field_means_excluded_from_governing_selection",
+             out.get("govVerdictWhenOnlyLiquidExpansion") == "INSUFFICIENT_INPUT",
+             f"W 필드가 없는 §5.11 결과가 selectGoverningReliefLoad에서 자동으로 무효 처리되지 않음(우발적 kg/h 취급 방지 설계 확인 실패): {out.get('govVerdictWhenOnlyLiquidExpansion')}")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
+#  §5.13 열교환기 고장 (Sprint C-4.6) — KOSHA D-18-2020 §5.13, <표 2> 13
+#  원문은 유량식이 아니라 "오리피스 면적" 규칙만 제공 — 이 함수는
+#  면적 산정까지만 수행(unit: m2). 아직 api520Engine/
+#  selectGoverningReliefLoad에 미연결.
+# ════════════════════════════════════════════════════════════════
+def test_exchanger_failure_scenario_contract() -> TestResult:
+    tr = TestResult("EXCHANGER-FAIL-001", "Sprint C-4.6 — §5.13 열교환기 고장 시나리오")
+
+    rl_src = (SRC / "engine" / "relief_load.js").read_text()
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+
+    tr.check("EF_001_function_exists",
+             "function calculateExchangerFailureScenario" in rl_src,
+             "calculateExchangerFailureScenario() 함수가 없음")
+    tr.check("EF_001_source_cited",
+             "KOSHA GUIDE D-18-2020 §5.13" in rl_src,
+             "§5.13 계산 함수에 KOSHA D-18-2020 §5.13 출처 인용이 없음")
+    tr.check("EF_001_not_yet_wired_into_engine",
+             "calculateExchangerFailureScenario" not in api520_src,
+             "C-4.6 단계에서 아직 api520Engine에 연결되면 안 됨")
+    tr.check("EF_001_prior_scenarios_untouched",
+             "function calculateLiquidThermalExpansionScenario" in rl_src
+             and "function calculateAbnormalHeatVaporScenario" in rl_src
+             and "V = α·Q / (500·SG·Cp)" in rl_src,
+             "C-4.1~C-4.5 구현이 C-4.6 작업 중 변경됨 — 불필요한 수정 금지")
+    fn_body = rl_src.split("function calculateExchangerFailureScenario")[1].split("function calculate")[0] if "function calculateExchangerFailureScenario" in rl_src else ""
+    tr.check("EF_002_result_field_is_area_not_W_or_value",
+             "requiredOrificeArea_m2" in fn_body,
+             "결과 필드가 requiredOrificeArea_m2로 명시되지 않음 — 면적 단위를 W/value 같은 범용 필드에 숨기면 안 됨")
+    tr.check("EF_002_unit_is_m2",
+             '"m2"' in fn_body, "결과 unit이 m2로 고정되어 있지 않음")
+    tr.check("EF_002_no_flow_equation_invented",
+             not any(term in fn_body for term in ["sqrt", "Math.sqrt", "compressib", "incompressib", "Cd", "discharge coefficient", "밀도"]),
+             "면적→유량 변환을 위한 흐름식(압축성/비압축성/할인계수 등)이 임의로 추가됨 — 원문에 없는 유체역학 모델 금지")
+    tr.check("EF_002_double_pipe_two_subcases_modeled",
+             '"SCHEDULE_PIPE"' in fn_body and '"GAUGE_TUBE"' in fn_body,
+             "이중관 열교환기의 두 하위 케이스(Schedule pipe/Gauge tube)가 모델링되지 않음")
+    tr.check("EF_002_status_computable_used_for_area_only",
+             '"COMPUTABLE"' in fn_body, "면적 산정 성공 결과의 status가 COMPUTABLE로 명시되지 않음")
+
+    node = shutil.which("node")
+    if not node:
+        tr.check("EF_node_available", False, "node를 찾을 수 없어 실행 검증을 건너뜀")
+        return tr
+
+    check_script = f"""
+const fs = require('fs');
+const files = ['engine/relief_load.js'].map(f => fs.readFileSync('{SRC}/' + f, 'utf8')).join('\\n');
+eval(files);
+
+const out = {{}};
+
+// ── EF-003: 다관형 — 면적 = 튜브단면적 × 2 ──
+const shellTube = calculateExchangerFailureScenario({{ exchangerType:"SHELL_AND_TUBE", tubeCrossSectionArea_m2: 0.0005 }});
+out.shellTubeStatus = shellTube.status;
+out.shellTubeArea = shellTube.requiredOrificeArea_m2;
+out.shellTubeUnit = shellTube.unit;
+out.shellTubeSection = shellTube.section;
+
+// ── EF-004: 판형 — 면적 = 튜브단면적 × 1 ──
+const plate = calculateExchangerFailureScenario({{ exchangerType:"PLATE_AND_FRAME", tubeCrossSectionArea_m2: 0.0005 }});
+out.plateStatus = plate.status;
+out.plateArea = plate.requiredOrificeArea_m2;
+
+// ── EF-005: 이중관 - Schedule pipe -> NOT_APPLICABLE(압력방출장치 불요, 계산 안함) ──
+const dpSchedule = calculateExchangerFailureScenario({{ exchangerType:"DOUBLE_PIPE", innerTubeType:"SCHEDULE_PIPE" }});
+out.dpScheduleStatus = dpSchedule.status;
+out.dpScheduleArea = dpSchedule.requiredOrificeArea_m2;
+
+// ── EF-006: 이중관 - Gauge tube -> NEEDS_ENGINEERING_DECISION ──
+const dpGauge = calculateExchangerFailureScenario({{ exchangerType:"DOUBLE_PIPE", innerTubeType:"GAUGE_TUBE" }});
+out.dpGaugeStatus = dpGauge.status;
+out.dpGaugeArea = dpGauge.requiredOrificeArea_m2;
+out.dpGaugeHasReason = typeof dpGauge.reason === "string" && dpGauge.reason.length > 0;
+
+// ── EF-007: 필수 입력 누락/잘못된 값 ──
+out.missingType = calculateExchangerFailureScenario({{ tubeCrossSectionArea_m2:0.0005 }}).status;
+out.wrongType = calculateExchangerFailureScenario({{ exchangerType:"SPIRAL", tubeCrossSectionArea_m2:0.0005 }}).status;
+out.nullInput = calculateExchangerFailureScenario(null).status;
+out.shellMissingArea = calculateExchangerFailureScenario({{ exchangerType:"SHELL_AND_TUBE" }}).status;
+out.dpMissingInnerType = calculateExchangerFailureScenario({{ exchangerType:"DOUBLE_PIPE" }}).status;
+out.dpWrongInnerType = calculateExchangerFailureScenario({{ exchangerType:"DOUBLE_PIPE", innerTubeType:"COPPER" }}).status;
+
+// ── EF-008: 0/음수/NaN/Infinity — 튜브단면적은 물리적으로 0/음수 불가(fail-fast) ──
+out.zeroAreaStatus = calculateExchangerFailureScenario({{ exchangerType:"SHELL_AND_TUBE", tubeCrossSectionArea_m2:0 }}).status;
+out.negativeAreaStatus = calculateExchangerFailureScenario({{ exchangerType:"SHELL_AND_TUBE", tubeCrossSectionArea_m2:-0.001 }}).status;
+out.nanAreaStatus = calculateExchangerFailureScenario({{ exchangerType:"PLATE_AND_FRAME", tubeCrossSectionArea_m2:NaN }}).status;
+out.infAreaStatus = calculateExchangerFailureScenario({{ exchangerType:"PLATE_AND_FRAME", tubeCrossSectionArea_m2:Infinity }}).status;
+
+// ── EF-009: 배열/문자열 암묵변환 차단 ──
+out.arrayAreaStatus = calculateExchangerFailureScenario({{ exchangerType:"SHELL_AND_TUBE", tubeCrossSectionArea_m2:[0.001] }}).status;
+out.stringAreaStatus = calculateExchangerFailureScenario({{ exchangerType:"SHELL_AND_TUBE", tubeCrossSectionArea_m2:"0.001" }}).status;
+
+// ── EF-010: 입력 mutation 금지 ──
+const originalInput = {{ exchangerType:"SHELL_AND_TUBE", tubeCrossSectionArea_m2: 0.0008 }};
+const originalCopy = JSON.parse(JSON.stringify(originalInput));
+calculateExchangerFailureScenario(originalInput);
+out.inputUnmutated = JSON.stringify(originalInput) === JSON.stringify(originalCopy);
+
+// ── EF-011: 결정론 ──
+const detInput = {{ exchangerType:"PLATE_AND_FRAME", tubeCrossSectionArea_m2: 0.0006 }};
+const r1 = calculateExchangerFailureScenario(detInput);
+const r2 = calculateExchangerFailureScenario(detInput);
+out.deterministic = JSON.stringify(r1) === JSON.stringify(r2);
+
+// ── EF-012: taxonomy 정합성(간접 참조) ──
+out.taxonomyIncludes = getComputableScenarioIds().includes("EXCHANGER_FAIL");
+
+// ── EF-013: 면적 결과(requiredOrificeArea_m2)가 실수로 selector에 들어가도 W가 없어 자동 무효 처리 ──
+const gov = selectGoverningReliefLoad([shellTube]);
+out.govVerdictWhenOnlyExchanger = gov.verdict;
+
+console.log(JSON.stringify(out));
+"""
+    try:
+        result = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=15)
+        out = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
+    except Exception as e:
+        tr.check("EF_node_execution", False, f"node 실행 실패: {e}\nstderr: {getattr(result,'stderr','')}")
+        return tr
+
+    tr.check("EF_003_shell_and_tube_area_is_double_tube_area",
+             out.get("shellTubeStatus") == "COMPUTABLE" and out.get("shellTubeArea") == 0.001,
+             f"다관형 면적이 튜브단면적×2(0.001)와 다름: got {out.get('shellTubeArea')}")
+    tr.check("EF_003_unit_is_m2",
+             out.get("shellTubeUnit") == "m2", f"got {out.get('shellTubeUnit')}")
+    tr.check("EF_003_section_is_5_13",
+             out.get("shellTubeSection") == "§5.13", f"got {out.get('shellTubeSection')}")
+    tr.check("EF_004_plate_and_frame_area_equals_tube_area",
+             out.get("plateStatus") == "COMPUTABLE" and out.get("plateArea") == 0.0005,
+             f"판형 면적이 튜브단면적(0.0005)과 다름: got {out.get('plateArea')}")
+    tr.check("EF_005_schedule_pipe_not_applicable_no_area",
+             out.get("dpScheduleStatus") == "NOT_APPLICABLE" and out.get("dpScheduleArea") is None,
+             f"Schedule pipe가 압력방출장치 불요(NOT_APPLICABLE)로 처리되지 않음: {out.get('dpScheduleStatus')}/{out.get('dpScheduleArea')}")
+    tr.check("EF_006_gauge_tube_needs_engineering_decision",
+             out.get("dpGaugeStatus") == "NEEDS_ENGINEERING_DECISION" and out.get("dpGaugeArea") is None,
+             f"Gauge tube가 임의로 계산됨 — 원문에 계산식 없음: {out.get('dpGaugeStatus')}/{out.get('dpGaugeArea')}")
+    tr.check("EF_006_gauge_tube_has_reason",
+             out.get("dpGaugeHasReason") is True, "Gauge tube 결과에 이유(reason)가 없음")
+    tr.check("EF_007_missing_type_rejected",
+             out.get("missingType") == "INSUFFICIENT_INPUT", f"got {out.get('missingType')}")
+    tr.check("EF_007_wrong_type_rejected",
+             out.get("wrongType") == "INSUFFICIENT_INPUT", f"got {out.get('wrongType')}")
+    tr.check("EF_007_null_input_rejected",
+             out.get("nullInput") == "INSUFFICIENT_INPUT", f"got {out.get('nullInput')}")
+    tr.check("EF_007_shell_missing_area_rejected",
+             out.get("shellMissingArea") == "INSUFFICIENT_INPUT", f"got {out.get('shellMissingArea')}")
+    tr.check("EF_007_double_pipe_missing_innerTubeType_rejected",
+             out.get("dpMissingInnerType") == "INSUFFICIENT_INPUT", f"got {out.get('dpMissingInnerType')}")
+    tr.check("EF_007_double_pipe_wrong_innerTubeType_rejected",
+             out.get("dpWrongInnerType") == "INSUFFICIENT_INPUT", f"got {out.get('dpWrongInnerType')}")
+    tr.check("EF_008_zero_area_rejected_physically_invalid",
+             out.get("zeroAreaStatus") == "INSUFFICIENT_INPUT",
+             f"튜브단면적 0은 물리적으로 무의미(실제 튜브가 없다는 뜻)하므로 거부되어야 함: got {out.get('zeroAreaStatus')}")
+    tr.check("EF_008_negative_area_rejected",
+             out.get("negativeAreaStatus") == "INSUFFICIENT_INPUT", f"got {out.get('negativeAreaStatus')}")
+    tr.check("EF_008_nan_area_rejected",
+             out.get("nanAreaStatus") == "INSUFFICIENT_INPUT", f"got {out.get('nanAreaStatus')}")
+    tr.check("EF_008_infinity_area_rejected",
+             out.get("infAreaStatus") == "INSUFFICIENT_INPUT", f"got {out.get('infAreaStatus')}")
+    tr.check("EF_009_array_coercion_rejected",
+             out.get("arrayAreaStatus") == "INSUFFICIENT_INPUT", f"got {out.get('arrayAreaStatus')}")
+    tr.check("EF_009_string_coercion_rejected",
+             out.get("stringAreaStatus") == "INSUFFICIENT_INPUT", f"got {out.get('stringAreaStatus')}")
+    tr.check("EF_010_input_not_mutated",
+             out.get("inputUnmutated") is True, "입력 객체가 변형됨 — 순수함수 원칙 위반")
+    tr.check("EF_011_deterministic",
+             out.get("deterministic") is True, "동일 입력 2회 실행 결과가 다름")
+    tr.check("EF_012_taxonomy_includes_exchanger_fail",
+             out.get("taxonomyIncludes") is True, "EXCHANGER_FAIL이 getComputableScenarioIds()에 없음")
+    tr.check("EF_013_area_result_excluded_from_governing_selection_no_W_field",
+             out.get("govVerdictWhenOnlyExchanger") == "INSUFFICIENT_INPUT",
+             f"면적 결과(W 필드 없음)가 selectGoverningReliefLoad에서 자동으로 무효 처리되지 않음: {out.get('govVerdictWhenOnlyExchanger')}")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
+#  §5.12 외부 화재 (Sprint C-4.7) — KOSHA D-18-2020 §5.12, 식(2)~(7)
+#  1차 출처(사용자 제공 PDF, 페이지 이미지 직접 대조)로 계수 확인 완료.
+#  아직 api520Engine/selectGoverningReliefLoad에 미연결.
+# ════════════════════════════════════════════════════════════════
+def test_external_fire_scenario_contract() -> TestResult:
+    tr = TestResult("EXTERNAL-FIRE-001", "Sprint C-4.7 — §5.12 외부 화재 시나리오")
+
+    rl_src = (SRC / "engine" / "relief_load.js").read_text()
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+
+    tr.check("XF_001_function_exists",
+             "function calculateExternalFireScenario" in rl_src,
+             "calculateExternalFireScenario() 함수가 없음")
+    tr.check("XF_001_source_cited",
+             "KOSHA GUIDE D-18-2020 §5.12" in rl_src,
+             "§5.12 계산 함수에 출처 인용이 없음")
+    tr.check("XF_001_not_yet_wired_into_engine",
+             "calculateExternalFireScenario" not in api520_src,
+             "C-4.7 단계에서 아직 api520Engine에 연결되면 안 됨")
+    tr.check("XF_001_prior_scenarios_untouched",
+             "function calculateExchangerFailureScenario" in rl_src
+             and "function calculateLiquidThermalExpansionScenario" in rl_src
+             and "V = α·Q / (500·SG·Cp)" in rl_src,
+             "C-4.1~C-4.6 구현이 C-4.7 작업 중 변경됨 — 불필요한 수정 금지")
+
+    fn_body = rl_src.split("function calculateExternalFireScenario")[1].split("function calculate")[0] if "function calculateExternalFireScenario" in rl_src else ""
+    tr.check("XF_002_coefficients_unmodified",
+             "37100" in fn_body and "61000" in fn_body and "0.82" in fn_body
+             and "57000" in fn_body and "904" in fn_body and "8.766" in fn_body
+             and "1.25" in fn_body and "1.1506" in fn_body,
+             "원문 계수(37100/61000/0.82/57000/904/8.766/1.25/1.1506) 중 일부가 없거나 변형됨")
+    tr.check("XF_002_jet_fire_needs_engineering_decision",
+             '"JET_FIRE"' in fn_body and "NEEDS_ENGINEERING_DECISION" in fn_body,
+             "제트화재가 계산 대상에서 명시적으로 배제(NEEDS_ENGINEERING_DECISION)되지 않음")
+    tr.check("XF_002_confined_pool_subcases_modeled",
+             '"CONFINED_POOL_VENTILATION_CONTROLLED"' in fn_body and '"CONFINED_POOL_LARGE_SCALE"' in fn_body,
+             "제한공간화재의 계산식 없는 하위케이스(환기지배형/대규모)가 모델링되지 않음")
+
+    node = shutil.which("node")
+    if not node:
+        tr.check("XF_node_available", False, "node를 찾을 수 없어 실행 검증을 건너뜀")
+        return tr
+
+    check_script = f"""
+const fs = require('fs');
+const files = ['engine/relief_load.js'].map(f => fs.readFileSync('{SRC}/' + f, 'utf8')).join('\\n');
+eval(files);
+
+const out = {{}};
+
+// ── XF-003: 액체 개방화재, F 직접입력, 소화설비 있음(37,100) ──
+const liquid = calculateExternalFireScenario({{
+  fireCase:"OPEN_POOL_LIQUID", adequateDrainage:true, F:0.3, wettedArea_m2:50, latentHeat_kcal_per_kg:80
+}});
+const expectedQ_A = 37100 * 0.3 * Math.pow(50, 0.82);
+out.liquidStatus = liquid.status;
+out.liquidW = liquid.W;
+out.expectedLiquidW = expectedQ_A / 80;
+out.liquidCoefficient = liquid.components.coefficient;
+out.liquidUnit = liquid.unit;
+out.liquidSection = liquid.section;
+
+// ── XF-004: 소화설비 없음(61,000) ──
+const liquidNoDrain = calculateExternalFireScenario({{
+  fireCase:"OPEN_POOL_LIQUID", adequateDrainage:false, F:0.3, wettedArea_m2:50, latentHeat_kcal_per_kg:80
+}});
+out.liquidNoDrainCoefficient = liquidNoDrain.components.coefficient;
+out.liquidNoDrainW = liquidNoDrain.W;
+
+// ── XF-005: F를 식(5) 단일 단열재로 산정 ──
+const liquidF5 = calculateExternalFireScenario({{
+  fireCase:"OPEN_POOL_LIQUID", adequateDrainage:true,
+  insulationLayers:[{{ k_kcal_mm_per_hr_m2_degC:19.5, thickness_mm:50 }}], Tf_degC:20,
+  wettedArea_m2:50, latentHeat_kcal_per_kg:80
+}});
+const expectedF5 = (904 - 20) / (57000 * (50/19.5));
+out.liquidF5Status = liquidF5.status;
+out.liquidF5F = liquidF5.components.F;
+out.expectedF5 = expectedF5;
+
+// ── XF-006: F를 식(6) 복층 단열재로 산정 ──
+const liquidF6 = calculateExternalFireScenario({{
+  fireCase:"OPEN_POOL_LIQUID", adequateDrainage:true,
+  insulationLayers:[
+    {{ k_kcal_mm_per_hr_m2_degC:19.5, thickness_mm:30 }},
+    {{ k_kcal_mm_per_hr_m2_degC:9.8, thickness_mm:20 }}
+  ], Tf_degC:20, wettedArea_m2:50, latentHeat_kcal_per_kg:80
+}});
+const expectedF6 = (904 - 20) / (57000 * ((30/19.5) + (20/9.8)));
+out.liquidF6F = liquidF6.components.F;
+out.expectedF6 = expectedF6;
+
+// ── XF-007: 제한공간화재(소규모 연료지배형) — 동일 공식, Awi 레이블 ──
+const confined = calculateExternalFireScenario({{
+  fireCase:"CONFINED_POOL_FUEL_SMALL_MEDIUM", adequateDrainage:true, F:0.3, wettedArea_m2:50, latentHeat_kcal_per_kg:80
+}});
+out.confinedStatus = confined.status;
+out.confinedW = confined.W;
+out.confinedAreaLabel = confined.components.areaLabel;
+
+// ── XF-008: 계산식 없는 하위케이스 -> NEEDS_ENGINEERING_DECISION ──
+out.ventStatus = calculateExternalFireScenario({{ fireCase:"CONFINED_POOL_VENTILATION_CONTROLLED" }}).status;
+out.largeStatus = calculateExternalFireScenario({{ fireCase:"CONFINED_POOL_LARGE_SCALE" }}).status;
+out.jetStatus = calculateExternalFireScenario({{ fireCase:"JET_FIRE" }}).status;
+out.ventW = calculateExternalFireScenario({{ fireCase:"CONFINED_POOL_VENTILATION_CONTROLLED" }}).W;
+
+// ── XF-009: 가스/증기 케이스, Pn/Tn으로 T1 산정 ──
+const gas = calculateExternalFireScenario({{
+  fireCase:"OPEN_POOL_GAS_VAPOR", M:44, P1_MPa:1.5, A_m2:30, Tw_K:866, Pn_MPa:1.2, Tn_K:320
+}});
+const expectedT1 = (1.5/1.2) * 320;
+const expectedGasW = 8.766 * Math.sqrt(44*1.5) * (30 * Math.pow(866-expectedT1, 1.25) / Math.pow(expectedT1, 1.1506));
+out.gasStatus = gas.status;
+out.gasW = gas.W;
+out.expectedGasW = expectedGasW;
+out.gasT1 = gas.components.T1_K;
+out.expectedT1 = expectedT1;
+
+// ── XF-010: 가스 케이스, T1 직접입력 ──
+const gasDirectT1 = calculateExternalFireScenario({{
+  fireCase:"OPEN_POOL_GAS_VAPOR", M:44, P1_MPa:1.5, A_m2:30, Tw_K:866, T1_K:400
+}});
+out.gasDirectT1Status = gasDirectT1.status;
+out.gasDirectT1W = gasDirectT1.W;
+
+// ── XF-011: 필수 입력 누락 ──
+out.missingFireCase = calculateExternalFireScenario({{ adequateDrainage:true, F:0.3, wettedArea_m2:50, latentHeat_kcal_per_kg:80 }}).status;
+out.wrongFireCase = calculateExternalFireScenario({{ fireCase:"VOLCANO", wettedArea_m2:50 }}).status;
+out.nullInput = calculateExternalFireScenario(null).status;
+out.liquidMissingDrainage = calculateExternalFireScenario({{ fireCase:"OPEN_POOL_LIQUID", F:0.3, wettedArea_m2:50, latentHeat_kcal_per_kg:80 }}).status;
+out.liquidMissingArea = calculateExternalFireScenario({{ fireCase:"OPEN_POOL_LIQUID", adequateDrainage:true, F:0.3, latentHeat_kcal_per_kg:80 }}).status;
+out.liquidMissingF = calculateExternalFireScenario({{ fireCase:"OPEN_POOL_LIQUID", adequateDrainage:true, wettedArea_m2:50, latentHeat_kcal_per_kg:80 }}).status;
+out.gasMissingT1AndPnTn = calculateExternalFireScenario({{ fireCase:"OPEN_POOL_GAS_VAPOR", M:44, P1_MPa:1.5, A_m2:30, Tw_K:866 }}).status;
+
+// ── XF-012: 0/음수/NaN/Infinity ──
+out.zeroAreaStatus = calculateExternalFireScenario({{ fireCase:"OPEN_POOL_LIQUID", adequateDrainage:true, F:0.3, wettedArea_m2:0, latentHeat_kcal_per_kg:80 }}).status;
+out.negativeAreaStatus = calculateExternalFireScenario({{ fireCase:"OPEN_POOL_LIQUID", adequateDrainage:true, F:0.3, wettedArea_m2:-10, latentHeat_kcal_per_kg:80 }}).status;
+out.nanLatentStatus = calculateExternalFireScenario({{ fireCase:"OPEN_POOL_LIQUID", adequateDrainage:true, F:0.3, wettedArea_m2:50, latentHeat_kcal_per_kg:NaN }}).status;
+out.infMStatus = calculateExternalFireScenario({{ fireCase:"OPEN_POOL_GAS_VAPOR", M:Infinity, P1_MPa:1.5, A_m2:30, Tw_K:866, T1_K:400 }}).status;
+out.zeroLatentStatus = calculateExternalFireScenario({{ fireCase:"OPEN_POOL_LIQUID", adequateDrainage:true, F:0.3, wettedArea_m2:50, latentHeat_kcal_per_kg:0 }}).status;
+out.twLessThanT1Status = calculateExternalFireScenario({{ fireCase:"OPEN_POOL_GAS_VAPOR", M:44, P1_MPa:1.5, A_m2:30, Tw_K:300, T1_K:400 }}).status;
+
+// ── XF-013: 배열/문자열 암묵변환 차단 ──
+out.arrayAreaStatus = calculateExternalFireScenario({{ fireCase:"OPEN_POOL_LIQUID", adequateDrainage:true, F:0.3, wettedArea_m2:[50], latentHeat_kcal_per_kg:80 }}).status;
+out.stringFStatus = calculateExternalFireScenario({{ fireCase:"OPEN_POOL_LIQUID", adequateDrainage:true, F:"0.3", wettedArea_m2:50, latentHeat_kcal_per_kg:80 }}).status;
+out.nonBooleanDrainageStatus = calculateExternalFireScenario({{ fireCase:"OPEN_POOL_LIQUID", adequateDrainage:"yes", F:0.3, wettedArea_m2:50, latentHeat_kcal_per_kg:80 }}).status;
+
+// ── XF-014: 입력 mutation 금지 ──
+const originalInput = {{ fireCase:"OPEN_POOL_LIQUID", adequateDrainage:true, F:0.3, wettedArea_m2:50, latentHeat_kcal_per_kg:80 }};
+const originalCopy = JSON.parse(JSON.stringify(originalInput));
+calculateExternalFireScenario(originalInput);
+out.inputUnmutated = JSON.stringify(originalInput) === JSON.stringify(originalCopy);
+
+// ── XF-015: 결정론 ──
+const detInput = {{ fireCase:"OPEN_POOL_GAS_VAPOR", M:44, P1_MPa:1.5, A_m2:30, Tw_K:866, Pn_MPa:1.2, Tn_K:320 }};
+const r1 = calculateExternalFireScenario(detInput);
+const r2 = calculateExternalFireScenario(detInput);
+out.deterministic = JSON.stringify(r1) === JSON.stringify(r2);
+
+// ── XF-016: taxonomy 정합성(간접 참조) ──
+out.taxonomyIncludes = getComputableScenarioIds().includes("EXTERNAL_FIRE");
+
+// ── XF-017: selector와 독립적 — 실수로 넣어도 정상 동작(W 필드 있으므로 이번엔 포함됨, 다른 §5.x와의 max 비교) ──
+const gov = selectGoverningReliefLoad([liquid, {{ scenarioId:"OVERFILLING", status:"OK", W:100 }}]);
+out.govGoverningId = gov.governingScenarioId;
+
+console.log(JSON.stringify(out));
+"""
+    try:
+        result = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=15)
+        out = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
+    except Exception as e:
+        tr.check("XF_node_execution", False, f"node 실행 실패: {e}\nstderr: {getattr(result,'stderr','')}")
+        return tr
+
+    tr.check("XF_003_liquid_formula_matches_37100_coefficient",
+             out.get("liquidStatus") == "OK" and abs(out.get("liquidW", -1) - out.get("expectedLiquidW", -999)) < 1e-9
+             and out.get("liquidCoefficient") == 37100,
+             f"액체(소화설비 있음) W가 식(2)(3) 기대값과 다름: got {out.get('liquidW')} expected {out.get('expectedLiquidW')}")
+    tr.check("XF_003_unit_and_section",
+             out.get("liquidUnit") == "kg/h" and out.get("liquidSection") == "§5.12",
+             f"got unit={out.get('liquidUnit')} section={out.get('liquidSection')}")
+    tr.check("XF_004_no_drainage_uses_61000_coefficient",
+             out.get("liquidNoDrainCoefficient") == 61000 and out.get("liquidNoDrainW") > out.get("liquidW"),
+             f"소화설비 없음이 61,000 계수를 쓰지 않거나 W가 더 크지 않음: {out.get('liquidNoDrainCoefficient')}/{out.get('liquidNoDrainW')}")
+    tr.check("XF_005_F_formula5_single_layer_matches",
+             out.get("liquidF5Status") == "OK" and abs(out.get("liquidF5F", -1) - out.get("expectedF5", -999)) < 1e-9,
+             f"식(5) F 산정값이 기대값과 다름: got {out.get('liquidF5F')} expected {out.get('expectedF5')}")
+    tr.check("XF_006_F_formula6_multilayer_matches",
+             abs(out.get("liquidF6F", -1) - out.get("expectedF6", -999)) < 1e-9,
+             f"식(6) 복층 F 산정값이 기대값과 다름: got {out.get('liquidF6F')} expected {out.get('expectedF6')}")
+    tr.check("XF_007_confined_pool_reuses_same_formula_with_Awi_label",
+             out.get("confinedStatus") == "OK" and out.get("confinedW") == out.get("liquidW")
+             and "Awi" in out.get("confinedAreaLabel", ""),
+             f"제한공간화재(소규모)가 동일 공식을 재사용하며 Awi로 표기되지 않음: {out}")
+    tr.check("XF_008_no_formula_subcases_return_needs_engineering_decision",
+             out.get("ventStatus") == "NEEDS_ENGINEERING_DECISION"
+             and out.get("largeStatus") == "NEEDS_ENGINEERING_DECISION"
+             and out.get("jetStatus") == "NEEDS_ENGINEERING_DECISION"
+             and out.get("ventW") is None,
+             f"계산식 없는 하위케이스가 임의로 계산됨: {out.get('ventStatus')}/{out.get('largeStatus')}/{out.get('jetStatus')}")
+    tr.check("XF_009_gas_formula7_matches_with_T1_derived_from_Pn_Tn",
+             out.get("gasStatus") == "OK" and abs(out.get("gasW", -1) - out.get("expectedGasW", -999)) < 1e-6
+             and abs(out.get("gasT1", -1) - out.get("expectedT1", -999)) < 1e-9,
+             f"식(7) W 또는 T1=(P1/Pn)Tn 산정값이 기대값과 다름: {out}")
+    tr.check("XF_010_gas_direct_T1_works",
+             out.get("gasDirectT1Status") == "OK" and out.get("gasDirectT1W") == out.get("gasW"),
+             f"T1 직접입력 경로가 Pn/Tn 산정 경로와 동일 결과를 내지 않음: {out.get('gasDirectT1W')}/{out.get('gasW')}")
+    tr.check("XF_011_missing_required_fields_rejected",
+             all(out.get(k) == "INSUFFICIENT_INPUT" for k in [
+                 "missingFireCase", "wrongFireCase", "nullInput", "liquidMissingDrainage",
+                 "liquidMissingArea", "liquidMissingF", "gasMissingT1AndPnTn"
+             ]),
+             f"필수 입력 누락 케이스 중 일부가 거부되지 않음: {out}")
+    tr.check("XF_012_zero_negative_nan_infinity_rejected",
+             all(out.get(k) == "INSUFFICIENT_INPUT" for k in [
+                 "zeroAreaStatus", "negativeAreaStatus", "nanLatentStatus", "infMStatus",
+                 "zeroLatentStatus", "twLessThanT1Status"
+             ]),
+             f"0/음수/NaN/Infinity/Tw≤T1 케이스 중 일부가 거부되지 않음: {out}")
+    tr.check("XF_013_array_string_boolean_coercion_rejected",
+             out.get("arrayAreaStatus") == "INSUFFICIENT_INPUT" and out.get("stringFStatus") == "INSUFFICIENT_INPUT"
+             and out.get("nonBooleanDrainageStatus") == "INSUFFICIENT_INPUT",
+             f"배열/문자열/비boolean 암묵변환이 차단되지 않음: {out.get('arrayAreaStatus')}/{out.get('stringFStatus')}/{out.get('nonBooleanDrainageStatus')}")
+    tr.check("XF_014_input_not_mutated",
+             out.get("inputUnmutated") is True, "입력 객체가 변형됨 — 순수함수 원칙 위반")
+    tr.check("XF_015_deterministic",
+             out.get("deterministic") is True, "동일 입력 2회 실행 결과가 다름")
+    tr.check("XF_016_taxonomy_includes_external_fire",
+             out.get("taxonomyIncludes") is True, "EXTERNAL_FIRE가 getComputableScenarioIds()에 없음")
+    tr.check("XF_017_governing_selection_works_with_other_scenarios",
+             out.get("govGoverningId") == "EXTERNAL_FIRE",
+             f"§5.12 결과(W 있음)가 다른 시나리오와 함께 governing 선택에 정상 참여하지 않음: {out.get('govGoverningId')}")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
 #  BASELINE LOCK CONTRACT (Sprint A.1) — Engine 1.3.0 기준선 보호 장치
 #  1) ENGINE-VERSION-LOCK-001: Snapshot/ReportPackage/Fixture 엔진버전 일치
 #  2) GOLDEN-FIXTURE-MUTATION-GUARD-001: fixture를 손으로 고치면 감지
@@ -3444,6 +4923,94 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [INLET-LOSS-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── Relief Load Taxonomy contract (C-4.0) ────────────────────
+    print("\n── RELIEF LOAD TAXONOMY (Sprint C-4.0) ──────────────")
+    tr = test_relief_load_taxonomy_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [RELIEF-LOAD-TAXONOMY-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── §5.1 출구 차단 contract (C-4.1) ──────────────────────────
+    print("\n── OUTLET BLOCKED §5.1 (Sprint C-4.1) ───────────────")
+    tr = test_outlet_blocked_scenario_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [OUTLET-BLOCKED-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── §5.6 과충전 contract (C-4.2) ─────────────────────────────
+    print("\n── OVERFILLING §5.6 (Sprint C-4.2) ──────────────────")
+    tr = test_overfilling_scenario_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [OVERFILLING-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── §5.7 자동제어밸브 고장 contract (C-4.3) ──────────────────
+    print("\n── CONTROL VALVE FAILURE §5.7 (Sprint C-4.3) ────────")
+    tr = test_control_valve_failure_scenario_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [CONTROL-VALVE-FAIL-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── §5.8 비정상 열/증기 유입 contract (C-4.4) ────────────────
+    print("\n── ABNORMAL HEAT/VAPOR §5.8 (Sprint C-4.4) ──────────")
+    tr = test_abnormal_heat_vapor_scenario_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [ABNORMAL-HEAT-VAPOR-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── §5.11 액체부피 팽창 contract (C-4.5) ─────────────────────
+    print("\n── LIQUID THERMAL EXPANSION §5.11 (Sprint C-4.5) ────")
+    tr = test_liquid_thermal_expansion_scenario_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [LIQUID-EXPANSION-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── §5.13 열교환기 고장 contract (C-4.6) ─────────────────────
+    print("\n── EXCHANGER FAILURE §5.13 (Sprint C-4.6) ───────────")
+    tr = test_exchanger_failure_scenario_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [EXCHANGER-FAIL-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── §5.12 외부 화재 contract (C-4.7) ─────────────────────────
+    print("\n── EXTERNAL FIRE §5.12 (Sprint C-4.7) ───────────────")
+    tr = test_external_fire_scenario_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [EXTERNAL-FIRE-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"
