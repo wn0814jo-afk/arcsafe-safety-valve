@@ -1461,9 +1461,16 @@ def test_relief_load_taxonomy_contract() -> TestResult:
     tr.check("TAXONOMY_001_dependent_scenarios_reference_parent",
              '"NONCONDENSABLE_GAS"' in rl_src and "DEPENDENT" in rl_src and "dependsOn" in rl_src,
              "§5.4/§5.15의 종속관계(dependsOn)가 명시되지 않음")
-    tr.check("TAXONOMY_001_not_yet_wired_into_engine",
-             "relief_load" not in api520_src and "selectGoverningReliefLoad" not in api520_src,
-             "C-4.0 단계에서 relief_load.js가 아직 api520Engine에 연결되면 안 됨(C-4.8에서 연결)")
+    tr.check("TAXONOMY_001_scenario_calculators_not_hardcoded_into_engine",
+             all((fn + "(") not in api520_src for fn in [
+                 "calculateOutletBlockedScenario", "calculateOverfillingScenario",
+                 "calculateControlValveFailureScenario", "calculateAbnormalHeatVaporScenario",
+                 "calculateLiquidThermalExpansionScenario", "calculateExchangerFailureScenario",
+                 "calculateExternalFireScenario",
+             ]),
+             "개별 §5.x 계산 함수가 api520Engine에 직접 하드코딩되면 안 됨 — "
+             "C-4.8B는 selectGoverningReliefLoad()/buildReliefSizingInput() 결과를 외부에서 "
+             "주입받는 제네릭 reliefLoadAdapter 경로만 허용한다(직접 계산 호출 금지)")
 
     node = shutil.which("node")
     if node:
@@ -1492,31 +1499,31 @@ out.singleVerdict = single.verdict;
 
 // ── GOV-003: 여러 시나리오 중 최댓값 선택 ──
 const multi = selectGoverningReliefLoad([
-  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:1200}},
-  {{scenarioId:"EXTERNAL_FIRE",  status:"OK", W:5000}},
-  {{scenarioId:"OVERFILLING",    status:"OK", W:800}},
+  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:1200, unit:"kg/h"}},
+  {{scenarioId:"EXTERNAL_FIRE",  status:"OK", W:5000, unit:"kg/h"}},
+  {{scenarioId:"OVERFILLING",    status:"OK", W:800, unit:"kg/h"}},
 ]);
 out.multiGoverningId = multi.governingScenarioId;
 out.multiGoverningW = multi.governingW;
 
 // ── GOV-004: 무효(status != OK, W<=0, W가 숫자아님) 시나리오는 후보에서 제외 ──
 const filtered = selectGoverningReliefLoad([
-  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:-5}},
-  {{scenarioId:"OVERFILLING",    status:"OK", W:"not_a_number"}},
-  {{scenarioId:"CONTROL_VALVE_FAIL", status:"OK", W:0}},
-  {{scenarioId:"EXTERNAL_FIRE",  status:"OK", W:3000}},
+  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:-5, unit:"kg/h"}},
+  {{scenarioId:"OVERFILLING",    status:"OK", W:"not_a_number", unit:"kg/h"}},
+  {{scenarioId:"CONTROL_VALVE_FAIL", status:"OK", W:0, unit:"kg/h"}},
+  {{scenarioId:"EXTERNAL_FIRE",  status:"OK", W:3000, unit:"kg/h"}},
 ]);
 out.filteredGoverningId = filtered.governingScenarioId;
 out.filteredGoverningW = filtered.governingW;
 
 // ── GOV-005: 동점(tie) -> taxonomy 선언순서상 먼저인 쪽으로 결정론적 선택 ──
 const tie1 = selectGoverningReliefLoad([
-  {{scenarioId:"EXTERNAL_FIRE",  status:"OK", W:2000}},
-  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:2000}},
+  {{scenarioId:"EXTERNAL_FIRE",  status:"OK", W:2000, unit:"kg/h"}},
+  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:2000, unit:"kg/h"}},
 ]);
 const tie2 = selectGoverningReliefLoad([
-  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:2000}},
-  {{scenarioId:"EXTERNAL_FIRE",  status:"OK", W:2000}},
+  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:2000, unit:"kg/h"}},
+  {{scenarioId:"EXTERNAL_FIRE",  status:"OK", W:2000, unit:"kg/h"}},
 ]);
 out.tieWinner1 = tie1.governingScenarioId;
 out.tieWinner2 = tie2.governingScenarioId;
@@ -1524,22 +1531,22 @@ out.tieOrderIndependent = (tie1.governingScenarioId === tie2.governingScenarioId
 
 // ── GOV-006: allScenarios가 governing만 남기지 않고 전체 보존 ──
 const preserve = selectGoverningReliefLoad([
-  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:1000}},
-  {{scenarioId:"EXTERNAL_FIRE",  status:"OK", W:5000}},
+  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:1000, unit:"kg/h"}},
+  {{scenarioId:"EXTERNAL_FIRE",  status:"OK", W:5000, unit:"kg/h"}},
   {{scenarioId:"OVERFILLING",    status:"INSUFFICIENT_INPUT", W:null}},
 ]);
 out.preservedCount = preserve.allScenarios.length;
 
 // ── GOV-007: 순수 함수 — 입력 배열/객체를 변형하지 않음 ──
-const original = [{{scenarioId:"OUTLET_BLOCKED", status:"OK", W:1000}}];
+const original = [{{scenarioId:"OUTLET_BLOCKED", status:"OK", W:1000, unit:"kg/h"}}];
 const originalCopy = JSON.parse(JSON.stringify(original));
 selectGoverningReliefLoad(original);
 out.inputUnmutated = JSON.stringify(original) === JSON.stringify(originalCopy);
 
 // ── GOV-008: 결정론 — 동일 입력 2회 실행 결과 동일 ──
 const detInput = [
-  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:1500}},
-  {{scenarioId:"EXTERNAL_FIRE",  status:"OK", W:4200}},
+  {{scenarioId:"OUTLET_BLOCKED", status:"OK", W:1500, unit:"kg/h"}},
+  {{scenarioId:"EXTERNAL_FIRE",  status:"OK", W:4200, unit:"kg/h"}},
 ];
 const d1 = selectGoverningReliefLoad(detInput);
 const d2 = selectGoverningReliefLoad(detInput);
@@ -1690,7 +1697,7 @@ out.resultSectionMatchesTaxonomy = (liquid.section === "§5.1");
 // ── OB-010: selectGoverningReliefLoad()와 독립적으로 동작(연동은 되지만 §5.1이 selector를 호출/변형하지 않음) ──
 const scenarios = [
   calculateOutletBlockedScenario({{ phase:"LIQUID", inflow_kgh: 1000 }}),
-  {{ scenarioId:"EXTERNAL_FIRE", status:"OK", W:5000 }},
+  {{ scenarioId:"EXTERNAL_FIRE", status:"OK", W:5000, unit:"kg/h" }},
 ];
 const gov = selectGoverningReliefLoad(scenarios);
 out.integrationGoverningId = gov.governingScenarioId;
@@ -2835,7 +2842,7 @@ out.deterministic = JSON.stringify(r1) === JSON.stringify(r2);
 out.taxonomyIncludes = getComputableScenarioIds().includes("EXTERNAL_FIRE");
 
 // ── XF-017: selector와 독립적 — 실수로 넣어도 정상 동작(W 필드 있으므로 이번엔 포함됨, 다른 §5.x와의 max 비교) ──
-const gov = selectGoverningReliefLoad([liquid, {{ scenarioId:"OVERFILLING", status:"OK", W:100 }}]);
+const gov = selectGoverningReliefLoad([liquid, {{ scenarioId:"OVERFILLING", status:"OK", W:100, unit:"kg/h" }}]);
 out.govGoverningId = gov.governingScenarioId;
 
 console.log(JSON.stringify(out));
@@ -2905,6 +2912,432 @@ console.log(JSON.stringify(out));
     tr.check("XF_017_governing_selection_works_with_other_scenarios",
              out.get("govGoverningId") == "EXTERNAL_FIRE",
              f"§5.12 결과(W 있음)가 다른 시나리오와 함께 governing 선택에 정상 참여하지 않음: {out.get('govGoverningId')}")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
+#  UNIT/SELECTOR CONTRACT (Sprint C-4.8A) — §6 governing load 선정 시
+#  quantity(kg/h vs m3/h vs m2)가 섞이지 않도록 강제하는 계약.
+#  C-4.8B에서 buildReliefSizingInput()이 이 selector 결과를 소비해
+#  api520Engine에 제네릭 reliefLoadAdapter로 주입한다(엔진이 selector를
+#  직접 호출하지는 않음 — 상세 계약은 RELIEF-SIZING-ADAPTER-001 참고).
+# ════════════════════════════════════════════════════════════════
+def test_unit_selector_contract() -> TestResult:
+    tr = TestResult("UNIT-SELECTOR-001", "Sprint C-4.8A — governing load quantity/unit 계약")
+
+    rl_src = (SRC / "engine" / "relief_load.js").read_text()
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+
+    tr.check("US_001_quantity_enum_exists",
+             "RELIEF_LOAD_QUANTITY" in rl_src and "MASS_FLOW" in rl_src
+             and "VOLUME_FLOW" in rl_src and "AREA" in rl_src,
+             "RELIEF_LOAD_QUANTITY enum(MASS_FLOW/VOLUME_FLOW/AREA)이 없음")
+    tr.check("US_002_classifier_exists",
+             "function classifyReliefLoadQuantity" in rl_src,
+             "classifyReliefLoadQuantity() 함수가 없음")
+    tr.check("US_007_selector_not_directly_called_inside_engine",
+             "selectGoverningReliefLoad(" not in api520_src,
+             "C-4.8A 이후에도 api520Engine이 selectGoverningReliefLoad()를 직접 호출하면 안 됨 — "
+             "C-4.8B는 buildReliefSizingInput()의 결과를 reliefLoadAdapter 인자로 외부에서 "
+             "주입받는 방식만 허용한다(엔진이 selector를 스스로 부르지 않음)")
+
+    node = shutil.which("node")
+    if not node:
+        tr.check("US_node_available", False, "node를 찾을 수 없어 실행 검증을 건너뜀")
+        return tr
+
+    check_script = f"""
+const fs = require('fs');
+const files = ['engine/relief_load.js'].map(f => fs.readFileSync('{SRC}/' + f, 'utf8')).join('\\n');
+eval(files);
+
+const out = {{}};
+
+// US-003: MASS_FLOW 정상 선택(kg/h 후보 중 최댓값)
+{{
+  const results = [
+    {{ scenarioId:"OUTLET_BLOCKED", status:"OK", W:100, unit:"kg/h" }},
+    {{ scenarioId:"OVERFILLING",    status:"OK", W:250, unit:"kg/h" }},
+  ];
+  const gov = selectGoverningReliefLoad(results);
+  out.massOnlyVerdict = gov.verdict;
+  out.massOnlyGoverningId = gov.governingScenarioId;
+  out.massOnlyGoverningW = gov.governingW;
+}}
+
+// US-004: VOLUME_FLOW(§5.11)·AREA(§5.13) 단독 제외 + allScenarios 보존
+{{
+  const results = [
+    {{ scenarioId:"OUTLET_BLOCKED",   status:"OK",         W:100,  unit:"kg/h" }},
+    {{ scenarioId:"LIQUID_EXPANSION", status:"COMPUTABLE", value:5.5, unit:"m3/h" }},
+    {{ scenarioId:"EXCHANGER_FAIL",   status:"COMPUTABLE", requiredOrificeArea_m2:0.02, unit:"m2" }},
+  ];
+  const gov = selectGoverningReliefLoad(results);
+  out.mixedVerdict = gov.verdict;
+  out.mixedGoverningId = gov.governingScenarioId;
+  out.mixedAllScenariosLen = gov.allScenarios.length;
+  out.mixedAllScenariosPreserved = gov.allScenarios.length === 3
+    && gov.allScenarios.some(r => r.scenarioId === "LIQUID_EXPANSION" && r.value === 5.5)
+    && gov.allScenarios.some(r => r.scenarioId === "EXCHANGER_FAIL" && r.requiredOrificeArea_m2 === 0.02);
+  const audit = gov.quantityAudit;
+  out.auditLen = audit.length;
+  const leAudit = audit.find(a => a.scenarioId === "LIQUID_EXPANSION");
+  const efAudit = audit.find(a => a.scenarioId === "EXCHANGER_FAIL");
+  const obAudit = audit.find(a => a.scenarioId === "OUTLET_BLOCKED");
+  out.leExcluded = leAudit && leAudit.includedInGoverningSelection === false && leAudit.exclusionReason === "INCOMPATIBLE_QUANTITY" && leAudit.quantity === "VOLUME_FLOW";
+  out.efExcluded = efAudit && efAudit.includedInGoverningSelection === false && efAudit.exclusionReason === "INCOMPATIBLE_QUANTITY" && efAudit.quantity === "AREA";
+  out.obIncluded = obAudit && obAudit.includedInGoverningSelection === true && obAudit.exclusionReason === null && obAudit.quantity === "MASS_FLOW";
+}}
+
+// US-005: 후보 0개(전부 m3/h·m2)면 INSUFFICIENT_INPUT
+{{
+  const results = [
+    {{ scenarioId:"LIQUID_EXPANSION", status:"COMPUTABLE", value:5.5, unit:"m3/h" }},
+    {{ scenarioId:"EXCHANGER_FAIL",   status:"COMPUTABLE", requiredOrificeArea_m2:0.02, unit:"m2" }},
+  ];
+  const gov = selectGoverningReliefLoad(results);
+  out.zeroCandidateVerdict = gov.verdict;
+  out.zeroCandidateGoverningW = gov.governingW;
+  out.zeroCandidateAllScenariosLen = gov.allScenarios.length;
+}}
+
+// US-006: 미인식 unit은 암묵적으로 kg/h 취급되지 않음(UNRECOGNIZED_QUANTITY)
+{{
+  const results = [
+    {{ scenarioId:"WEIRD", status:"OK", W:999, unit:"lb/hr" }},
+  ];
+  const gov = selectGoverningReliefLoad(results);
+  out.unrecognizedVerdict = gov.verdict;
+  out.unrecognizedAudit = gov.quantityAudit[0];
+}}
+
+// US-008: 불변성(입력 배열/원소 mutate 금지)
+{{
+  const original = [{{ scenarioId:"OUTLET_BLOCKED", status:"OK", W:100, unit:"kg/h" }}];
+  const snapshot = JSON.parse(JSON.stringify(original));
+  selectGoverningReliefLoad(original);
+  out.inputUnmutated = JSON.stringify(original) === JSON.stringify(snapshot);
+}}
+
+// US-009: 결정론
+{{
+  const results = [
+    {{ scenarioId:"OUTLET_BLOCKED", status:"OK", W:100, unit:"kg/h" }},
+    {{ scenarioId:"OVERFILLING",    status:"OK", W:100, unit:"kg/h" }},
+  ];
+  const r1 = selectGoverningReliefLoad(results);
+  const r2 = selectGoverningReliefLoad(results);
+  out.deterministicTie = r1.governingScenarioId === r2.governingScenarioId;
+  out.tieBreakToTaxonomyOrder = r1.governingScenarioId === "OUTLET_BLOCKED";
+}}
+
+console.log(JSON.stringify(out));
+"""
+    cp = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=15)
+    try:
+        out = json.loads(cp.stdout.strip().splitlines()[-1]) if cp.stdout.strip() else {{}}
+    except Exception:
+        out = {{}}
+
+    tr.check("US_003_mass_flow_only_selection_works",
+             out.get("massOnlyVerdict") == "OK" and out.get("massOnlyGoverningId") == "OVERFILLING"
+             and out.get("massOnlyGoverningW") == 250,
+             f"MASS_FLOW 후보만 있을 때 정상 선택 실패 — stdout={cp.stdout!r} stderr={cp.stderr!r}")
+    tr.check("US_004_volume_and_area_excluded_but_preserved",
+             out.get("mixedVerdict") == "OK" and out.get("mixedGoverningId") == "OUTLET_BLOCKED"
+             and out.get("mixedAllScenariosPreserved") is True,
+             f"§5.11/§5.13이 governing 후보에서 제외되지 않았거나 allScenarios에 보존되지 않음: {out}")
+    tr.check("US_004_quantity_audit_reasons_correct",
+             out.get("leExcluded") is True and out.get("efExcluded") is True and out.get("obIncluded") is True,
+             f"quantityAudit의 제외 사유/quantity 분류가 정확하지 않음: {out}")
+    tr.check("US_005_zero_mass_flow_candidates_is_insufficient_input",
+             out.get("zeroCandidateVerdict") == "INSUFFICIENT_INPUT" and out.get("zeroCandidateGoverningW") is None
+             and out.get("zeroCandidateAllScenariosLen") == 2,
+             f"MASS_FLOW 후보가 0개일 때 INSUFFICIENT_INPUT이 아니거나 allScenarios가 보존되지 않음: {out}")
+    unrecognized_audit = out.get("unrecognizedAudit") or {{}}
+    tr.check("US_006_unrecognized_unit_not_treated_as_mass_flow",
+             out.get("unrecognizedVerdict") == "INSUFFICIENT_INPUT"
+             and unrecognized_audit.get("exclusionReason") == "UNRECOGNIZED_QUANTITY"
+             and unrecognized_audit.get("quantity") is None,
+             f"미인식 unit(lb/hr)이 암묵적으로 후보 처리됨: {out}")
+    tr.check("US_008_selector_does_not_mutate_input",
+             out.get("inputUnmutated") is True, "selectGoverningReliefLoad가 입력 배열/원소를 변형함")
+    tr.check("US_009_deterministic_and_tiebreak_preserved",
+             out.get("deterministicTie") is True and out.get("tieBreakToTaxonomyOrder") is True,
+             f"결정론 또는 기존 taxonomy tie-break 순서가 깨짐: {out}")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
+#  RELIEF-SIZING-ADAPTER-001 (Sprint C-4.8B)
+#  §5 scenario → governing MASS_FLOW → buildReliefSizingInput() →
+#  api520Engine(W) 연결 계약. UI는 연결하지 않는다(C-4.11/C-5로 분리).
+#  자동 fallback 금지: adapter 실패/governing 없음을 조용히 manual W로
+#  대체하면 안 되고, 명시적 에러/INSUFFICIENT_INPUT으로 종료해야 한다.
+# ════════════════════════════════════════════════════════════════
+def test_relief_sizing_adapter_contract() -> TestResult:
+    tr = TestResult("RELIEF-SIZING-ADAPTER-001", "Sprint C-4.8B — governing relief load → API 520 sizing 연결 계약")
+
+    rl_src   = (SRC / "engine" / "relief_load.js").read_text()
+    api_src  = (SRC / "engine" / "api520.js").read_text()
+    snap_src = (SRC / "snapshot" / "create.js").read_text()
+    casev_src = (SRC / "components" / "CaseView.jsx").read_text()
+    report_files = [
+        SRC / "components" / "ReportView.jsx",
+        SRC / "components" / "report" / "ApprovalEvidence.jsx",
+        SRC / "components" / "report" / "AssetEvidence.jsx",
+        SRC / "components" / "report" / "AuditEvidence.jsx",
+        SRC / "components" / "report" / "WorkflowEvidence.jsx",
+        SRC / "report" / "createPackage.js",
+        SRC / "report" / "schema.js",
+        SRC / "report" / "renderer" / "pdf" / "renderPDF.js",
+        SRC / "report" / "renderer" / "pdf" / "template.js",
+    ]
+
+    tr.check("RS_static_001_adapter_function_exists",
+             "function buildReliefSizingInput" in rl_src,
+             "buildReliefSizingInput() 함수가 없음")
+    tr.check("RS_static_002_engine_signature_extended",
+             "reliefLoadAdapter" in api_src and "function api520Engine(inp, deviceType, inletPiping, reliefLoadAdapter)" in api_src,
+             "api520Engine()에 reliefLoadAdapter 선택 인자가 추가되지 않음")
+    tr.check("RS_static_003_no_silent_fallback_to_manual_w",
+             "!reliefLoadAdapter.valid" in api_src and "INVALID_RELIEF_LOAD_INPUT" in api_src,
+             "adapter invalid 시 manual W로 조용히 대체하지 않고 명시적 에러를 반환해야 함")
+    tr.check("RS_static_004_caseview_not_yet_wired",
+             "reliefLoadAdapter" not in casev_src and "buildReliefSizingInput" not in casev_src,
+             "C-4.8B는 UI(CaseView)를 연결하지 않아야 함(C-4.11/C-5에서 연결) — 아직 참조되면 안 됨")
+    tr.check("RS_static_005_snapshot_accepts_relief_load",
+             "reliefLoad" in snap_src and "_hashResult(inputs, engineResult, reliefLoad)" in snap_src,
+             "createSnapshot()이 reliefLoad를 받아 해시에 포함하지 않음")
+
+    for f in report_files:
+        text = f.read_text() if f.exists() else ""
+        tr.check(f"RS_static_006_report_no_recompute:{f.name}",
+                 "selectGoverningReliefLoad" not in text and "buildReliefSizingInput" not in text,
+                 f"{f.name}가 relief-load를 직접 재계산하면 안 됨 — Snapshot.reliefLoad만 읽어야 함")
+
+    node = shutil.which("node")
+    if not node:
+        tr.check("RS_node_available", False, "node를 찾을 수 없어 실행 검증을 건너뜀")
+        return tr
+
+    check_script = f"""
+const fs = require('fs');
+const files = ['engine/relief_load.js', 'engine/backpressure.js', 'engine/api520.js']
+  .map(f => fs.readFileSync('{SRC}/' + f, 'utf8')).join('\\n');
+eval(files);
+
+const out = {{}};
+
+const baseInp = {{ W:9999, P1:10, P2:1, T:320, M:44, k:1.28, Kd:0.975, Kb:1.0, mawp:11, OP:10, Z:1.0 }};
+
+// RS-001: MASS_FLOW/kg/h governing → adapter valid, sizing에 반영됨
+{{
+  const sel = selectGoverningReliefLoad([
+    {{ scenarioId:"OUTLET_BLOCKED", status:"OK", W:1234, unit:"kg/h" }},
+  ]);
+  const adapter = buildReliefSizingInput(sel);
+  out.massFlowAdapterValid = adapter.valid;
+  out.massFlowAdapterW = adapter.W;
+  const eng = api520Engine(baseInp, "safetyValve", null, adapter);
+  out.massFlowEngineValid = eng.valid;
+  out.massFlowEngineUsedW = eng.stepData?.orifice?.W;
+  out.massFlowSource = eng.stepData?.reliefLoadSource?.source;
+  out.massFlowManualWPreserved = eng.stepData?.reliefLoadSource?.manualW === 9999;
+}}
+
+// RS-002: VOLUME_FLOW(m3/h) 단독 → selector가 INSUFFICIENT_INPUT → adapter invalid → engine 에러(거부)
+{{
+  const sel = selectGoverningReliefLoad([
+    {{ scenarioId:"LIQUID_EXPANSION", status:"COMPUTABLE", value:5.5, unit:"m3/h" }},
+  ]);
+  const adapter = buildReliefSizingInput(sel);
+  out.volumeFlowAdapterValid = adapter.valid;
+  out.volumeFlowAdapterReason = adapter.reason;
+  const eng = api520Engine(baseInp, "safetyValve", null, adapter);
+  out.volumeFlowEngineRejected = (eng.valid === false);
+  out.volumeFlowEngineErrorField = eng.error?.field;
+}}
+
+// RS-003: AREA(m2) 단독 → 동일하게 거부
+{{
+  const sel = selectGoverningReliefLoad([
+    {{ scenarioId:"EXCHANGER_FAIL", status:"COMPUTABLE", requiredOrificeArea_m2:0.02, unit:"m2" }},
+  ]);
+  const adapter = buildReliefSizingInput(sel);
+  out.areaAdapterValid = adapter.valid;
+  const eng = api520Engine(baseInp, "safetyValve", null, adapter);
+  out.areaEngineRejected = (eng.valid === false);
+}}
+
+// RS-004: unit 누락 → 거부
+{{
+  const sel = selectGoverningReliefLoad([
+    {{ scenarioId:"WEIRD", status:"OK", W:500 }},
+  ]);
+  const adapter = buildReliefSizingInput(sel);
+  out.missingUnitAdapterValid = adapter.valid;
+}}
+
+// RS-005: 미인식 unit → 거부
+{{
+  const sel = selectGoverningReliefLoad([
+    {{ scenarioId:"WEIRD2", status:"OK", W:500, unit:"lb/hr" }},
+  ]);
+  const adapter = buildReliefSizingInput(sel);
+  out.unknownUnitAdapterValid = adapter.valid;
+}}
+
+// RS-006: zero/negative governing W → 거부 (selector 자체가 이미 걸러 INSUFFICIENT_INPUT을
+//         내지만, adapter 레벨에서도 방어적으로 재확인)
+{{
+  const adapterZero = buildReliefSizingInput({{ verdict:"OK", governingScenarioId:"X", governingW:0, unit:"kg/h", allScenarios:[], quantityAudit:[] }});
+  const adapterNeg  = buildReliefSizingInput({{ verdict:"OK", governingScenarioId:"X", governingW:-5, unit:"kg/h", allScenarios:[], quantityAudit:[] }});
+  out.zeroWRejected = (adapterZero.valid === false);
+  out.negWRejected  = (adapterNeg.valid === false);
+}}
+
+// RS-007: governing 없음(INSUFFICIENT_INPUT) → adapter invalid, engine이 즉시 거부(수동 W로 fallback 금지)
+{{
+  const sel = selectGoverningReliefLoad([]);
+  const adapter = buildReliefSizingInput(sel);
+  out.noGoverningAdapterValid = adapter.valid;
+  out.noGoverningAdapterReason = adapter.reason;
+  const eng = api520Engine(baseInp, "safetyValve", null, adapter);
+  out.noGoverningEngineRejected = (eng.valid === false);
+  // 결정적 확인: 에러 상태에서 sizing 결과(areaCm2 등)가 전혀 계산되지 않음(=조용한 대체가 없었음)
+  out.noGoverningNoSilentAreaCm2 = (eng.areaCm2 === undefined);
+}}
+
+// RS-008: selector 결과 원본 불변 — buildReliefSizingInput이 selectorResult를 변형하지 않음
+{{
+  const sel = selectGoverningReliefLoad([
+    {{ scenarioId:"OUTLET_BLOCKED", status:"OK", W:1234, unit:"kg/h" }},
+  ]);
+  const snapshot = JSON.parse(JSON.stringify(sel));
+  buildReliefSizingInput(sel);
+  out.selectorResultUnmutated = JSON.stringify(sel) === JSON.stringify(snapshot);
+}}
+
+// RS-009: 동일 입력 → 동일 sizing 결과(결정론)
+{{
+  const sel = selectGoverningReliefLoad([
+    {{ scenarioId:"OUTLET_BLOCKED", status:"OK", W:1234, unit:"kg/h" }},
+  ]);
+  const a1 = buildReliefSizingInput(sel);
+  const a2 = buildReliefSizingInput(sel);
+  const e1 = api520Engine(baseInp, "safetyValve", null, a1);
+  const e2 = api520Engine(baseInp, "safetyValve", null, a2);
+  out.deterministicSizing = (e1.areaCm2 === e2.areaCm2) && (e1.selected.letter === e2.selected.letter);
+}}
+
+// RS-010: 기존 manual W 경로 회귀 — adapter 없이 호출(4번째 인자 생략)하면 기존과 동일하게 동작
+{{
+  const eng4argsUndefined = api520Engine(baseInp, "safetyValve", null);
+  const eng4argsNull      = api520Engine(baseInp, "safetyValve", null, null);
+  out.manualPathValid = eng4argsUndefined.valid === true;
+  out.manualPathUsedManualW = eng4argsUndefined.stepData?.orifice?.W === 9999;
+  out.manualPathSource = eng4argsUndefined.stepData?.reliefLoadSource?.source;
+  out.manualPathSameAsExplicitNull = eng4argsUndefined.areaCm2 === eng4argsNull.areaCm2;
+}}
+
+// RS-011/012: C-1(backpressure)/C-2(accumulation) 정책 회귀 — governing 경로에서도 그대로 평가됨
+{{
+  const inpWithPolicies = {{ ...baseInp, valveType:"BELLOWS", valveCount:2, fireScenario:false }};
+  const sel = selectGoverningReliefLoad([
+    {{ scenarioId:"OUTLET_BLOCKED", status:"OK", W:1234, unit:"kg/h" }},
+  ]);
+  const adapter = buildReliefSizingInput(sel);
+  const eng = api520Engine(inpWithPolicies, "safetyValve", null, adapter);
+  out.backpressurePolicyStillApplied = eng.stepData?.backpress?.allowableRatio === 0.50;
+  out.accumulationPolicyStillApplied = eng.stepData?.accumulation?.allowableRatio === 1.16;
+  out.policiesIndependentOfWSource = eng.stepData?.reliefLoadSource?.source === "GOVERNING_RELIEF_LOAD";
+}}
+
+// RS-013: C-3(inlet loss) 정책 회귀 — governing 경로에서도 그대로 평가/독립 유지(계산불가 상태 포함)
+{{
+  const sel = selectGoverningReliefLoad([
+    {{ scenarioId:"OUTLET_BLOCKED", status:"OK", W:1234, unit:"kg/h" }},
+  ]);
+  const adapter = buildReliefSizingInput(sel);
+  const eng = api520Engine(baseInp, "safetyValve", null, adapter);
+  out.inletLossStillIndependentOfSizing = (eng.stepData?.inletLoss?.pressureLossAvailable === false)
+    && (eng.dataGaps || []).includes("inletPiping")
+    && typeof eng.areaCm2 === "number";
+}}
+
+// RS-critical: 동일 숫자 W라면 manual 경로와 governing 경로의 sizing 결과가 완전히 동일해야 함
+{{
+  const manualInp = {{ ...baseInp, W: 4200 }};
+  const engManual = api520Engine(manualInp, "safetyValve", null);
+  const sel = selectGoverningReliefLoad([
+    {{ scenarioId:"OUTLET_BLOCKED", status:"OK", W:4200, unit:"kg/h" }},
+  ]);
+  const adapter = buildReliefSizingInput(sel);
+  const engGoverning = api520Engine(manualInp, "safetyValve", null, adapter);
+  out.sameWSameSizingResult = (engManual.areaCm2 === engGoverning.areaCm2)
+    && (engManual.selected.letter === engGoverning.selected.letter)
+    && (engManual.margin === engGoverning.margin)
+    && (engManual.P1abs === engGoverning.P1abs);
+}}
+
+console.log(JSON.stringify(out));
+"""
+    cp = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=15)
+    try:
+        out = json.loads(cp.stdout.strip().splitlines()[-1]) if cp.stdout.strip() else {{}}
+    except Exception:
+        out = {{}}
+
+    tr.check("RS_001_mass_flow_used_for_sizing",
+             out.get("massFlowAdapterValid") is True and out.get("massFlowEngineValid") is True
+             and out.get("massFlowEngineUsedW") == 1234 and out.get("massFlowSource") == "GOVERNING_RELIEF_LOAD"
+             and out.get("massFlowManualWPreserved") is True,
+             f"stdout={cp.stdout!r} stderr={cp.stderr!r} out={out}")
+    tr.check("RS_002_volume_flow_rejected",
+             out.get("volumeFlowAdapterValid") is False and out.get("volumeFlowEngineRejected") is True
+             and out.get("volumeFlowEngineErrorField") == "reliefLoad",
+             f"VOLUME_FLOW(m3/h)가 sizing에 흘러들어감: {out}")
+    tr.check("RS_003_area_rejected",
+             out.get("areaAdapterValid") is False and out.get("areaEngineRejected") is True,
+             f"AREA(m2)가 sizing에 흘러들어감: {out}")
+    tr.check("RS_004_missing_unit_rejected",
+             out.get("missingUnitAdapterValid") is False, f"unit 누락이 거부되지 않음: {out}")
+    tr.check("RS_005_unknown_unit_rejected",
+             out.get("unknownUnitAdapterValid") is False, f"미인식 unit이 거부되지 않음: {out}")
+    tr.check("RS_006_zero_negative_w_rejected",
+             out.get("zeroWRejected") is True and out.get("negWRejected") is True,
+             f"0/음수 governing W가 거부되지 않음: {out}")
+    tr.check("RS_007_no_governing_scenario_no_silent_fallback",
+             out.get("noGoverningAdapterValid") is False and out.get("noGoverningEngineRejected") is True
+             and out.get("noGoverningNoSilentAreaCm2") is True,
+             f"governing 없음이 manual W로 조용히 대체됨(금지된 fallback): {out}")
+    tr.check("RS_008_selector_result_immutable",
+             out.get("selectorResultUnmutated") is True, f"buildReliefSizingInput이 입력을 변형함: {out}")
+    tr.check("RS_009_deterministic_sizing",
+             out.get("deterministicSizing") is True, f"동일 입력에 대해 sizing 결과가 결정론적이지 않음: {out}")
+    tr.check("RS_010_manual_path_regression",
+             out.get("manualPathValid") is True and out.get("manualPathUsedManualW") is True
+             and out.get("manualPathSource") == "MANUAL_INPUT" and out.get("manualPathSameAsExplicitNull") is True,
+             f"기존 수동 W 경로(4번째 인자 미전달)가 회귀함: {out}")
+    tr.check("RS_011_012_c1_c2_policy_regression",
+             out.get("backpressurePolicyStillApplied") is True and out.get("accumulationPolicyStillApplied") is True
+             and out.get("policiesIndependentOfWSource") is True,
+             f"governing W 경로에서 C-1/C-2 정책이 정상 평가되지 않음: {out}")
+    tr.check("RS_013_c3_inlet_loss_regression",
+             out.get("inletLossStillIndependentOfSizing") is True,
+             f"governing W 경로에서 C-3 inlet loss 독립성이 깨짐: {out}")
+    tr.check("RS_018_engine_version_lock",
+             ENGINE_VERSION == "1.6.0",
+             f"ENGINE_VERSION이 예상과 다름(1.6.0 유지 결정): {ENGINE_VERSION}")
+    tr.check("RS_019_engine_version_decision_documented",
+             "버전 결정: ENGINE_VERSION은 이번 단계에서 올리지 않는다" in api_src,
+             "ENGINE_VERSION 변경 필요 여부에 대한 명시적 판단 근거가 소스에 문서화되지 않음")
+    tr.check("RS_critical_same_w_same_sizing_result",
+             out.get("sameWSameSizingResult") is True,
+             f"동일 W(수동 vs governing)인데 sizing 결과가 달라짐 — C-4 연결이 기존 계산을 변경함: {out}")
 
     return tr
 
@@ -3022,13 +3455,14 @@ def test_baseline_lock_contract() -> TestResult:
         tr.check("TRACE_SCHEMA_001_real_engine_output_passes_schema",
                  tresult is not None and tresult.get("schemaOk") is True and tresult.get("traceLen", 0) >= 7,
                  f"실제 엔진 trace 출력이 스키마 검증을 통과하지 못함 — stdout={cp.stdout!r} stderr={cp.stderr!r}")
-        expected_steps = ["COMPRESSIBILITY_Z","SET_PRESSURE","RELIEVING_PRESSURE",
+        expected_steps = ["COMPRESSIBILITY_Z","RELIEF_LOAD_W_SOURCE","SET_PRESSURE","RELIEVING_PRESSURE",
                            "C_COEFFICIENT","MASS_FLUX_AREA","REQUIRED_AREA","ORIFICE_SELECTION",
                            "BACKPRESSURE_POLICY","ACCUMULATION_POLICY","ACCUMULATION_GUARDRAIL",
                            "INLET_LOSS_POLICY","INLET_LOSS_CALCULATION","INLET_LOSS_GUARDRAIL"]
         tr.check("TRACE_SCHEMA_001_step_order_frozen",
                  tresult is not None and tresult.get("steps") == expected_steps,
-                 f"trace 단계 순서/구성이 계약과 다름 — actual={tresult.get('steps') if tresult else None}")
+                 f"trace 단계 순서/구성이 계약과 다름(C-4.8B에서 RELIEF_LOAD_W_SOURCE 단계가 "
+                 f"COMPRESSIBILITY_Z 다음에 신설됨) — actual={tresult.get('steps') if tresult else None}")
     else:
         tr.check("TRACE_SCHEMA_001_node_available", False, "node 없음 — 실행 검증 생략")
 
@@ -5011,6 +5445,28 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [EXTERNAL-FIRE-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── Unit/Selector contract (C-4.8A) ──────────────────────────
+    print("\n── UNIT/SELECTOR CONTRACT (Sprint C-4.8A) ───────────")
+    tr = test_unit_selector_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [UNIT-SELECTOR-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── Relief-sizing adapter contract (C-4.8B) ──────────────────
+    print("\n── RELIEF-SIZING-ADAPTER-001 (Sprint C-4.8B) ────────")
+    tr = test_relief_sizing_adapter_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [RELIEF-SIZING-ADAPTER-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"

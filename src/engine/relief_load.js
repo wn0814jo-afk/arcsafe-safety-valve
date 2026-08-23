@@ -84,28 +84,66 @@ function getComputableScenarioIds() {
     .map(s => s.id);
 }
 
+// ════════════════════════════════════════════════════════════════
+//  C-4.8A — Unit/Selector Contract
+//  §5.11(m³/h)·§5.13(m²)이 §5.1/5.6/5.7/5.8/5.12(kg/h)와 같은
+//  숫자축(max 비교)에 섞이면 안 된다는 원칙(원칙 3)을 selector
+//  레벨에서 명시적으로 강제한다. 물성 변환(밀도 등)으로 단위를
+//  맞추는 시도는 하지 않는다 — 그런 변환 자체가 여기 있으면 안 됨.
+// ════════════════════════════════════════════════════════════════
+const RELIEF_LOAD_QUANTITY = Object.freeze({
+  MASS_FLOW:   "MASS_FLOW",    // kg/h — governing load 후보
+  VOLUME_FLOW: "VOLUME_FLOW",  // m3/h — §5.11, governing 후보 아님(보존만)
+  AREA:        "AREA",         // m2   — §5.13, governing 후보 아님(보존만)
+});
+
+// unit 문자열만으로 quantity를 분류한다 — scenarioId로 분류하지 않는
+// 이유는 unit 필드 자체가 감사 가능한 단일 진실 소스여야 하기 때문
+// (계산함수가 나중에 바뀌어도 selector가 unit을 직접 보고 판단하게).
+// 인식하지 못하는 unit은 절대 MASS_FLOW로 암묵 처리하지 않는다.
+function classifyReliefLoadQuantity(unit) {
+  if (unit === "kg/h") return RELIEF_LOAD_QUANTITY.MASS_FLOW;
+  if (unit === "m3/h") return RELIEF_LOAD_QUANTITY.VOLUME_FLOW;
+  if (unit === "m2")   return RELIEF_LOAD_QUANTITY.AREA;
+  return null; // UNRECOGNIZED_QUANTITY — 호출부에서 명시 처리
+}
+
 // ── §6: 여러 시나리오의 소요분출량 W 중 최댓값을 배출용량으로 선정 ──
 // 원문: 배출용량은 §5에서 산출한 시나리오별 소요분출량 중 가장 큰
 // 값으로 한다. 이 함수는 순수 함수이며 시나리오 계산 로직과 섞이지
 // 않는다(calculateReliefLoadScenario는 C-4.1~C-4.7에서 개별 구현).
 //
-// scenarioResults 배열의 각 원소는 다음 계약(shape)을 따른다:
-//   {
-//     scenarioId: string,                              // taxonomy id
-//     status: "OK" | "NOT_APPLICABLE" | "INSUFFICIENT_INPUT",
-//     W: number|null,                                   // kg/h, status "OK"일 때만 유효
-//     unit: "kg/h",
-//     inputs: object,                                   // 계산에 쓰인 입력값 원본(재현성)
-//     formula: string,                                  // 계산식 설명(감사 근거)
-//     source: string,                                   // KOSHA 조항 출처
-//   }
-// 반환값은 governing 시나리오만 남기지 않고 전체 시나리오 결과를
-// allScenarios로 그대로 보존한다 — 개별 W가 사라지면 안 된다는
-// 원칙(Snapshot이 이 배열 전체를 그대로 저장할 것을 전제로 한다).
+// scenarioResults 배열의 각 원소는 §5.1/5.6/5.7/5.8/5.12 계약
+// (status:"OK", W, unit:"kg/h") 또는 §5.11/5.13 계약(status:
+// "COMPUTABLE"/"NEEDS_ENGINEERING_DECISION"/"NOT_APPLICABLE",
+// value 또는 requiredOrificeArea_m2, unit:"m3/h"|"m2")을 섞어서
+// 받을 수 있다 — quantity가 MASS_FLOW가 아닌 결과는 governing 후보
+// 에서 제외하되 allScenarios에는 원본 그대로 보존한다(감사 가능성
+// 원칙). 제외 사실 자체도 quantityAudit 배열로 남긴다.
 function selectGoverningReliefLoad(scenarioResults) {
   const results = Array.isArray(scenarioResults) ? scenarioResults : [];
-  const valid = results.filter(r =>
-    r && r.status === "OK" && typeof r.W === "number" && isFinite(r.W) && r.W > 0);
+
+  const quantityAudit = results.map(r => {
+    const scenarioId = r && r.scenarioId != null ? r.scenarioId : null;
+    const unit = r && r.unit;
+    const quantity = classifyReliefLoadQuantity(unit);
+    let includedInGoverningSelection = false;
+    let exclusionReason = null;
+
+    if (quantity === null) {
+      exclusionReason = "UNRECOGNIZED_QUANTITY";
+    } else if (quantity !== RELIEF_LOAD_QUANTITY.MASS_FLOW) {
+      exclusionReason = "INCOMPATIBLE_QUANTITY";
+    } else if (!(r && r.status === "OK" && typeof r.W === "number" && isFinite(r.W) && r.W > 0)) {
+      exclusionReason = "NOT_A_VALID_MASS_FLOW_CANDIDATE";
+    } else {
+      includedInGoverningSelection = true;
+    }
+
+    return { scenarioId, quantity, includedInGoverningSelection, exclusionReason };
+  });
+
+  const valid = results.filter((r, i) => quantityAudit[i].includedInGoverningSelection);
 
   if (valid.length === 0) {
     return {
@@ -114,6 +152,7 @@ function selectGoverningReliefLoad(scenarioResults) {
       governingW: null,
       unit: "kg/h",
       allScenarios: results,
+      quantityAudit,
     };
   }
 
@@ -137,6 +176,44 @@ function selectGoverningReliefLoad(scenarioResults) {
     governingW: governing.W,
     unit: "kg/h",
     allScenarios: results,
+    quantityAudit,
+  };
+}
+
+// ════════════════════════════════════════════════════════════════
+//  C-4.8B — RELIEF-SIZING-ADAPTER-001
+//  selectGoverningReliefLoad()의 결과를 api520Engine()이 받을 수 있는
+//  형태({valid, W, unit})로 변환하는 단일 경계. 이 함수 밖에서 W를
+//  임의로 생성/변환/추정하지 않는다. 실패 시 조용히 다른 값으로
+//  대체하지 않고 명확한 사유와 함께 valid:false를 반환한다 — 호출부
+//  (api520Engine)는 이 valid:false를 manual W로 조용히 fallback하는
+//  용도로 쓰면 안 되고, 그대로 에러를 반환해야 한다(원칙: 자동 fallback 금지).
+function buildReliefSizingInput(selectorResult) {
+  if (!selectorResult || typeof selectorResult !== "object") {
+    return { valid: false, reason: "NO_SELECTOR_RESULT" };
+  }
+  if (selectorResult.verdict !== "OK") {
+    // INSUFFICIENT_INPUT 등 — governing MASS_FLOW 후보가 없는 상태.
+    return { valid: false, reason: "NO_GOVERNING_SCENARIO", verdict: selectorResult.verdict };
+  }
+  if (selectorResult.unit !== "kg/h") {
+    return { valid: false, reason: "INVALID_UNIT", unit: selectorResult.unit ?? null };
+  }
+  const w = selectorResult.governingW;
+  if (typeof w !== "number" || !isFinite(w) || w <= 0) {
+    return { valid: false, reason: "INVALID_VALUE", governingW: w ?? null };
+  }
+  return {
+    valid: true,
+    W: w,
+    unit: "kg/h",
+    governingScenarioId: selectorResult.governingScenarioId,
+    // provenance — Snapshot.reliefLoad로 그대로 흘러갈 감사 근거.
+    // selectorResult 원본은 참조만 하고 변형하지 않는다(불변성).
+    provenance: {
+      allScenarios: selectorResult.allScenarios,
+      quantityAudit: selectorResult.quantityAudit,
+    },
   };
 }
 

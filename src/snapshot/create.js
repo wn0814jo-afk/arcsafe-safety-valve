@@ -2,9 +2,15 @@
 //  3-레이어 + assetRefs + workflowDecision trace
 // ════════════════════════════════════════════════════════════════
 
-function _hashResult(inputs, result) {
+function _hashResult(inputs, result, reliefLoad) {
+  // RELIEF-SIZING-ADAPTER-001: reliefLoad(§5 시나리오/거버닝/근거)가
+  // 존재하면 반드시 hash에 포함한다 — W 값이 같아도 근거 시나리오
+  // 데이터가 바뀌면 다른 결과로 간주해야 한다(SSOT 원칙, provenance
+  // 유실 방지). reliefLoad가 없으면(undefined) 기존 해시와 100% 동일
+  // (하위호환 — 기존 골든 픽스처의 hash가 이 변경으로 달라지지 않음).
   const str = JSON.stringify({
-    inputs, areaCm2: result.areaCm2, selected: result.selected?.letter
+    inputs, areaCm2: result.areaCm2, selected: result.selected?.letter,
+    ...(reliefLoad !== undefined ? { reliefLoad } : {}),
   });
   let h = 0;
   for (let i = 0; i < str.length; i++) {
@@ -49,7 +55,7 @@ const WORKFLOW_TRIGGER_FIELDS_SNAPSHOT = [
 ];
 
 function createSnapshot({ caseId, valveTag, deviceType, inputs, engineResult,
-                          equipment, dischargeSystem, workflowDecision }) {
+                          equipment, dischargeSystem, workflowDecision, reliefLoad }) {
   if (ENGINE_VERSION !== SNAPSHOT_ENGINE_VERSION) {
     throw new Error(
       `INVALID_STATE: engine version mismatch. ` +
@@ -57,7 +63,7 @@ function createSnapshot({ caseId, valveTag, deviceType, inputs, engineResult,
     );
   }
 
-  const resultHash       = _hashResult(inputs, engineResult);
+  const resultHash       = _hashResult(inputs, engineResult, reliefLoad);
   const assetFingerprint = _assetHash(equipment, dischargeSystem);
   // evaluatedAt은 Snapshot 생성 시점에서 결정 — Engine이 아닌 증거 패키지의 책임
   const evaluatedAt      = new Date().toISOString();
@@ -109,6 +115,10 @@ function createSnapshot({ caseId, valveTag, deviceType, inputs, engineResult,
     result:          Object.freeze({ ...engineResult }),
     evidence:        Object.freeze(buildEvidence(engineResult.stepData)),
     workflow:        workflowDecision?.state || "INSPECTION",
+    // RELIEF-SIZING-ADAPTER-001: §5 시나리오/거버닝/근거 — 제공되지
+    // 않으면(현재 UI 미연결 상태) null. Report는 이 필드만 읽고 절대
+    // 재계산하지 않는다(Engine → Snapshot.reliefLoad → Report 단방향).
+    reliefLoad:      reliefLoad !== undefined ? Object.freeze(JSON.parse(JSON.stringify(reliefLoad))) : null,
   };
   // snapshotHash는 id/result_hash/assetFingerprint/evaluatedAt/workflow가 확정된 후 계산
   const snapshotHash = _snapHash(

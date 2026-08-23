@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:bf28a6cf5813\n\n' +
+    box.textContent = '[ERROR] BUILD:2546420b1406\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:bf28a6cf5813\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:2546420b1406\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:bf28a6cf5813 | 2026-08-21T08:37:57Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:2546420b1406 | 2026-08-23T14:16:42Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "bf28a6cf5813";
+const __BUILD_HASH__ = "2546420b1406";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -138,6 +138,29 @@ const R201_DEFAULTS = {
 //   리팩터링 전후 회귀 테스트로 동일함을 확인(REFACTOR-REGRESSION-001).
 //   sizing(P1abs/Required Area/Orifice/Kd/Kb/Z/W)은 inlet loss 판정과
 //   완전히 독립 — NO-GO/INSUFFICIENT_INPUT이어도 자동 변경하지 않는다.
+// ENGINE_VERSION 1.6.0 — RELIEF-SIZING-ADAPTER-001 (C-4.8B, 계약 확장이지만
+//   버전 유지 — 아래 "버전 결정" 참고)
+//   api520Engine()에 4번째 선택적 인자 reliefLoadAdapter를 추가했다.
+//   전달하지 않으면(undefined/null) 기존 동작과 100% 동일 — 기존 모든
+//   호출부(CaseView.jsx는 이번 단계에서 UI 미변경, 3-인자 그대로 호출)와
+//   기존 golden fixture는 이 변경의 영향을 받지 않는다.
+//   전달된 경우: reliefLoadAdapter.valid가 false이면 즉시 에러 반환
+//   (INSUFFICIENT_INPUT류) — inp.W로 조용히 fallback하지 않는다. valid가
+//   true이면 sizing 전체가 reliefLoadAdapter.W(governing relief load)를
+//   사용하고, 어떤 W가 실제 sizing에 쓰였는지(wSource) trace/stepData에
+//   명시적으로 남긴다. inp.W(수동 입력)는 validateInputs 통과를 위해
+//   여전히 숫자여야 하지만, governing 경로가 활성화되면 sizing 계산에는
+//   쓰이지 않는다 — 두 경로가 섞이지 않도록 stepData.reliefLoadSource에
+//   manualW/governingW/source를 모두 구분해 기록한다.
+//   버전 결정: ENGINE_VERSION은 이번 단계에서 올리지 않는다 — 기존
+//   호출자 관점에서 입력 스키마(3-인자 호출)와 출력 스키마가 모두
+//   기존과 동일(신규 4번째 인자는 optional이고 stepData/trace에 필드가
+//   "추가"될 뿐 기존 필드를 바꾸지 않음)이기 때문에 하위호환 기능
+//   추가로 판단한다. C-1/C-2/C-3처럼 validateInputs가 새 필수/검증
+//   필드를 요구하게 되는 시점(예: C-4.8C에서 orifice adequacy까지
+//   연결하며 계약이 실질적으로 바뀔 경우)에 버전 상향 여부를 다시
+//   판단한다 — RELIEF-SIZING-ADAPTER-001의 ENGINE_VERSION_DECISION
+//   테스트로 이 판단 자체를 명시 고정.
 const ENGINE_VERSION = "1.6.0";
 
 // ── TRACE-SCHEMA-001: Calculation Trace 스키마 고정 ────────────
@@ -363,13 +386,29 @@ function validateInputs(inp) {
 }
 
 // Engine — 입력만 받고 출력만 반환. 외부 state 접근 금지.
-function api520Engine(inp, deviceType, inletPiping) {
+// reliefLoadAdapter: buildReliefSizingInput()의 반환값(선택). 전달하지
+// 않으면 기존 동작(수동 W)과 100% 동일 — 하위호환.
+function api520Engine(inp, deviceType, inletPiping, reliefLoadAdapter) {
   const valid = validateInputs(inp);
   if (!valid.ok) return { valid: false, error: valid };
 
-  const { W, P1, P2, T, M, k, Kd, Kb, mawp, OP, Z } = Object.fromEntries(
+  // RELIEF-SIZING-ADAPTER-001: reliefLoadAdapter가 전달되면 그 값이
+  // sizing에 쓰인다. adapter가 invalid면(governing 시나리오 없음/단위
+  // 불일치/값 무효 등) 절대 조용히 inp.W로 대체하지 않고 즉시 에러를
+  // 반환한다 — "계산 실패 → 수동값으로 자동 대체"는 금지된 패턴.
+  const hasReliefLoadAdapter = reliefLoadAdapter !== undefined && reliefLoadAdapter !== null;
+  if (hasReliefLoadAdapter && !reliefLoadAdapter.valid) {
+    return {
+      valid: false,
+      error: { field: "reliefLoad", reason: reliefLoadAdapter.reason || "INVALID_RELIEF_LOAD_INPUT" },
+    };
+  }
+
+  const { W: manualW, P1, P2, T, M, k, Kd, Kb, mawp, OP, Z } = Object.fromEntries(
     Object.entries(inp).map(([key, v]) => [key, Number(v)])
   );
+  const wSource = hasReliefLoadAdapter ? "GOVERNING_RELIEF_LOAD" : "MANUAL_INPUT";
+  const W = hasReliefLoadAdapter ? reliefLoadAdapter.W : manualW;
   // VALVE-TYPE-001: valveType은 문자열 Case 입력 — 위 숫자 변환 대상에서 제외.
   const valveType = String(inp.valveType || "SPRING").toUpperCase();
   const allowableBackpressureRatio = getAllowableBackpressureRatio(valveType);
@@ -451,6 +490,16 @@ function api520Engine(inp, deviceType, inletPiping) {
   const trace = [
     { step: "COMPRESSIBILITY_Z", value: Z, unit: "",
       formula: Z === 1.0 ? "User Input (default 1.00)" : "User Input", inputs: { Z } },
+    { step: "RELIEF_LOAD_W_SOURCE", value: W, unit: "kg/h",
+      formula: wSource === "GOVERNING_RELIEF_LOAD"
+        ? "W = buildReliefSizingInput(selector 결과: §5 scenarios → governing MASS_FLOW).W — 수동 입력 미사용"
+        : "W = User Input (Case.W) — §5 관련 scenario 미연결",
+      inputs: {
+        source: wSource,
+        manualW,
+        governingW: hasReliefLoadAdapter ? reliefLoadAdapter.W : null,
+        governingScenarioId: hasReliefLoadAdapter ? reliefLoadAdapter.governingScenarioId : null,
+      } },
     { step: "SET_PRESSURE",     value: Pset,   unit: "barg", formula: "Equipment.setPressure" },
     { step: "RELIEVING_PRESSURE", value: P1abs, unit: "bara",
       formula: "P1abs = Pset×(1+OP/100) + Patm", inputs: { Pset, OP, Patm: API_CONST.ATM_PRESSURE_BAR } },
@@ -491,6 +540,14 @@ function api520Engine(inp, deviceType, inletPiping) {
     accumulation: { fireScenario, valveCount, allowableRatio: allowableAccumulationRatio,
       actualRatio: actualAccumulationRatio, ok: accumulationOK, OP, source: API_CONST.ACCUMULATION_POLICY_SOURCE },
     inletLoss,
+    // RELIEF-SIZING-ADAPTER-001: sizing에 실제로 쓰인 W가 수동입력인지
+    // governing relief load인지 — Report/PDF가 재계산 없이 이 값만 읽는다.
+    reliefLoadSource: {
+      source: wSource,
+      manualW,
+      governingW: hasReliefLoadAdapter ? reliefLoadAdapter.W : null,
+      governingScenarioId: hasReliefLoadAdapter ? reliefLoadAdapter.governingScenarioId : null,
+    },
   };
 
   const verdict = computeAdequacyVerdict(checklist, dataGaps);
@@ -586,28 +643,66 @@ function getComputableScenarioIds() {
     .map(s => s.id);
 }
 
+// ════════════════════════════════════════════════════════════════
+//  C-4.8A — Unit/Selector Contract
+//  §5.11(m³/h)·§5.13(m²)이 §5.1/5.6/5.7/5.8/5.12(kg/h)와 같은
+//  숫자축(max 비교)에 섞이면 안 된다는 원칙(원칙 3)을 selector
+//  레벨에서 명시적으로 강제한다. 물성 변환(밀도 등)으로 단위를
+//  맞추는 시도는 하지 않는다 — 그런 변환 자체가 여기 있으면 안 됨.
+// ════════════════════════════════════════════════════════════════
+const RELIEF_LOAD_QUANTITY = Object.freeze({
+  MASS_FLOW:   "MASS_FLOW",    // kg/h — governing load 후보
+  VOLUME_FLOW: "VOLUME_FLOW",  // m3/h — §5.11, governing 후보 아님(보존만)
+  AREA:        "AREA",         // m2   — §5.13, governing 후보 아님(보존만)
+});
+
+// unit 문자열만으로 quantity를 분류한다 — scenarioId로 분류하지 않는
+// 이유는 unit 필드 자체가 감사 가능한 단일 진실 소스여야 하기 때문
+// (계산함수가 나중에 바뀌어도 selector가 unit을 직접 보고 판단하게).
+// 인식하지 못하는 unit은 절대 MASS_FLOW로 암묵 처리하지 않는다.
+function classifyReliefLoadQuantity(unit) {
+  if (unit === "kg/h") return RELIEF_LOAD_QUANTITY.MASS_FLOW;
+  if (unit === "m3/h") return RELIEF_LOAD_QUANTITY.VOLUME_FLOW;
+  if (unit === "m2")   return RELIEF_LOAD_QUANTITY.AREA;
+  return null; // UNRECOGNIZED_QUANTITY — 호출부에서 명시 처리
+}
+
 // ── §6: 여러 시나리오의 소요분출량 W 중 최댓값을 배출용량으로 선정 ──
 // 원문: 배출용량은 §5에서 산출한 시나리오별 소요분출량 중 가장 큰
 // 값으로 한다. 이 함수는 순수 함수이며 시나리오 계산 로직과 섞이지
 // 않는다(calculateReliefLoadScenario는 C-4.1~C-4.7에서 개별 구현).
 //
-// scenarioResults 배열의 각 원소는 다음 계약(shape)을 따른다:
-//   {
-//     scenarioId: string,                              // taxonomy id
-//     status: "OK" | "NOT_APPLICABLE" | "INSUFFICIENT_INPUT",
-//     W: number|null,                                   // kg/h, status "OK"일 때만 유효
-//     unit: "kg/h",
-//     inputs: object,                                   // 계산에 쓰인 입력값 원본(재현성)
-//     formula: string,                                  // 계산식 설명(감사 근거)
-//     source: string,                                   // KOSHA 조항 출처
-//   }
-// 반환값은 governing 시나리오만 남기지 않고 전체 시나리오 결과를
-// allScenarios로 그대로 보존한다 — 개별 W가 사라지면 안 된다는
-// 원칙(Snapshot이 이 배열 전체를 그대로 저장할 것을 전제로 한다).
+// scenarioResults 배열의 각 원소는 §5.1/5.6/5.7/5.8/5.12 계약
+// (status:"OK", W, unit:"kg/h") 또는 §5.11/5.13 계약(status:
+// "COMPUTABLE"/"NEEDS_ENGINEERING_DECISION"/"NOT_APPLICABLE",
+// value 또는 requiredOrificeArea_m2, unit:"m3/h"|"m2")을 섞어서
+// 받을 수 있다 — quantity가 MASS_FLOW가 아닌 결과는 governing 후보
+// 에서 제외하되 allScenarios에는 원본 그대로 보존한다(감사 가능성
+// 원칙). 제외 사실 자체도 quantityAudit 배열로 남긴다.
 function selectGoverningReliefLoad(scenarioResults) {
   const results = Array.isArray(scenarioResults) ? scenarioResults : [];
-  const valid = results.filter(r =>
-    r && r.status === "OK" && typeof r.W === "number" && isFinite(r.W) && r.W > 0);
+
+  const quantityAudit = results.map(r => {
+    const scenarioId = r && r.scenarioId != null ? r.scenarioId : null;
+    const unit = r && r.unit;
+    const quantity = classifyReliefLoadQuantity(unit);
+    let includedInGoverningSelection = false;
+    let exclusionReason = null;
+
+    if (quantity === null) {
+      exclusionReason = "UNRECOGNIZED_QUANTITY";
+    } else if (quantity !== RELIEF_LOAD_QUANTITY.MASS_FLOW) {
+      exclusionReason = "INCOMPATIBLE_QUANTITY";
+    } else if (!(r && r.status === "OK" && typeof r.W === "number" && isFinite(r.W) && r.W > 0)) {
+      exclusionReason = "NOT_A_VALID_MASS_FLOW_CANDIDATE";
+    } else {
+      includedInGoverningSelection = true;
+    }
+
+    return { scenarioId, quantity, includedInGoverningSelection, exclusionReason };
+  });
+
+  const valid = results.filter((r, i) => quantityAudit[i].includedInGoverningSelection);
 
   if (valid.length === 0) {
     return {
@@ -616,6 +711,7 @@ function selectGoverningReliefLoad(scenarioResults) {
       governingW: null,
       unit: "kg/h",
       allScenarios: results,
+      quantityAudit,
     };
   }
 
@@ -639,6 +735,44 @@ function selectGoverningReliefLoad(scenarioResults) {
     governingW: governing.W,
     unit: "kg/h",
     allScenarios: results,
+    quantityAudit,
+  };
+}
+
+// ════════════════════════════════════════════════════════════════
+//  C-4.8B — RELIEF-SIZING-ADAPTER-001
+//  selectGoverningReliefLoad()의 결과를 api520Engine()이 받을 수 있는
+//  형태({valid, W, unit})로 변환하는 단일 경계. 이 함수 밖에서 W를
+//  임의로 생성/변환/추정하지 않는다. 실패 시 조용히 다른 값으로
+//  대체하지 않고 명확한 사유와 함께 valid:false를 반환한다 — 호출부
+//  (api520Engine)는 이 valid:false를 manual W로 조용히 fallback하는
+//  용도로 쓰면 안 되고, 그대로 에러를 반환해야 한다(원칙: 자동 fallback 금지).
+function buildReliefSizingInput(selectorResult) {
+  if (!selectorResult || typeof selectorResult !== "object") {
+    return { valid: false, reason: "NO_SELECTOR_RESULT" };
+  }
+  if (selectorResult.verdict !== "OK") {
+    // INSUFFICIENT_INPUT 등 — governing MASS_FLOW 후보가 없는 상태.
+    return { valid: false, reason: "NO_GOVERNING_SCENARIO", verdict: selectorResult.verdict };
+  }
+  if (selectorResult.unit !== "kg/h") {
+    return { valid: false, reason: "INVALID_UNIT", unit: selectorResult.unit ?? null };
+  }
+  const w = selectorResult.governingW;
+  if (typeof w !== "number" || !isFinite(w) || w <= 0) {
+    return { valid: false, reason: "INVALID_VALUE", governingW: w ?? null };
+  }
+  return {
+    valid: true,
+    W: w,
+    unit: "kg/h",
+    governingScenarioId: selectorResult.governingScenarioId,
+    // provenance — Snapshot.reliefLoad로 그대로 흘러갈 감사 근거.
+    // selectorResult 원본은 참조만 하고 변형하지 않는다(불변성).
+    provenance: {
+      allScenarios: selectorResult.allScenarios,
+      quantityAudit: selectorResult.quantityAudit,
+    },
   };
 }
 
@@ -1575,9 +1709,15 @@ function buildEvidence(sd) {
 //  3-레이어 + assetRefs + workflowDecision trace
 // ════════════════════════════════════════════════════════════════
 
-function _hashResult(inputs, result) {
+function _hashResult(inputs, result, reliefLoad) {
+  // RELIEF-SIZING-ADAPTER-001: reliefLoad(§5 시나리오/거버닝/근거)가
+  // 존재하면 반드시 hash에 포함한다 — W 값이 같아도 근거 시나리오
+  // 데이터가 바뀌면 다른 결과로 간주해야 한다(SSOT 원칙, provenance
+  // 유실 방지). reliefLoad가 없으면(undefined) 기존 해시와 100% 동일
+  // (하위호환 — 기존 골든 픽스처의 hash가 이 변경으로 달라지지 않음).
   const str = JSON.stringify({
-    inputs, areaCm2: result.areaCm2, selected: result.selected?.letter
+    inputs, areaCm2: result.areaCm2, selected: result.selected?.letter,
+    ...(reliefLoad !== undefined ? { reliefLoad } : {}),
   });
   let h = 0;
   for (let i = 0; i < str.length; i++) {
@@ -1622,7 +1762,7 @@ const WORKFLOW_TRIGGER_FIELDS_SNAPSHOT = [
 ];
 
 function createSnapshot({ caseId, valveTag, deviceType, inputs, engineResult,
-                          equipment, dischargeSystem, workflowDecision }) {
+                          equipment, dischargeSystem, workflowDecision, reliefLoad }) {
   if (ENGINE_VERSION !== SNAPSHOT_ENGINE_VERSION) {
     throw new Error(
       `INVALID_STATE: engine version mismatch. ` +
@@ -1630,7 +1770,7 @@ function createSnapshot({ caseId, valveTag, deviceType, inputs, engineResult,
     );
   }
 
-  const resultHash       = _hashResult(inputs, engineResult);
+  const resultHash       = _hashResult(inputs, engineResult, reliefLoad);
   const assetFingerprint = _assetHash(equipment, dischargeSystem);
   // evaluatedAt은 Snapshot 생성 시점에서 결정 — Engine이 아닌 증거 패키지의 책임
   const evaluatedAt      = new Date().toISOString();
@@ -1682,6 +1822,10 @@ function createSnapshot({ caseId, valveTag, deviceType, inputs, engineResult,
     result:          Object.freeze({ ...engineResult }),
     evidence:        Object.freeze(buildEvidence(engineResult.stepData)),
     workflow:        workflowDecision?.state || "INSPECTION",
+    // RELIEF-SIZING-ADAPTER-001: §5 시나리오/거버닝/근거 — 제공되지
+    // 않으면(현재 UI 미연결 상태) null. Report는 이 필드만 읽고 절대
+    // 재계산하지 않는다(Engine → Snapshot.reliefLoad → Report 단방향).
+    reliefLoad:      reliefLoad !== undefined ? Object.freeze(JSON.parse(JSON.stringify(reliefLoad))) : null,
   };
   // snapshotHash는 id/result_hash/assetFingerprint/evaluatedAt/workflow가 확정된 후 계산
   const snapshotHash = _snapHash(

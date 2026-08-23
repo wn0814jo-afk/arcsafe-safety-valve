@@ -50,6 +50,29 @@
 //   리팩터링 전후 회귀 테스트로 동일함을 확인(REFACTOR-REGRESSION-001).
 //   sizing(P1abs/Required Area/Orifice/Kd/Kb/Z/W)은 inlet loss 판정과
 //   완전히 독립 — NO-GO/INSUFFICIENT_INPUT이어도 자동 변경하지 않는다.
+// ENGINE_VERSION 1.6.0 — RELIEF-SIZING-ADAPTER-001 (C-4.8B, 계약 확장이지만
+//   버전 유지 — 아래 "버전 결정" 참고)
+//   api520Engine()에 4번째 선택적 인자 reliefLoadAdapter를 추가했다.
+//   전달하지 않으면(undefined/null) 기존 동작과 100% 동일 — 기존 모든
+//   호출부(CaseView.jsx는 이번 단계에서 UI 미변경, 3-인자 그대로 호출)와
+//   기존 golden fixture는 이 변경의 영향을 받지 않는다.
+//   전달된 경우: reliefLoadAdapter.valid가 false이면 즉시 에러 반환
+//   (INSUFFICIENT_INPUT류) — inp.W로 조용히 fallback하지 않는다. valid가
+//   true이면 sizing 전체가 reliefLoadAdapter.W(governing relief load)를
+//   사용하고, 어떤 W가 실제 sizing에 쓰였는지(wSource) trace/stepData에
+//   명시적으로 남긴다. inp.W(수동 입력)는 validateInputs 통과를 위해
+//   여전히 숫자여야 하지만, governing 경로가 활성화되면 sizing 계산에는
+//   쓰이지 않는다 — 두 경로가 섞이지 않도록 stepData.reliefLoadSource에
+//   manualW/governingW/source를 모두 구분해 기록한다.
+//   버전 결정: ENGINE_VERSION은 이번 단계에서 올리지 않는다 — 기존
+//   호출자 관점에서 입력 스키마(3-인자 호출)와 출력 스키마가 모두
+//   기존과 동일(신규 4번째 인자는 optional이고 stepData/trace에 필드가
+//   "추가"될 뿐 기존 필드를 바꾸지 않음)이기 때문에 하위호환 기능
+//   추가로 판단한다. C-1/C-2/C-3처럼 validateInputs가 새 필수/검증
+//   필드를 요구하게 되는 시점(예: C-4.8C에서 orifice adequacy까지
+//   연결하며 계약이 실질적으로 바뀔 경우)에 버전 상향 여부를 다시
+//   판단한다 — RELIEF-SIZING-ADAPTER-001의 ENGINE_VERSION_DECISION
+//   테스트로 이 판단 자체를 명시 고정.
 const ENGINE_VERSION = "1.6.0";
 
 // ── TRACE-SCHEMA-001: Calculation Trace 스키마 고정 ────────────
@@ -275,13 +298,29 @@ function validateInputs(inp) {
 }
 
 // Engine — 입력만 받고 출력만 반환. 외부 state 접근 금지.
-function api520Engine(inp, deviceType, inletPiping) {
+// reliefLoadAdapter: buildReliefSizingInput()의 반환값(선택). 전달하지
+// 않으면 기존 동작(수동 W)과 100% 동일 — 하위호환.
+function api520Engine(inp, deviceType, inletPiping, reliefLoadAdapter) {
   const valid = validateInputs(inp);
   if (!valid.ok) return { valid: false, error: valid };
 
-  const { W, P1, P2, T, M, k, Kd, Kb, mawp, OP, Z } = Object.fromEntries(
+  // RELIEF-SIZING-ADAPTER-001: reliefLoadAdapter가 전달되면 그 값이
+  // sizing에 쓰인다. adapter가 invalid면(governing 시나리오 없음/단위
+  // 불일치/값 무효 등) 절대 조용히 inp.W로 대체하지 않고 즉시 에러를
+  // 반환한다 — "계산 실패 → 수동값으로 자동 대체"는 금지된 패턴.
+  const hasReliefLoadAdapter = reliefLoadAdapter !== undefined && reliefLoadAdapter !== null;
+  if (hasReliefLoadAdapter && !reliefLoadAdapter.valid) {
+    return {
+      valid: false,
+      error: { field: "reliefLoad", reason: reliefLoadAdapter.reason || "INVALID_RELIEF_LOAD_INPUT" },
+    };
+  }
+
+  const { W: manualW, P1, P2, T, M, k, Kd, Kb, mawp, OP, Z } = Object.fromEntries(
     Object.entries(inp).map(([key, v]) => [key, Number(v)])
   );
+  const wSource = hasReliefLoadAdapter ? "GOVERNING_RELIEF_LOAD" : "MANUAL_INPUT";
+  const W = hasReliefLoadAdapter ? reliefLoadAdapter.W : manualW;
   // VALVE-TYPE-001: valveType은 문자열 Case 입력 — 위 숫자 변환 대상에서 제외.
   const valveType = String(inp.valveType || "SPRING").toUpperCase();
   const allowableBackpressureRatio = getAllowableBackpressureRatio(valveType);
@@ -363,6 +402,16 @@ function api520Engine(inp, deviceType, inletPiping) {
   const trace = [
     { step: "COMPRESSIBILITY_Z", value: Z, unit: "",
       formula: Z === 1.0 ? "User Input (default 1.00)" : "User Input", inputs: { Z } },
+    { step: "RELIEF_LOAD_W_SOURCE", value: W, unit: "kg/h",
+      formula: wSource === "GOVERNING_RELIEF_LOAD"
+        ? "W = buildReliefSizingInput(selector 결과: §5 scenarios → governing MASS_FLOW).W — 수동 입력 미사용"
+        : "W = User Input (Case.W) — §5 관련 scenario 미연결",
+      inputs: {
+        source: wSource,
+        manualW,
+        governingW: hasReliefLoadAdapter ? reliefLoadAdapter.W : null,
+        governingScenarioId: hasReliefLoadAdapter ? reliefLoadAdapter.governingScenarioId : null,
+      } },
     { step: "SET_PRESSURE",     value: Pset,   unit: "barg", formula: "Equipment.setPressure" },
     { step: "RELIEVING_PRESSURE", value: P1abs, unit: "bara",
       formula: "P1abs = Pset×(1+OP/100) + Patm", inputs: { Pset, OP, Patm: API_CONST.ATM_PRESSURE_BAR } },
@@ -403,6 +452,14 @@ function api520Engine(inp, deviceType, inletPiping) {
     accumulation: { fireScenario, valveCount, allowableRatio: allowableAccumulationRatio,
       actualRatio: actualAccumulationRatio, ok: accumulationOK, OP, source: API_CONST.ACCUMULATION_POLICY_SOURCE },
     inletLoss,
+    // RELIEF-SIZING-ADAPTER-001: sizing에 실제로 쓰인 W가 수동입력인지
+    // governing relief load인지 — Report/PDF가 재계산 없이 이 값만 읽는다.
+    reliefLoadSource: {
+      source: wSource,
+      manualW,
+      governingW: hasReliefLoadAdapter ? reliefLoadAdapter.W : null,
+      governingScenarioId: hasReliefLoadAdapter ? reliefLoadAdapter.governingScenarioId : null,
+    },
   };
 
   const verdict = computeAdequacyVerdict(checklist, dataGaps);
