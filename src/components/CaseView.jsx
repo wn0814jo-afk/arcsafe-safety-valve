@@ -1,5 +1,18 @@
 //  CASE VIEW
 // ════════════════════════════════════════════════════════════════
+
+// ── RELIEF LOAD — MVP 대상 4개 시나리오 메타(라벨 + 계산 함수 매핑) ──
+// C-4.9 범위: §5.1/§5.6/§5.7/§5.8만. §5.11/§5.12/§5.13은 governing
+// 후보가 아니거나(§5.11/§5.13) UI 복잡도가 높아(§5.12) 이번 단계에서
+// 제외 — relief_load.js의 계산 함수 자체는 이미 구현되어 있으나
+// 이 UI에서 호출하지 않는다.
+const RELIEF_LOAD_SCENARIO_META = {
+  OUTLET_BLOCKED:     { label: "출구 차단",           section: "§5.1", calc: calculateOutletBlockedScenario },
+  OVERFILLING:         { label: "과충전",               section: "§5.6", calc: calculateOverfillingScenario },
+  CONTROL_VALVE_FAIL:  { label: "자동제어밸브 고장",    section: "§5.7", calc: calculateControlValveFailureScenario },
+  ABNORMAL_HEAT_VAPOR: { label: "비정상 열/증기 유입",  section: "§5.8", calc: calculateAbnormalHeatVaporScenario },
+};
+
 function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onApprovalUpdate }) {
   const equipment = caseData.equipment || null;
 
@@ -33,14 +46,79 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   const [snapshot, setSnapshot] = useState(caseData.latestSnap || null);
   const [approvals, setApprovals] = useState(caseData.approvals || []);
 
+  // ── RELIEF-LOAD-UI-001: §5 시나리오 입력 상태 ──
+  // reliefLoadScenarioType === null 이면 "미사용"(기존 Manual W 그대로).
+  // reliefLoadScenarioInput은 "현재 선택된 시나리오 하나"만을 위한 원시
+  // 입력 객체 — 시나리오를 바꾸면 반드시 빈 객체로 리셋한다(원칙: 이전
+  // 시나리오의 입력이 새 시나리오 계산에 암묵적으로 섞이면 안 됨. state
+  // collision 방지, RELIEF-LOAD-UI-001의 STATE_COLLISION 계약으로 고정).
+  const [reliefLoadScenarioType,  setReliefLoadScenarioType]  = useState(null);
+  const [reliefLoadScenarioInput, setReliefLoadScenarioInput] = useState({});
+
   const handleInputChange = (key, val) => setInputs(p => ({ ...p, [key]: val }));
 
+  // 시나리오 전환 — 반드시 입력을 리셋한다(동일 타입 재클릭은 리셋하지
+  // 않음: 입력 도중 실수로 같은 버튼을 다시 눌러도 작성 중이던 값이
+  // 사라지지 않도록).
+  const handleReliefLoadScenarioTypeChange = (type) => {
+    if (type === reliefLoadScenarioType) return;
+    setReliefLoadScenarioType(type);
+    setReliefLoadScenarioInput({});
+  };
+  const handleReliefLoadScenarioInputChange = (key, val) =>
+    setReliefLoadScenarioInput(p => ({ ...p, [key]: val }));
+
+  // ── §5 scenario → selector → adapter 체인 (파생값, 매 렌더 재계산) ──
+  // 이 세 함수(calculate*Scenario/selectGoverningReliefLoad/
+  // buildReliefSizingInput)는 relief_load.js의 순수 함수다. api520Engine
+  // (실제 sizing 계산)은 여기서 절대 호출하지 않는다 — Engine은
+  // handleCalculate()에서 딱 한 번만 실행된다(Engine 이중 실행 금지).
+  // 이미 CaseView가 매 렌더 computeWorkflowState()(engine 함수)를
+  // 호출하는 기존 패턴과 동일한 층위의 파생 계산이다.
+  const reliefLoadScenarioResult = reliefLoadScenarioType
+    ? RELIEF_LOAD_SCENARIO_META[reliefLoadScenarioType].calc(reliefLoadScenarioInput)
+    : null;
+  const reliefLoadSelectorResult = reliefLoadScenarioResult
+    ? selectGoverningReliefLoad([reliefLoadScenarioResult])
+    : null;
+  const reliefLoadAdapter = reliefLoadSelectorResult
+    ? buildReliefSizingInput(reliefLoadSelectorResult)
+    : null;
+
+  // 실제 sizing에 쓰일 값이 무엇인지 — Engine의 wSource 결정 로직과
+  // 정확히 동일한 조건(reliefLoadAdapter.valid)을 그대로 반영한 표시용
+  // 파생값. 새로운 판단을 추가하는 게 아니라 Engine이 내릴 판단을
+  // 미리 보여주는 것뿐이다(계산/판정 아님).
+  const reliefLoadActive = reliefLoadScenarioType !== null;
+  const effectiveWSource = (reliefLoadActive && reliefLoadAdapter?.valid) ? "GOVERNING_RELIEF_LOAD" : "MANUAL_INPUT";
+  const effectiveW = effectiveWSource === "GOVERNING_RELIEF_LOAD" ? reliefLoadAdapter.W : inputs.W;
+
   const handleCalculate = () => {
-    const engineResult = api520Engine(inputs, deviceType, equipment?.inletPiping || null);
+    // 시나리오가 활성화됐는데 유효한 governing W가 없으면 즉시 중단—
+    // manual W로 조용히 대체하지 않는다(자동 fallback 금지 원칙).
+    // 이 가드는 InputView의 blockReason과 동일한 조건이라 정상 흐름에서는
+    // 버튼 자체가 비활성화되어 여기 도달하지 않지만, 방어적으로 다시 확인.
+    if (reliefLoadActive && !reliefLoadAdapter?.valid) {
+      alert(`Relief Load 시나리오 입력이 완료되지 않았습니다 — ${reliefLoadAdapter?.reason || "INSUFFICIENT_INPUT"}`);
+      return;
+    }
+    const adapterForEngine = reliefLoadActive ? reliefLoadAdapter : undefined;
+    const engineResult = api520Engine(inputs, deviceType, equipment?.inletPiping || null, adapterForEngine);
     if (!engineResult.valid) {
       alert(`입력 오류: ${engineResult.error.field} — ${engineResult.error.reason}`);
       return;
     }
+    // RELIEF-LOAD-UI-001: 시나리오가 활성화되어 있고 유효할 때만
+    // Snapshot에 reliefLoad를 싣는다. 미사용 Case는 이 키 자체를 아예
+    // 넘기지 않아(undefined) 기존 hash/스키마와 100% 동일하게 유지한다
+    // (createSnapshot의 하위호환 계약, RELIEF-SIZING-ADAPTER-001 참고).
+    const reliefLoadForSnapshot = (reliefLoadActive && reliefLoadAdapter.valid) ? {
+      scenarios: reliefLoadSelectorResult.allScenarios,
+      governing: reliefLoadSelectorResult.governingScenarioId,
+      quantity: "MASS_FLOW",
+      unit: "kg/h",
+      provenance: reliefLoadAdapter.provenance,
+    } : undefined;
     // Engine이 workflow 결정 — timestamp는 UI에서 주입 (Engine 순수성 유지)
     const wfDec = computeWorkflowState(null, equipment, dischargeSystem);
     const snap = createSnapshot({
@@ -52,6 +130,7 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
       equipment,
       dischargeSystem,
       workflowDecision: { ...wfDec, state: "INSPECTION" },
+      reliefLoad:       reliefLoadForSnapshot,
     });
     setSnapshot(snap);
     onSnapshotCreate(caseData.id, snap);
@@ -71,6 +150,14 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   // 사라져 "승인은 됐는데 최종 상태에는 승인 기록이 없는" 상태가 된다.
   const _buildAdvancedSnapshot = (nextState, comment) => {
     const wfDec = computeWorkflowState(snapshot, equipment, dischargeSystem);
+    // RELIEF-LOAD-UI-001 hash 정규화: snapshot.reliefLoad는 createSnapshot이
+    // 항상 null(미사용) 또는 실제 객체로 반환한다(원본 undefined 여부는
+    // 이 시점엔 이미 사라짐). 여기서 그대로 null을 다시 넘기면
+    // _hashResult가 "reliefLoad:null"을 해시에 새로 포함시켜, 애초에
+    // reliefLoad를 전혀 쓴 적 없는 Case인데도 workflow 전이 시점부터
+    // hash가 달라지는 회귀가 생긴다 — null은 undefined로 되돌려
+    // "reliefLoad를 실제로 쓴 적 있는 Case만" 해시에 포함되게 한다.
+    const reliefLoadForAdvance = snapshot.reliefLoad === null ? undefined : snapshot.reliefLoad;
     const newSnap = createSnapshot({
       caseId:           caseData.id,
       valveTag:         caseData.valveTag,
@@ -80,6 +167,7 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
       equipment,
       dischargeSystem,
       workflowDecision: { ...wfDec, state: nextState },
+      reliefLoad:       reliefLoadForAdvance,
     });
     // lastComment는 hash 계산 대상 아님 (승인/반려 사유 메모, 결정 내용 아님)
     return comment ? Object.freeze({ ...newSnap, lastComment: comment }) : newSnap;
@@ -330,7 +418,16 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
         <InputView inputs={inputs} deviceType={deviceType}
           dischargeSystem={dischargeSystem} equipment={equipment}
           onChange={handleInputChange} onDeviceChange={setDeviceType}
-          onSubmit={handleCalculate}/>
+          onSubmit={handleCalculate}
+          reliefLoadScenarioType={reliefLoadScenarioType}
+          reliefLoadScenarioInput={reliefLoadScenarioInput}
+          reliefLoadScenarioResult={reliefLoadScenarioResult}
+          reliefLoadAdapter={reliefLoadAdapter}
+          effectiveW={effectiveW}
+          effectiveWSource={effectiveWSource}
+          onReliefLoadScenarioTypeChange={handleReliefLoadScenarioTypeChange}
+          onReliefLoadScenarioInputChange={handleReliefLoadScenarioInputChange}
+        />
       )}
 
       {screen === "report" && snapshot && (

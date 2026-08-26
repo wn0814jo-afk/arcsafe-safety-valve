@@ -2,6 +2,236 @@
 //  역할: "값 입력" → "사양 결정"
 // ════════════════════════════════════════════════════════════════
 
+// ── RELIEF LOAD — 숫자 입력 필드 (Engine 계약과 동일한 undefined/number만 전달) ──
+// UI는 계산하지 않는다는 원칙에 따라, 여기서 하는 일은 "빈 문자열→undefined,
+// 그 외→Number()"인 입력 마셜링뿐이다 — 검증/판정은 전부 relief_load.js의
+// calculate*Scenario()가 한다. 0이 유효한 필드는 0을 그대로 통과시키고,
+// 숫자가 아닌 값은 여기서 임의로 고치지 않고 그대로 Number()에 흘려보내
+// (NaN이 되면) Engine이 스스로 거부하게 한다 — UI가 검증 로직을 복제하지 않음.
+function ScenarioNumberField({ label, unit, value, onChange, placeholder }) {
+  return (
+    <div style={{marginBottom:8}}>
+      <div style={{fontSize:10,color:T.sub,fontFamily:font.mono,marginBottom:3}}>{label}{unit?` (${unit})`:""}</div>
+      <input type="number"
+        value={value === undefined ? "" : value}
+        placeholder={placeholder || "값 입력"}
+        onChange={e => {
+          const v = e.target.value;
+          onChange(v === "" ? undefined : +v);
+        }}
+        style={{width:"100%",padding:"9px 11px",borderRadius:9,border:`1.5px solid ${T.border}`,
+          fontSize:13,fontFamily:font.mono,fontWeight:700,color:T.navy,background:T.white,boxSizing:"border-box"}}/>
+    </div>
+  );
+}
+
+// ── RELIEF LOAD — enum 토글(phase, failureMode 등) ──
+function ScenarioEnumToggle({ label, options, value, onChange }) {
+  return (
+    <div style={{marginBottom:10}}>
+      <div style={{fontSize:10,color:T.sub,fontFamily:font.mono,marginBottom:5}}>{label}</div>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+        {options.map(({id,label:optLabel})=>(
+          <div key={id} onClick={()=>onChange(id)}
+            style={{flex:"1 1 auto",minWidth:90,padding:"9px 10px",borderRadius:9,cursor:"pointer",textAlign:"center",
+              border:`2px solid ${value===id?T.navyLight:T.border}`,
+              background:value===id?T.navy+"0D":T.white,
+              fontSize:11,fontWeight:700,color:value===id?T.navy:T.text,fontFamily:font.sans}}>
+            {optLabel}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── RELIEF LOAD — 시나리오별 원시 입력 폼 ──
+// 각 시나리오는 조건부 필드만 보여준다(원문에 없는 필드를 요구하지 않음).
+function ReliefLoadScenarioInputForm({ scenarioType, scenarioInput, onFieldChange }) {
+  if (scenarioType === "OUTLET_BLOCKED") {
+    return (
+      <div>
+        <ScenarioEnumToggle label="PHASE" value={scenarioInput.phase}
+          onChange={v=>onFieldChange("phase",v)}
+          options={[{id:"LIQUID",label:"액체(Liquid)"},{id:"VAPOR",label:"증기(Vapor)"}]}/>
+        <ScenarioNumberField label="최대 유입량 (Inflow)" unit="kg/h"
+          value={scenarioInput.inflow_kgh} onChange={v=>onFieldChange("inflow_kgh",v)}/>
+        {scenarioInput.phase === "VAPOR" && (
+          <ScenarioNumberField label="생성량 (Generation Rate)" unit="kg/h"
+            value={scenarioInput.generationRate_kgh} onChange={v=>onFieldChange("generationRate_kgh",v)}/>
+        )}
+      </div>
+    );
+  }
+  if (scenarioType === "OVERFILLING") {
+    return (
+      <ScenarioNumberField label="최대 유입량 (Inflow)" unit="kg/h"
+        value={scenarioInput.inflow_kgh} onChange={v=>onFieldChange("inflow_kgh",v)}/>
+    );
+  }
+  if (scenarioType === "CONTROL_VALVE_FAIL") {
+    const mode = scenarioInput.failureMode;
+    return (
+      <div>
+        <ScenarioEnumToggle label="FAILURE MODE" value={mode}
+          onChange={v=>onFieldChange("failureMode",v)}
+          options={[
+            {id:"INLET_VALVE",  label:"인입 밸브 고장"},
+            {id:"OUTLET_VALVE", label:"출구 밸브 고장"},
+            {id:"FAIL_STATIONARY", label:"Fail-stationary"},
+          ]}/>
+        {(mode === "INLET_VALVE" || mode === "OUTLET_VALVE") && (
+          <div>
+            <ScenarioNumberField label="유입량 (Inflow)" unit="kg/h"
+              value={scenarioInput.inflow_kgh} onChange={v=>onFieldChange("inflow_kgh",v)}/>
+            <ScenarioNumberField label="유출량 (Outflow)" unit="kg/h"
+              value={scenarioInput.outflow_kgh} onChange={v=>onFieldChange("outflow_kgh",v)}/>
+          </div>
+        )}
+        {mode === "FAIL_STATIONARY" && (
+          <div>
+            <ScenarioNumberField label="유입량 (Inflow)" unit="kg/h"
+              value={scenarioInput.inflow_kgh} onChange={v=>onFieldChange("inflow_kgh",v)}/>
+            <ScenarioNumberField label="개방 가정 유출량 (Open Outflow)" unit="kg/h"
+              value={scenarioInput.openOutflow_kgh} onChange={v=>onFieldChange("openOutflow_kgh",v)}/>
+            <ScenarioNumberField label="폐쇄 가정 유출량 (Closed Outflow)" unit="kg/h"
+              value={scenarioInput.closedOutflow_kgh} onChange={v=>onFieldChange("closedOutflow_kgh",v)}/>
+          </div>
+        )}
+      </div>
+    );
+  }
+  if (scenarioType === "ABNORMAL_HEAT_VAPOR") {
+    const mode = scenarioInput.failureMode;
+    return (
+      <div>
+        <ScenarioEnumToggle label="FAILURE MODE" value={mode}
+          onChange={v=>onFieldChange("failureMode",v)}
+          options={[
+            {id:"ABNORMAL_HEAT_INPUT",       label:"비정상 열 입력"},
+            {id:"INADVERTENT_VALVE_OPENING", label:"부주의한 밸브 개방"},
+            {id:"CHECK_VALVE_FAILURE",       label:"체크밸브 고장"},
+          ]}/>
+        {mode === "ABNORMAL_HEAT_INPUT" && (
+          <div>
+            <ScenarioNumberField label="증기 발생량 (Vapor Generation)" unit="kg/h"
+              value={scenarioInput.vaporGeneration_kgh} onChange={v=>onFieldChange("vaporGeneration_kgh",v)}/>
+            <ScenarioNumberField label="정상 유출량 (Outflow)" unit="kg/h"
+              value={scenarioInput.outflow_kgh} onChange={v=>onFieldChange("outflow_kgh",v)}/>
+          </div>
+        )}
+        {mode === "INADVERTENT_VALVE_OPENING" && (
+          <div>
+            <ScenarioNumberField label="유입량 (Inflow)" unit="kg/h"
+              value={scenarioInput.inflow_kgh} onChange={v=>onFieldChange("inflow_kgh",v)}/>
+            <ScenarioNumberField label="유출량 (Outflow, 0 허용 — 차감 없음)" unit="kg/h"
+              value={scenarioInput.outflow_kgh} onChange={v=>onFieldChange("outflow_kgh",v)}/>
+          </div>
+        )}
+        {mode === "CHECK_VALVE_FAILURE" && (
+          <div style={{background:T.orangeBg,border:`1.5px solid ${T.orange}`,borderRadius:10,
+            padding:"10px 12px",fontSize:11,color:"#7A4F00",fontFamily:font.sans,lineHeight:1.6}}>
+            KOSHA D-18-2020 §5.8(3): 역류 상황 및 역류량 추정 기법 선정은 사용자가 결정해야 합니다 —
+            원문에 계산식이 없어 이 앱은 자동으로 산정하지 않습니다. 별도 공학적 판단이 필요합니다.
+          </div>
+        )}
+      </div>
+    );
+  }
+  return null;
+}
+
+// ── RELIEF LOAD — 시나리오 계산 결과 패널 ──
+function ReliefLoadScenarioResultPanel({ result, adapter }) {
+  if (!result) return null;
+  if (result.status === "NEEDS_ENGINEERING_DECISION") {
+    return (
+      <div style={{background:T.orangeBg,border:`1.5px solid ${T.orange}`,borderRadius:10,
+        padding:"10px 12px",marginTop:8,fontSize:11,color:"#7A4F00",fontFamily:font.sans,lineHeight:1.6}}>
+        <div style={{fontWeight:900,marginBottom:3}}>NEEDS_ENGINEERING_DECISION</div>
+        {result.reason}
+      </div>
+    );
+  }
+  if (result.status === "INSUFFICIENT_INPUT") {
+    return (
+      <div style={{background:T.bg,border:`1.5px dashed ${T.border}`,borderRadius:10,
+        padding:"10px 12px",marginTop:8,fontSize:11,color:T.sub,fontFamily:font.sans}}>
+        입력을 완료하면 결과가 표시됩니다{result.reason ? ` (${result.reason})` : ""}.
+      </div>
+    );
+  }
+  if (result.status === "OK") {
+    const isGoverning = adapter?.valid === true;
+    return (
+      <div style={{background: isGoverning ? T.greenBg : T.bg,
+        border:`1.5px solid ${isGoverning ? T.greenDk : T.border}`,borderRadius:12,
+        padding:"12px 14px",marginTop:8}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+          <span style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono,letterSpacing:0.5}}>SCENARIO RESULT</span>
+          {isGoverning && (
+            <span style={{fontSize:9,padding:"2px 8px",borderRadius:6,background:T.greenDk,color:T.white,
+              fontFamily:font.mono,fontWeight:700}}>GOVERNING RELIEF LOAD</span>
+          )}
+        </div>
+        <div style={{fontSize:22,fontWeight:900,color:T.navy,fontFamily:font.mono}}>
+          {result.W.toLocaleString(undefined,{maximumFractionDigits:1})} <span style={{fontSize:13,color:T.sub}}>kg/h</span>
+        </div>
+        <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginTop:6,lineHeight:1.6}}>{result.formula}</div>
+      </div>
+    );
+  }
+  return null;
+}
+
+// ── RELIEF LOAD — 시나리오 선택 + 입력 + 결과 통합 섹션 ──
+function ReliefLoadScenarioSection({
+  scenarioType, scenarioInput, scenarioResult, adapter,
+  onScenarioTypeChange, onFieldChange,
+}) {
+  const SCENARIOS = [
+    { id:"OUTLET_BLOCKED",     label:"출구 차단",          tag:"§5.1" },
+    { id:"OVERFILLING",         label:"과충전",              tag:"§5.6" },
+    { id:"CONTROL_VALVE_FAIL",  label:"자동제어밸브 고장",   tag:"§5.7" },
+    { id:"ABNORMAL_HEAT_VAPOR", label:"비정상 열/증기 유입", tag:"§5.8" },
+  ];
+  return (
+    <div style={{background:T.cardBg,borderRadius:14,padding:14,marginBottom:10,border:`1.5px solid ${T.border}`}}>
+      <div style={{fontSize:12,fontWeight:900,color:T.navy,fontFamily:font.sans,marginBottom:3}}>Relief Load — §5 시나리오 기반 산정</div>
+      <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginBottom:10,lineHeight:1.5}}>
+        KOSHA D-18-2020 §5 산정 시나리오를 입력하면 소요분출량(W)을 자동으로 산정합니다.
+        선택하지 않으면 위의 설계 방출량(Manual W)이 그대로 사용됩니다.
+      </div>
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+        {SCENARIOS.map(s=>(
+          <div key={s.id} onClick={()=>onScenarioTypeChange(s.id)}
+            style={{padding:"10px 11px",borderRadius:10,cursor:"pointer",
+              border:`2px solid ${scenarioType===s.id?T.navyLight:T.border}`,
+              background:scenarioType===s.id?T.navy+"0D":T.white}}>
+            <div style={{fontSize:9,color:T.sub,fontFamily:font.mono,marginBottom:2}}>{s.tag}</div>
+            <div style={{fontSize:11,fontWeight:700,color:scenarioType===s.id?T.navy:T.text,fontFamily:font.sans}}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+      {scenarioType !== null && (
+        <button onClick={()=>onScenarioTypeChange(null)}
+          style={{fontSize:10,color:T.sub,background:"none",border:`1px dashed ${T.border}`,
+            borderRadius:7,padding:"5px 10px",cursor:"pointer",fontFamily:font.mono,marginBottom:10}}>
+          시나리오 사용 안 함 → Manual W로 복귀
+        </button>
+      )}
+
+      {scenarioType !== null && (
+        <div style={{background:T.bg,borderRadius:10,padding:"10px 12px",border:`1px solid ${T.border}`}}>
+          <ReliefLoadScenarioInputForm scenarioType={scenarioType} scenarioInput={scenarioInput} onFieldChange={onFieldChange}/>
+          <ReliefLoadScenarioResultPanel result={scenarioResult} adapter={adapter}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── 결정 슬라이더 (수치 입력이 필요한 파라미터용) ────────────
 function DecisionSlider({ param, label, unit, value, min, max, step, onChange, basis, warning }) {
   const [open, setOpen] = useState(false);
@@ -151,7 +381,17 @@ const KB_OPTIONS_SPRING = [
   { id:"high", label:"배압 높음 — 감소 적용",   value:0.90, tag:"15~20%",       basis:"P2/P1 15~20% 구간. 스프링식 용량 10% 이상 감소. 파일럿식 전환 검토 필요." },
 ];
 
-function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dischargeSystem, equipment }) {
+// §5.x 시나리오 id → Report에 노출할 근거 라벨(§ 조항 표기)
+const RELIEF_LOAD_BASIS_LABEL = {
+  OUTLET_BLOCKED:      "§5.1 출구 차단",
+  OVERFILLING:          "§5.6 과충전",
+  CONTROL_VALVE_FAIL:   "§5.7 자동제어밸브 고장",
+  ABNORMAL_HEAT_VAPOR:  "§5.8 비정상 열/증기 유입",
+};
+
+function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dischargeSystem, equipment,
+  reliefLoadScenarioType, reliefLoadScenarioInput, reliefLoadScenarioResult, reliefLoadAdapter,
+  effectiveW, effectiveWSource, onReliefLoadScenarioTypeChange, onReliefLoadScenarioInputChange }) {
   const [fluidId, setFluidId]   = useState("co2");
   const [kdId,    setKdId]      = useState("sv_std");
   const [showCustomFluid, setShowCustomFluid] = useState(false);
@@ -259,11 +499,30 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
 
       {/* ── 2. 방출 시나리오 ── */}
       <SectionHeader step="2" title="방출 시나리오" sub="어떤 상황에서 밸브가 열리는가 — API 521 시나리오"/>
-      <DecisionSlider
-        param="W" label="설계 방출량" unit="kg/h"
-        value={inputs.W} min={500} max={10000} step={100}
-        onChange={v=>onChange("W",v)}
-        basis="HAZOP 또는 API 521 시나리오 계산서 기반. 화재, 반응 폭주, 냉각 상실 등 최대 방출 시나리오 중 지배 케이스 적용. 설계 여유 없이 계산된 최대값 사용."
+      <div style={{position:"relative"}}>
+        <div style={{position:"absolute",top:-6,right:0,zIndex:1,fontSize:9,padding:"2px 8px",borderRadius:6,
+          fontFamily:font.mono,fontWeight:700,
+          background: reliefLoadScenarioType !== null ? T.orangeBg : T.greenBg,
+          color: reliefLoadScenarioType !== null ? "#946200" : T.greenDk,
+          border:`1px solid ${reliefLoadScenarioType !== null ? T.orange : T.green}`}}>
+          {reliefLoadScenarioType !== null ? "참고용 — 미사용" : "MANUAL INPUT 사용 중"}
+        </div>
+        <DecisionSlider
+          param="W" label="설계 방출량 (Manual)" unit="kg/h"
+          value={inputs.W} min={500} max={10000} step={100}
+          onChange={v=>onChange("W",v)}
+          basis="HAZOP 또는 API 521 시나리오 계산서 기반. 화재, 반응 폭주, 냉각 상실 등 최대 방출 시나리오 중 지배 케이스 적용. 설계 여유 없이 계산된 최대값 사용. 아래 Relief Load 시나리오를 선택하면 이 값 대신 시나리오 산정값이 사용됩니다."
+        />
+      </div>
+
+      {/* ── 2b. Relief Load — §5 시나리오 기반 W 산정 (선택) ── */}
+      <ReliefLoadScenarioSection
+        scenarioType={reliefLoadScenarioType}
+        scenarioInput={reliefLoadScenarioInput}
+        scenarioResult={reliefLoadScenarioResult}
+        adapter={reliefLoadAdapter}
+        onScenarioTypeChange={onReliefLoadScenarioTypeChange}
+        onFieldChange={onReliefLoadScenarioInputChange}
       />
 
       {/* ── 3. 유체 사양 결정 ── */}
@@ -542,9 +801,30 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
       {/* ── 결정 요약 ── */}
       <div style={{background:T.navy,borderRadius:14,padding:"14px 16px",marginBottom:14}}>
         <div style={{fontSize:10,fontWeight:700,color:"#7B9EC0",fontFamily:font.mono,marginBottom:8,letterSpacing:1}}>사양 결정 요약</div>
+
+        {/* Governing Relief Load — 실제 sizing에 쓰이는 W와 그 근거를 명확히 표시.
+            Manual/Scenario 두 값이 동시에 "사용 중"으로 보이지 않도록 하나만 강조. */}
+        <div style={{background:"#FFFFFF12",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+            <span style={{fontSize:9,color:"#7B9EC0",fontFamily:font.mono,letterSpacing:0.5}}>GOVERNING RELIEF LOAD</span>
+            <span style={{fontSize:9,padding:"2px 7px",borderRadius:5,fontFamily:font.mono,fontWeight:700,
+              background: effectiveWSource==="GOVERNING_RELIEF_LOAD" ? T.green : "#FFFFFF22",
+              color: effectiveWSource==="GOVERNING_RELIEF_LOAD" ? T.navy : "#B8CBE0"}}>
+              {effectiveWSource==="GOVERNING_RELIEF_LOAD" ? "SCENARIO 기반" : "MANUAL 기반"}
+            </span>
+          </div>
+          <div style={{fontSize:20,fontWeight:900,color:T.white,fontFamily:font.mono}}>
+            {Number(effectiveW).toLocaleString(undefined,{maximumFractionDigits:1})} <span style={{fontSize:12,color:"#7B9EC0"}}>kg/h</span>
+          </div>
+          {effectiveWSource==="GOVERNING_RELIEF_LOAD" && (
+            <div style={{fontSize:9,color:"#7B9EC0",fontFamily:font.mono,marginTop:2}}>
+              Basis: {RELIEF_LOAD_BASIS_LABEL[reliefLoadScenarioType]} — Manual W({inputs.W} kg/h)는 사용되지 않음
+            </div>
+          )}
+        </div>
+
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:6}}>
           {[
-            ["W", `${inputs.W} kg/h`],
             ["P1/MAWP", `${inputs.P1}/${inputs.mawp} b`],
             ["P2", `${inputs.P2} barg`],
             ["M / k", `${inputs.M} / ${inputs.k}`],
@@ -565,10 +845,13 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
       </div>
 
       {(() => {
+        const reliefLoadIncomplete = reliefLoadScenarioType !== null && reliefLoadAdapter?.valid !== true;
         const blockReason = mawpWarning
           ? "⚠ 설정압 오류 — 수정 후 진행 가능"
           : (kbOverride && !kbOverrideReason.trim())
           ? "⚠ Kb override 근거를 입력해야 진행 가능"
+          : reliefLoadIncomplete
+          ? "⚠ Relief Load 시나리오 입력을 완료해야 진행 가능"
           : null;
         return (
           <button onClick={onSubmit} disabled={!!blockReason}

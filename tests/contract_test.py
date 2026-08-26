@@ -3105,9 +3105,17 @@ def test_relief_sizing_adapter_contract() -> TestResult:
     tr.check("RS_static_003_no_silent_fallback_to_manual_w",
              "!reliefLoadAdapter.valid" in api_src and "INVALID_RELIEF_LOAD_INPUT" in api_src,
              "adapter invalid 시 manual W로 조용히 대체하지 않고 명시적 에러를 반환해야 함")
-    tr.check("RS_static_004_caseview_not_yet_wired",
-             "reliefLoadAdapter" not in casev_src and "buildReliefSizingInput" not in casev_src,
-             "C-4.8B는 UI(CaseView)를 연결하지 않아야 함(C-4.11/C-5에서 연결) — 아직 참조되면 안 됨")
+    tr.check("RS_static_004_caseview_now_wired_via_generic_adapter",
+             "reliefLoadAdapter" in casev_src and "buildReliefSizingInput(" in casev_src
+             and "selectGoverningReliefLoad(" in casev_src
+             and "api520Engine(inputs, deviceType, equipment?.inletPiping || null, adapterForEngine)" in casev_src,
+             "C-4.9는 CaseView를 buildReliefSizingInput()/selectGoverningReliefLoad() 결과를 "
+             "그대로 api520Engine()에 주입하는 방식으로 연결해야 함 — 계산 로직을 CaseView가 "
+             "직접 재구현하면 안 되고 기존 C-4.8A/C-4.8B 계약 함수를 그대로 호출해야 함")
+    tr.check("RS_static_004b_caseview_does_not_reimplement_max_comparison",
+             not re.search(r"\.reduce\s*\(|\bMath\.max\s*\(", casev_src.split("function CaseView")[1] if "function CaseView" in casev_src else casev_src),
+             "CaseView가 governing 선택을 위한 자체 max()/reduce() 비교 로직을 재구현하면 안 됨 — "
+             "반드시 selectGoverningReliefLoad()의 판단만 사용해야 함")
     tr.check("RS_static_005_snapshot_accepts_relief_load",
              "reliefLoad" in snap_src and "_hashResult(inputs, engineResult, reliefLoad)" in snap_src,
              "createSnapshot()이 reliefLoad를 받아 해시에 포함하지 않음")
@@ -3338,6 +3346,274 @@ console.log(JSON.stringify(out));
     tr.check("RS_critical_same_w_same_sizing_result",
              out.get("sameWSameSizingResult") is True,
              f"동일 W(수동 vs governing)인데 sizing 결과가 달라짐 — C-4 연결이 기존 계산을 변경함: {out}")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
+#  RELIEF-LOAD-UI-001 (Sprint C-4.9) — MVP Scenario Input UI 계약
+#  §5.1/§5.6/§5.7/§5.8 4개 시나리오만 대상. UI는 계산하지 않고
+#  CaseView가 relief_load.js의 순수 함수(calculate*Scenario/
+#  selectGoverningReliefLoad/buildReliefSizingInput)만 호출해
+#  api520Engine에 연결한다. InputView는 입력 수집/표시만 한다.
+# ════════════════════════════════════════════════════════════════
+def test_relief_load_ui_contract() -> TestResult:
+    tr = TestResult("RELIEF-LOAD-UI-001", "Sprint C-4.9 — MVP Scenario Input UI (§5.1/5.6/5.7/5.8) 계약")
+
+    rl_src    = (SRC / "engine" / "relief_load.js").read_text()
+    api_src   = (SRC / "engine" / "api520.js").read_text()
+    snap_src  = (SRC / "snapshot" / "create.js").read_text()
+    casev_src = (SRC / "components" / "CaseView.jsx").read_text()
+    inputv_src = (SRC / "components" / "InputView.jsx").read_text()
+
+    # ── UI는 계산하지 않는다 ──────────────────────────────────────
+    tr.check("UI_001_inputview_never_calls_scenario_calculators",
+             all(fn not in inputv_src for fn in [
+                 "calculateOutletBlockedScenario", "calculateOverfillingScenario",
+                 "calculateControlValveFailureScenario", "calculateAbnormalHeatVaporScenario",
+             ]),
+             "InputView.jsx가 §5.x 계산 함수를 직접 호출하면 안 됨 — CaseView가 계산한 결과를 props로만 받아야 함")
+    tr.check("UI_001b_inputview_never_calls_selector_adapter_or_engine",
+             "selectGoverningReliefLoad(" not in inputv_src
+             and "buildReliefSizingInput(" not in inputv_src
+             and "api520Engine(" not in inputv_src,
+             "InputView.jsx가 selector/adapter/engine을 직접 호출하면 안 됨 — 전부 CaseView 책임")
+
+    # ── state 분리: inputs(manual) / reliefLoadScenarioType / reliefLoadScenarioInput ──
+    tr.check("UI_002_three_separate_state_hooks",
+             re.search(r"const\s*\[reliefLoadScenarioType,\s*setReliefLoadScenarioType\]\s*=\s*useState\(null\)", casev_src) is not None
+             and re.search(r"const\s*\[reliefLoadScenarioInput,\s*setReliefLoadScenarioInput\]\s*=\s*useState\(\{\}\)", casev_src) is not None
+             and re.search(r"const\s*\[inputs,\s*setInputs\]\s*=\s*useState\(initialInputs\)", casev_src) is not None,
+             "Manual W(inputs)/reliefLoadScenarioType/reliefLoadScenarioInput 세 state가 분리된 훅으로 존재해야 함")
+    tr.check("UI_003_scenario_switch_resets_input_not_merges",
+             re.search(r"setReliefLoadScenarioType\(type\);\s*\n\s*setReliefLoadScenarioInput\(\{\}\);", casev_src) is not None,
+             "시나리오 전환 시 reliefLoadScenarioInput을 완전히 {}로 리셋해야 함(merge 금지, stale 필드 유입 방지)")
+    tr.check("UI_003b_same_type_reclick_does_not_wipe_input",
+             "if (type === reliefLoadScenarioType) return;" in casev_src,
+             "동일 시나리오 재클릭 시 입력 중이던 값이 리셋되면 안 됨(멱등 가드 필요)")
+
+    # ── 자동 fallback 금지: handleCalculate가 engine 호출 전에 차단 ──
+    handle_calc_body = casev_src.split("const handleCalculate = ()")[1].split("const _buildAdvancedSnapshot")[0] \
+        if "const handleCalculate = ()" in casev_src else ""
+    guard_idx = handle_calc_body.find("if (reliefLoadActive && !reliefLoadAdapter?.valid)")
+    return_idx = handle_calc_body.find("return;", guard_idx) if guard_idx != -1 else -1
+    engine_call_idx = handle_calc_body.find("api520Engine(inputs, deviceType, equipment?.inletPiping")
+    tr.check("UI_004_handle_calculate_blocks_before_engine_when_invalid",
+             guard_idx != -1 and return_idx != -1 and engine_call_idx != -1 and return_idx < engine_call_idx,
+             "handleCalculate가 시나리오 활성화+invalid 상태에서 api520Engine 호출 전에 즉시 return해야 함")
+    tr.check("UI_005_no_hardcoded_max_or_reduce_governing_logic_in_caseview",
+             not re.search(r"\.reduce\s*\(|\bMath\.max\s*\(",
+                           casev_src.split("function CaseView")[1] if "function CaseView" in casev_src else casev_src),
+             "CaseView가 governing 선택을 위한 자체 비교 로직(reduce/Math.max)을 재구현하면 안 됨")
+
+    # ── Snapshot: workflow 전이 시 reliefLoad null→undefined 정규화 ──
+    tr.check("UI_006_advance_snapshot_normalizes_null_to_undefined",
+             "snapshot.reliefLoad === null ? undefined : snapshot.reliefLoad" in casev_src,
+             "_buildAdvancedSnapshot가 snapshot.reliefLoad(null)을 그대로 재전달하면 안 됨 — "
+             "undefined로 정규화해야 reliefLoad 미사용 Case의 workflow 전이 시 hash가 회귀하지 않음")
+
+    # ── §5.8 CHECK_VALVE_FAILURE는 입력 폼을 만들지 않고 즉시 NEEDS_ENGINEERING_DECISION ──
+    check_valve_branch = re.search(r'mode === "CHECK_VALVE_FAILURE".*?\)\s*\}', inputv_src, re.S)
+    tr.check("UI_007_check_valve_failure_no_input_form",
+             check_valve_branch is not None and "ScenarioNumberField" not in check_valve_branch.group(0),
+             "CHECK_VALVE_FAILURE 분기는 숫자 입력 필드를 렌더링하면 안 됨(원문에 계산식 없음)")
+    tr.check("UI_007b_check_valve_failure_shows_guidance_message",
+             check_valve_branch is not None and "역류" in check_valve_branch.group(0),
+             "CHECK_VALVE_FAILURE 분기에 §5.8(3) 안내 문구(역류 상황/기법 선정은 사용자 결정)가 없음")
+
+    # ── phase/failureMode 조건부 필드 — 원문에 없는 입력을 요구하지 않음 ──
+    tr.check("UI_008_outlet_blocked_generation_rate_conditional_on_vapor",
+             'scenarioInput.phase === "VAPOR"' in inputv_src,
+             "§5.1 generationRate_kgh 필드는 phase===VAPOR일 때만 표시되어야 함")
+
+    node = shutil.which("node")
+    if not node:
+        tr.check("UI_node_available", False, "node를 찾을 수 없어 실행 검증을 건너뜀")
+        return tr
+
+    # ══ 동적 검증: CaseView의 파생 로직을 동일하게 재현해 순수 함수 체인 자체를 실행 검증 ══
+    # (CaseView.jsx/InputView.jsx는 JSX라 node에서 직접 eval 불가 — 로직은 이미 위 정적
+    #  검사로 소스에 실재함을 확인했으므로, 여기서는 그 로직이 호출하는 순수 함수들의
+    #  동작 자체가 계약대로인지를 동일한 시퀀스로 실행해 확인한다)
+    check_script = f"""
+const fs = require('fs');
+const files = ['engine/relief_load.js','engine/backpressure.js','engine/api520.js','engine/evidence.js','snapshot/create.js']
+  .map(f => fs.readFileSync('{SRC}/' + f, 'utf8')).join('\\n');
+eval(files);
+
+const out = {{}};
+const baseInp = {{ W:5000, P1:10, P2:1, T:320, M:44, k:1.28, Kd:0.975, Kb:1.0, mawp:11, OP:10, Z:1.0 }};
+
+const META = {{
+  OUTLET_BLOCKED:     calculateOutletBlockedScenario,
+  OVERFILLING:         calculateOverfillingScenario,
+  CONTROL_VALVE_FAIL:  calculateControlValveFailureScenario,
+  ABNORMAL_HEAT_VAPOR: calculateAbnormalHeatVaporScenario,
+}};
+function deriveChain(scenarioType, scenarioInput) {{
+  const result = scenarioType ? META[scenarioType](scenarioInput) : null;
+  const selector = result ? selectGoverningReliefLoad([result]) : null;
+  const adapter = selector ? buildReliefSizingInput(selector) : null;
+  return {{ result, selector, adapter }};
+}}
+
+// ── UI-101 (Point 4A): Manual W만 존재 ──
+{{
+  const chain = deriveChain(null, {{}});
+  const eng = api520Engine(baseInp, 'safetyValve', null, undefined);
+  out.manualOnlySource = eng.stepData.reliefLoadSource.source;
+  out.manualOnlyValid = eng.valid;
+  out.manualOnlyW = eng.stepData.orifice.W;
+}}
+
+// ── UI-102 (Point 4B): Scenario W 정상(§5.6) ──
+{{
+  const chain = deriveChain('OVERFILLING', {{ inflow_kgh: 4200 }});
+  const eng = api520Engine(baseInp, 'safetyValve', null, chain.adapter);
+  out.scenarioSource = eng.stepData.reliefLoadSource.source;
+  out.scenarioW = eng.stepData.orifice.W;
+  out.scenarioManualPreserved = eng.stepData.reliefLoadSource.manualW === 5000;
+}}
+
+// ── UI-103 (Point 4C): Scenario 활성화 + invalid — engine 레벨 방어까지 확인 ──
+{{
+  const chain = deriveChain('OVERFILLING', {{}}); // inflow_kgh 누락
+  out.invalidAdapterValid = chain.adapter.valid;
+  const eng = api520Engine(baseInp, 'safetyValve', null, chain.adapter);
+  out.invalidEngineRejected = (eng.valid === false);
+  out.invalidNoSilentAreaCm2 = (eng.areaCm2 === undefined);
+}}
+
+// ── UI-104 (Point 5): 시나리오 전환 시 state collision 없음 ──
+{{
+  let scenarioType = null, scenarioInput = {{}};
+  function switchType(t) {{ if (t === scenarioType) return; scenarioType = t; scenarioInput = {{}}; }}
+  function setField(k,v) {{ scenarioInput = {{ ...scenarioInput, [k]: v }}; }}
+  switchType('OUTLET_BLOCKED');
+  setField('phase','VAPOR'); setField('inflow_kgh',1000); setField('generationRate_kgh',300);
+  const ob = calculateOutletBlockedScenario(scenarioInput);
+  switchType('OVERFILLING');
+  out.noStaleFieldsAfterSwitch = !('phase' in scenarioInput) && !('generationRate_kgh' in scenarioInput) && !('inflow_kgh' in scenarioInput);
+  setField('inflow_kgh', 4200);
+  const of = calculateOverfillingScenario(scenarioInput);
+  out.obW = ob.W; out.ofW = of.W;
+}}
+
+// ── UI-105: 4개 시나리오 전부 governing 체인 정상 동작 ──
+{{
+  const cases = [
+    ['OUTLET_BLOCKED',     {{ phase:'LIQUID', inflow_kgh: 800 }}],
+    ['OVERFILLING',         {{ inflow_kgh: 900 }}],
+    ['CONTROL_VALVE_FAIL',  {{ failureMode:'INLET_VALVE', inflow_kgh: 1200, outflow_kgh: 200 }}],
+    ['ABNORMAL_HEAT_VAPOR', {{ failureMode:'ABNORMAL_HEAT_INPUT', vaporGeneration_kgh: 700, outflow_kgh: 100 }}],
+  ];
+  out.allFourValid = cases.every(([t,inp]) => {{
+    const chain = deriveChain(t, inp);
+    return chain.result.status === 'OK' && chain.adapter.valid === true && typeof chain.adapter.W === 'number';
+  }});
+}}
+
+// ── UI-106: CHECK_VALVE_FAILURE는 sizing 불가 상태로 명확히 종료 ──
+{{
+  const chain = deriveChain('ABNORMAL_HEAT_VAPOR', {{ failureMode:'CHECK_VALVE_FAILURE' }});
+  out.checkValveStatus = chain.result.status;
+  out.checkValveAdapterValid = chain.adapter.valid;
+  const eng = api520Engine(baseInp, 'safetyValve', null, chain.adapter);
+  out.checkValveEngineRejected = (eng.valid === false);
+}}
+
+// ── UI-107: 0이 유효한 필드(부주의한 밸브 개방 outflow=0) 정상 통과 ──
+{{
+  const chain = deriveChain('ABNORMAL_HEAT_VAPOR', {{ failureMode:'INADVERTENT_VALVE_OPENING', inflow_kgh: 1000, outflow_kgh: 0 }});
+  out.zeroOutflowStatus = chain.result.status;
+  out.zeroOutflowW = chain.result.W;
+  out.zeroOutflowAdapterValid = chain.adapter.valid;
+}}
+
+// ── UI-108: 음수/NaN/Infinity 거부(전체 체인 레벨) ──
+{{
+  const negChain = deriveChain('OVERFILLING', {{ inflow_kgh: -100 }});
+  const nanChain = deriveChain('OVERFILLING', {{ inflow_kgh: NaN }});
+  const infChain = deriveChain('OVERFILLING', {{ inflow_kgh: Infinity }});
+  out.negRejected = negChain.adapter.valid === false;
+  out.nanRejected = nanChain.adapter.valid === false;
+  out.infRejected = infChain.adapter.valid === false;
+}}
+
+// ── UI-109/110: Snapshot reliefLoad + null→undefined 정규화가 hash 안정성을 보장 ──
+{{
+  const eng = api520Engine(baseInp, 'safetyValve', null);
+
+  // (A) reliefLoad 없는 Case — 최초 생성과 workflow 전이 후 result_hash가 동일해야 함
+  const snap0_noRelief = createSnapshot({{ caseId:'C1', valveTag:'PSV-1', deviceType:'safetyValve', inputs: baseInp, engineResult: eng,
+    workflowDecision: {{ state:'INSPECTION' }} }});
+  const normalizedA = snap0_noRelief.reliefLoad === null ? undefined : snap0_noRelief.reliefLoad;
+  const snap1_noRelief = createSnapshot({{ caseId:'C1', valveTag:'PSV-1', deviceType:'safetyValve', inputs: baseInp, engineResult: eng,
+    workflowDecision: {{ state:'REVIEW' }}, reliefLoad: normalizedA }});
+  out.noReliefHashStable = snap0_noRelief.result_hash === snap1_noRelief.result_hash;
+
+  // 대조군: 정규화 없이 null을 그대로 넘기면(버그가 있었다면) hash가 달라졌을 것 — 그 사실 자체를 증명
+  const snap1_noRelief_buggy = createSnapshot({{ caseId:'C1', valveTag:'PSV-1', deviceType:'safetyValve', inputs: baseInp, engineResult: eng,
+    workflowDecision: {{ state:'REVIEW' }}, reliefLoad: snap0_noRelief.reliefLoad }});
+  out.buggyPathWouldHaveDiffered = snap0_noRelief.result_hash !== snap1_noRelief_buggy.result_hash;
+
+  // (B) reliefLoad 있는 Case — workflow 전이 후에도 내용과 hash 모두 보존
+  const relief1 = {{ scenarios:[{{scenarioId:'OVERFILLING', W:4200, unit:'kg/h'}}], governing:'OVERFILLING', quantity:'MASS_FLOW', unit:'kg/h', provenance:{{}} }};
+  const snap0_relief = createSnapshot({{ caseId:'C2', valveTag:'PSV-2', deviceType:'safetyValve', inputs: baseInp, engineResult: eng,
+    workflowDecision: {{ state:'INSPECTION' }}, reliefLoad: relief1 }});
+  const normalizedB = snap0_relief.reliefLoad === null ? undefined : snap0_relief.reliefLoad;
+  const snap1_relief = createSnapshot({{ caseId:'C2', valveTag:'PSV-2', deviceType:'safetyValve', inputs: baseInp, engineResult: eng,
+    workflowDecision: {{ state:'REVIEW' }}, reliefLoad: normalizedB }});
+  out.reliefContentPreserved = JSON.stringify(snap1_relief.reliefLoad) === JSON.stringify(relief1);
+  out.reliefHashStableAcrossAdvance = snap0_relief.result_hash === snap1_relief.result_hash;
+}}
+
+console.log(JSON.stringify(out));
+"""
+    cp = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=15)
+    try:
+        out = json.loads(cp.stdout.strip().splitlines()[-1]) if cp.stdout.strip() else {{}}
+    except Exception:
+        out = {{}}
+
+    tr.check("UI_101_manual_w_only_path",
+             out.get("manualOnlySource") == "MANUAL_INPUT" and out.get("manualOnlyValid") is True
+             and out.get("manualOnlyW") == 5000,
+             f"Manual W 경로(4A) 실패: {out} stdout={cp.stdout!r} stderr={cp.stderr!r}")
+    tr.check("UI_102_scenario_w_governing_path",
+             out.get("scenarioSource") == "GOVERNING_RELIEF_LOAD" and out.get("scenarioW") == 4200
+             and out.get("scenarioManualPreserved") is True,
+             f"Scenario governing 경로(4B) 실패: {out}")
+    tr.check("UI_103_invalid_scenario_no_silent_fallback",
+             out.get("invalidAdapterValid") is False and out.get("invalidEngineRejected") is True
+             and out.get("invalidNoSilentAreaCm2") is True,
+             f"Scenario invalid(4C)인데 manual W로 조용히 진행됨(금지된 fallback): {out}")
+    tr.check("UI_104_no_state_collision_on_scenario_switch",
+             out.get("noStaleFieldsAfterSwitch") is True and out.get("obW") == 1300 and out.get("ofW") == 4200,
+             f"시나리오 전환 시 이전 시나리오 필드가 남아 영향을 줌: {out}")
+    tr.check("UI_105_all_four_mvp_scenarios_reach_governing",
+             out.get("allFourValid") is True,
+             f"§5.1/5.6/5.7/5.8 중 하나 이상이 정상 governing 체인에 도달하지 못함: {out}")
+    tr.check("UI_106_check_valve_failure_ends_as_insufficient_no_sizing",
+             out.get("checkValveStatus") == "NEEDS_ENGINEERING_DECISION" and out.get("checkValveAdapterValid") is False
+             and out.get("checkValveEngineRejected") is True,
+             f"CHECK_VALVE_FAILURE가 sizing 가능한 상태로 잘못 처리됨: {out}")
+    tr.check("UI_107_zero_valid_field_passes",
+             out.get("zeroOutflowStatus") == "OK" and out.get("zeroOutflowW") == 1000
+             and out.get("zeroOutflowAdapterValid") is True,
+             f"0이 유효한 필드(outflow=0)가 잘못 거부됨: {out}")
+    tr.check("UI_108_negative_nan_infinity_rejected",
+             out.get("negRejected") is True and out.get("nanRejected") is True and out.get("infRejected") is True,
+             f"음수/NaN/Infinity가 거부되지 않음: {out}")
+    tr.check("UI_109_no_relief_load_hash_stable_across_workflow_advance",
+             out.get("noReliefHashStable") is True,
+             f"reliefLoad 미사용 Case가 workflow 전이만으로 result_hash가 바뀜(회귀): {out}")
+    tr.check("UI_109b_naive_null_forwarding_would_have_broken_hash_stability",
+             out.get("buggyPathWouldHaveDiffered") is True,
+             f"null→undefined 정규화가 실제로 필요했는지 증명 실패(정규화 없이도 hash가 우연히 같았다면 이 수정의 근거가 약해짐): {out}")
+    tr.check("UI_110_relief_load_content_and_hash_preserved_across_advance",
+             out.get("reliefContentPreserved") is True and out.get("reliefHashStableAcrossAdvance") is True,
+             f"reliefLoad 사용 Case의 workflow 전이 시 근거/hash가 보존되지 않음: {out}")
 
     return tr
 
@@ -5467,6 +5743,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [RELIEF-SIZING-ADAPTER-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── Relief Load Scenario Input UI contract (C-4.9) ────────────
+    print("\n── RELIEF-LOAD-UI-001 (Sprint C-4.9) ────────────────")
+    tr = test_relief_load_ui_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [RELIEF-LOAD-UI-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"
