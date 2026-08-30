@@ -1,17 +1,57 @@
 //  CASE VIEW
 // ════════════════════════════════════════════════════════════════
 
-// ── RELIEF LOAD — MVP 대상 4개 시나리오 메타(라벨 + 계산 함수 매핑) ──
-// C-4.9 범위: §5.1/§5.6/§5.7/§5.8만. §5.11/§5.12/§5.13은 governing
-// 후보가 아니거나(§5.11/§5.13) UI 복잡도가 높아(§5.12) 이번 단계에서
+// ── RELIEF LOAD — 대상 시나리오 메타(라벨 + 계산 함수 매핑) ──
+// C-4.9 범위: §5.1/§5.6/§5.7/§5.8. C-4.10에서 §5.12(외부화재)를 추가한다.
+// §5.11/§5.13은 governing 후보가 아니므로(단위가 kg/h가 아님) 이번에도
 // 제외 — relief_load.js의 계산 함수 자체는 이미 구현되어 있으나
 // 이 UI에서 호출하지 않는다.
 const RELIEF_LOAD_SCENARIO_META = {
-  OUTLET_BLOCKED:     { label: "출구 차단",           section: "§5.1", calc: calculateOutletBlockedScenario },
-  OVERFILLING:         { label: "과충전",               section: "§5.6", calc: calculateOverfillingScenario },
-  CONTROL_VALVE_FAIL:  { label: "자동제어밸브 고장",    section: "§5.7", calc: calculateControlValveFailureScenario },
-  ABNORMAL_HEAT_VAPOR: { label: "비정상 열/증기 유입",  section: "§5.8", calc: calculateAbnormalHeatVaporScenario },
+  OUTLET_BLOCKED:     { label: "출구 차단",           section: "§5.1",  calc: calculateOutletBlockedScenario },
+  OVERFILLING:         { label: "과충전",               section: "§5.6",  calc: calculateOverfillingScenario },
+  CONTROL_VALVE_FAIL:  { label: "자동제어밸브 고장",    section: "§5.7",  calc: calculateControlValveFailureScenario },
+  ABNORMAL_HEAT_VAPOR: { label: "비정상 열/증기 유입",  section: "§5.8",  calc: calculateAbnormalHeatVaporScenario },
+  EXTERNAL_FIRE:       { label: "외부화재",             section: "§5.12", calc: calculateExternalFireScenario },
 };
+
+// ── C-4.10 — §5.12 EXTERNAL_FIRE 전용 입력 조립기 ──
+// fMethod/t1Method/scenarioMSource는 계산 함수(calculateExternalFireScenario)의
+// 파라미터가 아니라 UI 전용 판별자다(설계 확정본 9장). 이 함수는 relief_load.js를
+// 전혀 수정하지 않고, 계산 호출 직전에 "선택된 경로의 필드만" 남긴 입력 객체를
+// UI 레이어에서 조립한다 — relief_load.js는 입력을 { ...input }으로 그대로
+// 되돌려 주므로(결과의 inputs 필드), scenarioMSource를 조립된 입력에 실어
+// 보내면 계산 로직 변경 없이 Snapshot.reliefLoad까지 그대로 전달된다.
+function buildExternalFireScenarioInput(raw) {
+  if (!raw || typeof raw !== "object") return {};
+  const { fMethod, t1Method, ...rest } = raw;
+  const assembled = { ...rest };
+
+  if (raw.fireCase === "OPEN_POOL_LIQUID" || raw.fireCase === "CONFINED_POOL_FUEL_SMALL_MEDIUM") {
+    delete assembled.F;
+    delete assembled.Tf_degC;
+    delete assembled.insulationLayers;
+    if (fMethod === "DIRECT") {
+      assembled.F = raw.F;
+    } else if (fMethod === "INSULATION") {
+      assembled.Tf_degC = raw.Tf_degC;
+      assembled.insulationLayers = raw.insulationLayers;
+    }
+  }
+
+  if (raw.fireCase === "OPEN_POOL_GAS_VAPOR") {
+    delete assembled.T1_K;
+    delete assembled.Pn_MPa;
+    delete assembled.Tn_K;
+    if (t1Method === "DIRECT") {
+      assembled.T1_K = raw.T1_K;
+    } else if (t1Method === "PN_TN") {
+      assembled.Pn_MPa = raw.Pn_MPa;
+      assembled.Tn_K = raw.Tn_K;
+    }
+  }
+
+  return assembled;
+}
 
 function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onApprovalUpdate }) {
   const equipment = caseData.equipment || null;
@@ -68,6 +108,83 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   const handleReliefLoadScenarioInputChange = (key, val) =>
     setReliefLoadScenarioInput(p => ({ ...p, [key]: val }));
 
+  // ── C-4.10 — §5.12 EXTERNAL_FIRE 전용 state 핸들러 ──
+  // 기존 4개 시나리오(§5.1/5.6/5.7/5.8)의 handleReliefLoadScenarioTypeChange/
+  // handleReliefLoadScenarioInputChange는 위에서 전혀 수정하지 않았다.
+  // 아래는 §5.12의 fireCase 전환/F·T1 방법 전환/단열재 배열에서만 쓰이는
+  // 추가 핸들러다.
+
+  // fireCase 전환 — 이전 fireCase 전용 입력을 완전히 제거(state collision 방지,
+  // 기존 시나리오 전환 리셋 원칙과 동일). Case M 기본값 프리필(권고안 C안):
+  // OPEN_POOL_GAS_VAPOR로 "최초" 진입할 때만 Case의 M을 기본값으로 제시하고
+  // scenarioMSource="CASE_DEFAULT"를 남긴다 — 자동 동기화가 아니므로 이후
+  // Case M이 바뀌어도 이미 채워진 시나리오 M을 조용히 따라 바꾸지 않는다.
+  const handleExternalFireCaseChange = (newFireCase) => {
+    setReliefLoadScenarioInput(prev => {
+      if (prev.fireCase === newFireCase) return prev;
+      const next = { fireCase: newFireCase };
+      if (newFireCase === "OPEN_POOL_GAS_VAPOR") {
+        next.M = inputs.M;
+        next.scenarioMSource = "CASE_DEFAULT";
+      }
+      return next;
+    });
+  };
+
+  // 시나리오 M을 사용자가 직접 수정 — 그 즉시 provenance를 SCENARIO_OVERRIDE로 전환.
+  const handleExternalFireMChange = (val) =>
+    setReliefLoadScenarioInput(prev => ({ ...prev, M: val, scenarioMSource: "SCENARIO_OVERRIDE" }));
+
+  // F 입력 방법(직접값 ↔ 단열재) 전환 — 반대 경로의 입력값을 완전히 제거하고,
+  // INSULATION으로 전환 시 최소 1개 층을 기본 제공한다(빈 배열은 READY 불가 원칙).
+  const handleExternalFireFMethodChange = (newMethod) => {
+    setReliefLoadScenarioInput(prev => {
+      if (prev.fMethod === newMethod) return prev;
+      const { F, Tf_degC, insulationLayers, ...rest } = prev;
+      return {
+        ...rest, fMethod: newMethod,
+        ...(newMethod === "INSULATION"
+          ? { insulationLayers: [{ k_kcal_mm_per_hr_m2_degC: undefined, thickness_mm: undefined }] }
+          : {}),
+      };
+    });
+  };
+
+  // T1 입력 방법(직접값 ↔ Pn/Tn) 전환 — 반대 경로의 입력값을 완전히 제거.
+  const handleExternalFireT1MethodChange = (newMethod) => {
+    setReliefLoadScenarioInput(prev => {
+      if (prev.t1Method === newMethod) return prev;
+      const { T1_K, Pn_MPa, Tn_K, ...rest } = prev;
+      return { ...rest, t1Method: newMethod };
+    });
+  };
+
+  // 단열재 층 Add/Remove/필드수정 — 마지막 1개 층은 삭제할 수 없다(임의 상한 없음).
+  const handleExternalFireInsulationLayerAdd = () =>
+    setReliefLoadScenarioInput(prev => ({
+      ...prev,
+      insulationLayers: [...(prev.insulationLayers || []), { k_kcal_mm_per_hr_m2_degC: undefined, thickness_mm: undefined }],
+    }));
+  const handleExternalFireInsulationLayerRemove = (idx) =>
+    setReliefLoadScenarioInput(prev => {
+      const layers = prev.insulationLayers || [];
+      if (layers.length <= 1) return prev;
+      return { ...prev, insulationLayers: layers.filter((_, i) => i !== idx) };
+    });
+  const handleExternalFireInsulationLayerFieldChange = (idx, key, val) =>
+    setReliefLoadScenarioInput(prev => {
+      const layers = [...(prev.insulationLayers || [])];
+      layers[idx] = { ...layers[idx], [key]: val };
+      return { ...prev, insulationLayers: layers };
+    });
+
+  // C-4.10: EXTERNAL_FIRE는 계산 호출 직전에 UI 전용 판별자(fMethod/t1Method)를
+  // 제거하고 선택된 경로의 필드만 남긴 입력을 조립한다(relief_load.js 무수정).
+  // 기존 4개 시나리오는 reliefLoadScenarioInput을 그대로 사용해 동작이 동일하다.
+  const reliefLoadCalcInput = reliefLoadScenarioType === "EXTERNAL_FIRE"
+    ? buildExternalFireScenarioInput(reliefLoadScenarioInput)
+    : reliefLoadScenarioInput;
+
   // ── §5 scenario → selector → adapter 체인 (파생값, 매 렌더 재계산) ──
   // 이 세 함수(calculate*Scenario/selectGoverningReliefLoad/
   // buildReliefSizingInput)는 relief_load.js의 순수 함수다. api520Engine
@@ -76,7 +193,7 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   // 이미 CaseView가 매 렌더 computeWorkflowState()(engine 함수)를
   // 호출하는 기존 패턴과 동일한 층위의 파생 계산이다.
   const reliefLoadScenarioResult = reliefLoadScenarioType
-    ? RELIEF_LOAD_SCENARIO_META[reliefLoadScenarioType].calc(reliefLoadScenarioInput)
+    ? RELIEF_LOAD_SCENARIO_META[reliefLoadScenarioType].calc(reliefLoadCalcInput)
     : null;
   const reliefLoadSelectorResult = reliefLoadScenarioResult
     ? selectGoverningReliefLoad([reliefLoadScenarioResult])
@@ -427,6 +544,13 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
           effectiveWSource={effectiveWSource}
           onReliefLoadScenarioTypeChange={handleReliefLoadScenarioTypeChange}
           onReliefLoadScenarioInputChange={handleReliefLoadScenarioInputChange}
+          onExternalFireCaseChange={handleExternalFireCaseChange}
+          onExternalFireMChange={handleExternalFireMChange}
+          onExternalFireFMethodChange={handleExternalFireFMethodChange}
+          onExternalFireT1MethodChange={handleExternalFireT1MethodChange}
+          onExternalFireInsulationLayerAdd={handleExternalFireInsulationLayerAdd}
+          onExternalFireInsulationLayerRemove={handleExternalFireInsulationLayerRemove}
+          onExternalFireInsulationLayerFieldChange={handleExternalFireInsulationLayerFieldChange}
         />
       )}
 

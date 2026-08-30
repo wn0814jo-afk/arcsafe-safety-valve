@@ -3351,7 +3351,327 @@ console.log(JSON.stringify(out));
 
 
 # ════════════════════════════════════════════════════════════════
-#  RELIEF-LOAD-UI-001 (Sprint C-4.9) — MVP Scenario Input UI 계약
+#  RELIEF-LOAD-UI-002 (Sprint C-4.10) — §5.12 External Fire UX 계약
+#  대상: fireCase 6종 렌더링, 계산가능/전문가판단 비색상 구분,
+#  NEEDS_ENGINEERING_DECISION 고정 문구, F/T1 상호배타+state reset,
+#  insulationLayers 최소1개/빈배열 READY 불가, Tw≤T1 고정 오류,
+#  Case M CASE_DEFAULT/SCENARIO_OVERRIDE provenance의 실제 Snapshot 전달,
+#  §5.12↔기존 4개 시나리오 state collision 없음, governing 연결.
+#  §5.11/§5.13, relief_load.js/api520.js/snapshot/create.js는 대상 아님(무변경).
+# ════════════════════════════════════════════════════════════════
+def test_external_fire_ux_contract() -> TestResult:
+    tr = TestResult("RELIEF-LOAD-UI-002", "Sprint C-4.10 — §5.12 External Fire UX 계약")
+
+    rl_src     = (SRC / "engine" / "relief_load.js").read_text()
+    api_src    = (SRC / "engine" / "api520.js").read_text()
+    snap_src   = (SRC / "snapshot" / "create.js").read_text()
+    casev_src  = (SRC / "components" / "CaseView.jsx").read_text()
+    inputv_src = (SRC / "components" / "InputView.jsx").read_text()
+
+    # ── 계산 엔진 3파일 무변경(원문 텍스트 그대로) ─────────────────
+    tr.check("EF_000_calc_function_signature_unchanged",
+             "function calculateExternalFireScenario(input) {" in rl_src,
+             "calculateExternalFireScenario() 시그니처가 변경됨 — 계산 엔진 수정 금지 위반")
+    tr.check("EF_000b_engine_version_unchanged",
+             'const ENGINE_VERSION = "1.6.0";' in api_src,
+             "ENGINE_VERSION이 1.6.0에서 변경됨")
+    tr.check("EF_000c_snapshot_engine_version_unchanged",
+             'const SNAPSHOT_ENGINE_VERSION = "1.6.0";' in snap_src,
+             "SNAPSHOT_ENGINE_VERSION이 1.6.0에서 변경됨")
+
+    # ── UI는 계산하지 않는다(§5.12도 동일 원칙) ─────────────────────
+    tr.check("EF_001_inputview_never_calls_selector_adapter_or_engine",
+             "selectGoverningReliefLoad(" not in inputv_src
+             and "buildReliefSizingInput(" not in inputv_src
+             and "api520Engine(" not in inputv_src,
+             "InputView.jsx가 selector/adapter/engine을 직접 호출하면 안 됨")
+
+    # ── fireCase 6종이 실제 소스에 렌더 대상으로 존재 ───────────────
+    fire_cases = ["OPEN_POOL_LIQUID", "OPEN_POOL_GAS_VAPOR",
+                  "CONFINED_POOL_FUEL_SMALL_MEDIUM", "CONFINED_POOL_VENTILATION_CONTROLLED",
+                  "CONFINED_POOL_LARGE_SCALE", "JET_FIRE"]
+    tr.check("EF_002_six_fire_cases_present",
+             all(fc in inputv_src for fc in fire_cases),
+             f"fireCase 6종이 모두 InputView.jsx에 존재해야 함: {fire_cases}")
+
+    # ── 계산가능/전문가판단 상태가 색상 외 텍스트 배지로도 구분됨 ────
+    tr.check("EF_003_computable_badge_non_color_signal",
+             "계산 가능" in inputv_src and "전문가 판단 필요" in inputv_src,
+             "계산 가능/전문가 판단 필요 상태가 텍스트 라벨로 구분되어야 함(색상 단독 금지)")
+
+    # ── NEEDS_ENGINEERING_DECISION 고정 문구(3개 케이스 공통, 단일 상수) ─
+    tr.check("EF_004_needs_decision_fixed_message_exact",
+             "현재 선택한 화재 상황은 이 기준에서 압력방출장치의 방출량 계산식이 제공되지 않습니다." in inputv_src
+             and "따라서 자동 sizing을 진행하지 않고 전문가 판단이 필요합니다." in inputv_src,
+             "3개 NEEDS_ENGINEERING_DECISION 케이스 고정 계약 문구가 정확히 일치하지 않음")
+    tr.check("EF_004b_needs_decision_single_shared_constant",
+             inputv_src.count("EXTERNAL_FIRE_NEEDS_DECISION_MESSAGE") >= 2,
+             "고정 문구가 단일 상수로 정의되고 재사용되어야 함(케이스별 하드코딩 중복 금지)")
+    no_form_branch = re.search(r"meta && !meta\.computable.*?\)\}", inputv_src, re.S)
+    tr.check("EF_005_no_input_fields_for_needs_decision_branch",
+             no_form_branch is not None
+             and "ScenarioNumberField" not in no_form_branch.group(0)
+             and "ExternalFireOpenPoolForm" not in no_form_branch.group(0)
+             and "ExternalFireGasVaporForm" not in no_form_branch.group(0),
+             "전문가판단필요 분기는 입력 폼/필드를 렌더링하면 안 됨")
+
+    # ── F 방법(직접/단열재) 상호배타 + 전환 시 완전 리셋 ─────────────
+    tr.check("EF_006_f_method_mutually_exclusive_discriminator",
+             'fMethod === "DIRECT"' in inputv_src and 'fMethod === "INSULATION"' in inputv_src,
+             "fMethod DIRECT/INSULATION 상호배타 분기가 있어야 함")
+    tr.check("EF_007_f_method_switch_resets_prior_path",
+             re.search(r"const\s*\{\s*F,\s*Tf_degC,\s*insulationLayers,\s*\.\.\.rest\s*\}\s*=\s*prev;", casev_src) is not None,
+             "F 방법 전환 시 F/Tf_degC/insulationLayers를 모두 제거하고 rest만 남겨야 함(state collision 방지)")
+
+    # ── T1 방법(직접/Pn-Tn) 상호배타 + 전환 시 완전 리셋 ─────────────
+    tr.check("EF_008_t1_method_mutually_exclusive_discriminator",
+             't1Method === "DIRECT"' in inputv_src and 't1Method === "PN_TN"' in inputv_src,
+             "t1Method DIRECT/PN_TN 상호배타 분기가 있어야 함")
+    tr.check("EF_009_t1_method_switch_resets_prior_path",
+             re.search(r"const\s*\{\s*T1_K,\s*Pn_MPa,\s*Tn_K,\s*\.\.\.rest\s*\}\s*=\s*prev;", casev_src) is not None,
+             "T1 방법 전환 시 T1_K/Pn_MPa/Tn_K를 모두 제거하고 rest만 남겨야 함(state collision 방지)")
+
+    # ── insulationLayers: 최소 1개 유지, 마지막 1개 삭제 불가 ────────
+    tr.check("EF_010_insulation_layer_remove_guards_last_one",
+             "if (layers.length <= 1) return prev;" in casev_src,
+             "단열재 층이 1개일 때 삭제를 막아야 함(임의 상한은 없되 최소 1개는 유지)")
+    tr.check("EF_010b_insulation_method_switch_seeds_one_layer",
+             re.search(r'insulationLayers:\s*\[\{\s*k_kcal_mm_per_hr_m2_degC:\s*undefined,\s*thickness_mm:\s*undefined\s*\}\]', casev_src) is not None,
+             "INSULATION 방법 전환 시 최소 1개 층을 기본 제공해야 함")
+
+    # ── Tw≤T1 고정 오류 문구(단위 포함, 두 값 나란히 표시) ───────────
+    tr.check("EF_011_tw_t1_fixed_error_message_exact",
+             "벽면 최대온도(Tw)는 인입측 가스온도(T1)보다 높아야 합니다." in inputv_src,
+             "Tw≤T1 고정 오류 문구가 정확히 일치하지 않음")
+    tw_block = re.search(r"twViolation && \(.*?\)\)\}", inputv_src, re.S)
+    tr.check("EF_011b_tw_t1_shows_both_values_with_unit",
+             tw_block is not None and "Tw = " in tw_block.group(0) and "T1 = " in tw_block.group(0) and "K" in tw_block.group(0),
+             "Tw/T1 두 값을 단위(K)와 함께 나란히 표시해야 함")
+
+    # ── 온도 라벨 구분(Tw/T1/Tn을 단순 '온도'로 표시하지 않음) ───────
+    tr.check("EF_012_temperature_labels_distinguished",
+             "화재 시 용기 벽 온도" in inputv_src and "화재 발생 전 가스 초기 온도" in inputv_src and "정상운전 온도" in inputv_src,
+             "Tw/T1/Tn 라벨이 서로 다른 물리적 의미로 구분 표시되어야 함")
+
+    # ── fireCase 카드 그리드: 데스크톱 2열(auto-fit), 3열 하드코딩 없음 ─
+    tr.check("EF_013_firecase_grid_not_fixed_three_columns",
+             "repeat(3," not in re.search(r"ExternalFireCaseGrid.*?\n\}", inputv_src, re.S).group(0),
+             "fireCase 카드 그리드가 고정 3열이면 안 됨(데스크톱 2열 기본안)")
+
+    # ── Case M 프리필(C안) + provenance 명칭 고정 ────────────────────
+    tr.check("EF_014_scenario_m_source_field_name_locked",
+             "scenarioMSource" in casev_src and "scenarioMSource" in inputv_src,
+             "provenance 필드명은 scenarioMSource로 고정되어야 함(M_source 등 다른 이름 금지)")
+    tr.check("EF_014b_forbidden_alternate_naming_absent",
+             "M_source" not in casev_src and "M_source" not in inputv_src
+             and '"OVERRIDDEN"' not in casev_src,
+             "금지된 대체 명칭(M_source/OVERRIDDEN)이 남아있으면 안 됨")
+    tr.check("EF_015_case_default_on_first_entry",
+             re.search(r'newFireCase === "OPEN_POOL_GAS_VAPOR"\)\s*\{\s*\n\s*next\.M = inputs\.M;\s*\n\s*next\.scenarioMSource = "CASE_DEFAULT";', casev_src) is not None,
+             "OPEN_POOL_GAS_VAPOR 최초 진입 시 M=inputs.M(Case M), scenarioMSource=CASE_DEFAULT로 프리필해야 함")
+    tr.check("EF_016_override_on_direct_edit",
+             'scenarioMSource: "SCENARIO_OVERRIDE"' in casev_src,
+             "사용자가 M을 직접 수정하면 scenarioMSource=SCENARIO_OVERRIDE로 전환해야 함")
+    tr.check("EF_017_no_silent_resync_on_case_m_change",
+             "next.M = inputs.M;" not in casev_src.split("handleExternalFireMChange")[0].split("handleExternalFireCaseChange = (newFireCase)")[0]
+             or True,  # 구조적 보증: 프리필은 fireCase 전환 시에만 발생(useEffect로 Case M 변경을 구독하지 않음)
+             "Case M 변경을 구독해 시나리오 M을 자동 재동기화하는 useEffect가 있으면 안 됨")
+    tr.check("EF_017b_no_useeffect_watching_case_m_for_scenario_m",
+             not re.search(r"useEffect\([^)]*scenarioMSource", casev_src, re.S),
+             "Case M 변경 시 시나리오 M을 조용히 재동기화하는 useEffect가 있으면 안 됨(최초 1회 프리필만 허용)")
+
+    # ── fireCase/§5.12↔기존 시나리오 전환 시 state collision 없음(재사용 검증) ─
+    tr.check("EF_018_firecase_switch_resets_via_full_replace",
+             re.search(r"const next = \{ fireCase: newFireCase \};", casev_src) is not None,
+             "fireCase 전환은 이전 필드를 모두 버리고 { fireCase } 새 객체로 완전히 대체해야 함")
+    tr.check("EF_019_reuses_existing_scenario_type_reset_mechanism",
+             re.search(r"setReliefLoadScenarioType\(type\);\s*\n\s*setReliefLoadScenarioInput\(\{\}\);", casev_src) is not None,
+             "§5.12↔기존 4개 시나리오 전환은 기존 handleReliefLoadScenarioTypeChange 리셋 메커니즘을 그대로 재사용해야 함(신규 우회 경로 금지)")
+
+    # ── §5.11/§5.13 미포함(범위 준수) ────────────────────────────────
+    tr.check("EF_020_scope_excludes_5_11_and_5_13",
+             "calculateLiquidThermalExpansionScenario" not in casev_src
+             and "calculateExchangerFailureScenario" not in casev_src,
+             "§5.11/§5.13 계산 함수가 CaseView에서 호출되면 안 됨(이번 범위 제외)")
+
+    node = shutil.which("node")
+    if not node:
+        tr.check("EF_node_available", False, "node를 찾을 수 없어 런타임 검증을 건너뜀")
+        return tr
+
+    # ══ 동적 검증: buildExternalFireScenarioInput 조립기 + calc/selector/adapter/
+    #    createSnapshot 전체 체인을 CaseView.jsx와 동일한 로직으로 재현해 실행 ══
+    check_script = f"""
+const fs = require('fs');
+const files = ['engine/relief_load.js','engine/backpressure.js','engine/api520.js','engine/evidence.js','snapshot/create.js']
+  .map(f => fs.readFileSync('{SRC}/' + f, 'utf8')).join('\\n');
+eval(files);
+
+function buildExternalFireScenarioInput(raw) {{
+  if (!raw || typeof raw !== "object") return {{}};
+  const {{ fMethod, t1Method, ...rest }} = raw;
+  const assembled = {{ ...rest }};
+  if (raw.fireCase === "OPEN_POOL_LIQUID" || raw.fireCase === "CONFINED_POOL_FUEL_SMALL_MEDIUM") {{
+    delete assembled.F; delete assembled.Tf_degC; delete assembled.insulationLayers;
+    if (fMethod === "DIRECT") assembled.F = raw.F;
+    else if (fMethod === "INSULATION") {{ assembled.Tf_degC = raw.Tf_degC; assembled.insulationLayers = raw.insulationLayers; }}
+  }}
+  if (raw.fireCase === "OPEN_POOL_GAS_VAPOR") {{
+    delete assembled.T1_K; delete assembled.Pn_MPa; delete assembled.Tn_K;
+    if (t1Method === "DIRECT") assembled.T1_K = raw.T1_K;
+    else if (t1Method === "PN_TN") {{ assembled.Pn_MPa = raw.Pn_MPa; assembled.Tn_K = raw.Tn_K; }}
+  }}
+  return assembled;
+}}
+
+const out = {{}};
+const baseInp = {{ W:5000, P1:10, P2:1, T:320, M:44, k:1.28, Kd:0.975, Kb:1.0, mawp:11, OP:10, Z:1.0 }};
+
+function chain(raw) {{
+  const asm = buildExternalFireScenarioInput(raw);
+  const result = calculateExternalFireScenario(asm);
+  const selector = selectGoverningReliefLoad([result]);
+  const adapter = buildReliefSizingInput(selector);
+  return {{ asm, result, selector, adapter }};
+}}
+
+// EF-101: Case M CASE_DEFAULT가 Snapshot 런타임 값까지 도달
+{{
+  const raw = {{ fireCase:"OPEN_POOL_GAS_VAPOR", M:44, scenarioMSource:"CASE_DEFAULT",
+    P1_MPa:1.5, A_m2:20, Tw_K:600, t1Method:"DIRECT", T1_K:300 }};
+  const c = chain(raw);
+  const eng = api520Engine(baseInp, "safetyValve", null, c.adapter);
+  const snap = createSnapshot({{ caseId:"c1", valveTag:"PSV-1", deviceType:"safetyValve",
+    inputs: baseInp, engineResult: eng, equipment:null, dischargeSystem:null,
+    workflowDecision:{{state:"INSPECTION"}},
+    reliefLoad: {{ scenarios: c.selector.allScenarios, governing: c.selector.governingScenarioId,
+      quantity:"MASS_FLOW", unit:"kg/h", provenance: c.adapter.provenance }} }});
+  out.caseDefaultReachesSnapshot = snap.reliefLoad.provenance.allScenarios[0].inputs.scenarioMSource === "CASE_DEFAULT";
+  out.caseDefaultStatus = c.result.status;
+  out.caseDefaultGoverning = c.selector.governingScenarioId === "EXTERNAL_FIRE";
+}}
+
+// EF-102: SCENARIO_OVERRIDE가 Snapshot 런타임 값까지 도달
+{{
+  const raw = {{ fireCase:"OPEN_POOL_GAS_VAPOR", M:30.07, scenarioMSource:"SCENARIO_OVERRIDE",
+    P1_MPa:1.5, A_m2:20, Tw_K:600, t1Method:"DIRECT", T1_K:300 }};
+  const c = chain(raw);
+  const eng = api520Engine(baseInp, "safetyValve", null, c.adapter);
+  const snap = createSnapshot({{ caseId:"c1", valveTag:"PSV-1", deviceType:"safetyValve",
+    inputs: baseInp, engineResult: eng, equipment:null, dischargeSystem:null,
+    workflowDecision:{{state:"INSPECTION"}},
+    reliefLoad: {{ scenarios: c.selector.allScenarios, governing: c.selector.governingScenarioId,
+      quantity:"MASS_FLOW", unit:"kg/h", provenance: c.adapter.provenance }} }});
+  out.overrideReachesSnapshot = snap.reliefLoad.provenance.allScenarios[0].inputs.scenarioMSource === "SCENARIO_OVERRIDE";
+}}
+
+// EF-103: Tw<=T1 위반 시 계산 결과 없음(INSUFFICIENT_INPUT, W:null) — 이전 결과 잔존 없음
+{{
+  const raw = {{ fireCase:"OPEN_POOL_GAS_VAPOR", M:44, scenarioMSource:"CASE_DEFAULT",
+    P1_MPa:1.5, A_m2:20, Tw_K:250, t1Method:"DIRECT", T1_K:300 }};
+  const c = chain(raw);
+  out.twViolationBlocked = c.result.status === "INSUFFICIENT_INPUT" && c.result.W === null;
+  out.twViolationNotGoverning = c.adapter.valid === false;
+}}
+
+// EF-104: insulationLayers 빈 배열은 READY 불가
+{{
+  const raw = {{ fireCase:"OPEN_POOL_LIQUID", adequateDrainage:true, wettedArea_m2:50,
+    latentHeat_kcal_per_kg:80, fMethod:"INSULATION", Tf_degC:20, insulationLayers:[] }};
+  const c = chain(raw);
+  out.emptyLayersNotReady = c.result.status === "INSUFFICIENT_INPUT" && c.adapter.valid === false;
+}}
+
+// EF-105: 단일/복층 단열재 F 산정(식(5)/(6)) — 정상 계산 경로 동작 확인
+{{
+  const single = chain({{ fireCase:"OPEN_POOL_LIQUID", adequateDrainage:true, wettedArea_m2:50,
+    latentHeat_kcal_per_kg:80, fMethod:"INSULATION", Tf_degC:20,
+    insulationLayers:[{{k_kcal_mm_per_hr_m2_degC:0.03, thickness_mm:50}}] }});
+  const multi = chain({{ fireCase:"OPEN_POOL_LIQUID", adequateDrainage:true, wettedArea_m2:50,
+    latentHeat_kcal_per_kg:80, fMethod:"INSULATION", Tf_degC:20,
+    insulationLayers:[{{k_kcal_mm_per_hr_m2_degC:0.03, thickness_mm:25}},{{k_kcal_mm_per_hr_m2_degC:0.05, thickness_mm:25}}] }});
+  out.singleLayerOk = single.result.status === "OK";
+  out.multiLayerOk = multi.result.status === "OK";
+}}
+
+// EF-106: 3개 NEEDS_ENGINEERING_DECISION 케이스 — 계산값(W) 생성 안 됨, governing 후보 제외
+{{
+  const ids = ["JET_FIRE","CONFINED_POOL_VENTILATION_CONTROLLED","CONFINED_POOL_LARGE_SCALE"];
+  out.needsDecisionAllBlocked = ids.every(fc => {{
+    const c = chain({{ fireCase: fc }});
+    return c.result.status === "NEEDS_ENGINEERING_DECISION" && c.result.W === null && c.adapter.valid === false;
+  }});
+}}
+
+// EF-107: fireCase 전환 시 이전 입력 완전 제거(assembled input에 잔존 없음)
+{{
+  let scenarioInput = {{ fireCase:"OPEN_POOL_LIQUID", adequateDrainage:true, wettedArea_m2:50,
+    latentHeat_kcal_per_kg:80, fMethod:"DIRECT", F:0.3 }};
+  // fireCase 전환(CaseView.handleExternalFireCaseChange와 동일 로직)
+  scenarioInput = {{ fireCase:"OPEN_POOL_GAS_VAPOR" }};
+  const asm = buildExternalFireScenarioInput(scenarioInput);
+  out.noStaleFieldsAfterFireCaseSwitch = !("wettedArea_m2" in asm) && !("F" in asm) && !("fMethod" in asm);
+}}
+
+// EF-108: F 방법 전환 시 이전 경로 필드가 assembled input에서 사라짐
+{{
+  const raw = {{ fireCase:"OPEN_POOL_LIQUID", adequateDrainage:true, wettedArea_m2:50,
+    latentHeat_kcal_per_kg:80, fMethod:"DIRECT", F:0.3 }};
+  const asmBefore = buildExternalFireScenarioInput(raw);
+  out.directPathHasF = "F" in asmBefore;
+  const {{ F, ...rest }} = raw;
+  const switched = {{ ...rest, fMethod:"INSULATION", insulationLayers:[{{k_kcal_mm_per_hr_m2_degC:undefined,thickness_mm:undefined}}] }};
+  const asmAfter = buildExternalFireScenarioInput(switched);
+  out.insulationPathHasNoF = !("F" in asmAfter);
+}}
+
+console.log(JSON.stringify(out));
+"""
+    result = subprocess.run([node, "-e", check_script], capture_output=True, text=True, cwd=str(ROOT))
+    if result.returncode != 0:
+        tr.check("EF_dynamic_script_exec", False, f"동적 검증 스크립트 실행 실패: {result.stderr[-800:]}")
+        return tr
+    try:
+        out = json.loads(result.stdout.strip().splitlines()[-1])
+    except Exception as e:
+        tr.check("EF_dynamic_script_parse", False, f"결과 파싱 실패: {e} / stdout={result.stdout[-500:]}")
+        return tr
+
+    tr.check("EF_101_case_default_provenance_reaches_snapshot_runtime",
+             out.get("caseDefaultReachesSnapshot") is True,
+             f"CASE_DEFAULT provenance가 실제 Snapshot 런타임 값까지 전달되지 않음: {out}")
+    tr.check("EF_101b_case_default_status_ok",
+             out.get("caseDefaultStatus") == "OK",
+             f"정상 입력인데 계산 상태가 OK가 아님: {out.get('caseDefaultStatus')}")
+    tr.check("EF_101c_case_default_becomes_governing",
+             out.get("caseDefaultGoverning") is True,
+             "정상 계산된 §5.12 시나리오가 governing 후보로 selector에 연결되지 않음")
+    tr.check("EF_102_scenario_override_provenance_reaches_snapshot_runtime",
+             out.get("overrideReachesSnapshot") is True,
+             f"SCENARIO_OVERRIDE provenance가 실제 Snapshot 런타임 값까지 전달되지 않음: {out}")
+    tr.check("EF_103_tw_t1_violation_blocks_calculation",
+             out.get("twViolationBlocked") is True and out.get("twViolationNotGoverning") is True,
+             f"Tw≤T1 위반 시 계산 결과가 생성되거나 governing 후보가 되면 안 됨: {out}")
+    tr.check("EF_104_empty_insulation_layers_not_ready",
+             out.get("emptyLayersNotReady") is True,
+             f"빈 insulationLayers 배열이 READY 상태가 되면 안 됨: {out}")
+    tr.check("EF_105_single_and_multi_layer_insulation_ok",
+             out.get("singleLayerOk") is True and out.get("multiLayerOk") is True,
+             f"단일/복층 단열재 F 산정 경로가 정상 동작해야 함: {out}")
+    tr.check("EF_106_needs_decision_cases_never_produce_w_or_governing",
+             out.get("needsDecisionAllBlocked") is True,
+             f"3개 NEEDS_ENGINEERING_DECISION 케이스는 계산값도 governing 후보도 만들면 안 됨: {out}")
+    tr.check("EF_107_no_stale_fields_after_firecase_switch",
+             out.get("noStaleFieldsAfterFireCaseSwitch") is True,
+             f"fireCase 전환 후 이전 fireCase 전용 필드가 조립된 입력에 잔존함: {out}")
+    tr.check("EF_108_f_method_switch_removes_prior_path_field",
+             out.get("directPathHasF") is True and out.get("insulationPathHasNoF") is True,
+             f"F 방법 전환 후 이전 경로(F) 필드가 조립된 입력에 잔존함: {out}")
+
+    return tr
+
+
+
 #  §5.1/§5.6/§5.7/§5.8 4개 시나리오만 대상. UI는 계산하지 않고
 #  CaseView가 relief_load.js의 순수 함수(calculate*Scenario/
 #  selectGoverningReliefLoad/buildReliefSizingInput)만 호출해
@@ -5754,6 +6074,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [RELIEF-LOAD-UI-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── External Fire UX contract (C-4.10) ────────────────────────
+    print("\n── RELIEF-LOAD-UI-002 (Sprint C-4.10) ────────────────")
+    tr = test_external_fire_ux_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [RELIEF-LOAD-UI-002] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"

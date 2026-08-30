@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:f8c4aa047254\n\n' +
+    box.textContent = '[ERROR] BUILD:fa88dad338c4\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:f8c4aa047254\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:fa88dad338c4\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:f8c4aa047254 | 2026-08-26T22:08:43Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:fa88dad338c4 | 2026-08-30T22:54:27Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "f8c4aa047254";
+const __BUILD_HASH__ = "fa88dad338c4";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -3741,9 +3741,246 @@ function ScenarioEnumToggle({ label, options, value, onChange }) {
   );
 }
 
+function isFiniteNum(v) { return typeof v === "number" && isFinite(v); }
+
+// ── C-4.10 — §5.12 EXTERNAL_FIRE fireCase 메타 ──
+// 표시명/설명/계산가능여부는 C-4.10 설계 확정본(2장)을 그대로 따른다.
+const EXTERNAL_FIRE_CASE_ORDER = [
+  "OPEN_POOL_LIQUID", "OPEN_POOL_GAS_VAPOR", "CONFINED_POOL_FUEL_SMALL_MEDIUM",
+  "CONFINED_POOL_VENTILATION_CONTROLLED", "CONFINED_POOL_LARGE_SCALE", "JET_FIRE",
+];
+const EXTERNAL_FIRE_CASE_META = {
+  OPEN_POOL_LIQUID: {
+    label: "개방된 액면 화재 (액체)", computable: true,
+    desc: "옥외 등 개방된 공간에서 액체가 저장된 용기가 화재에 노출되는 상황입니다.",
+  },
+  OPEN_POOL_GAS_VAPOR: {
+    label: "개방된 액면 화재 (가스·증기)", computable: true,
+    desc: "옥외 등 개방된 공간에서 가스·증기가 저장된 용기가 화재에 노출되는 상황입니다.",
+  },
+  CONFINED_POOL_FUEL_SMALL_MEDIUM: {
+    label: "제한된 공간의 소·중규모 화재", computable: true,
+    desc: "밀폐·준밀폐 공간 내 화재로 연료가 제한적인 경우 — 개방 액면화재와 동일한 계산식을 노출 면적(Awi)만 바꿔 재사용합니다.",
+  },
+  CONFINED_POOL_VENTILATION_CONTROLLED: {
+    label: "제한된 공간의 환기지배형 화재", computable: false,
+    desc: "밀폐 공간 내 화재이나 환기(산소공급)가 제한되어 화재 규모 자체가 제한되는 상황입니다.",
+  },
+  CONFINED_POOL_LARGE_SCALE: {
+    label: "제한된 공간의 대규모 화재", computable: false,
+    desc: "밀폐 공간 내 대규모 연료로 인한 화재입니다.",
+  },
+  JET_FIRE: {
+    label: "제트 화재 (분출화재)", computable: false,
+    desc: "고압 누출이 점화되어 발생하는 국소 고온 화염입니다.",
+  },
+};
+// 3개 NEEDS_ENGINEERING_DECISION 케이스 전부에 동일하게 사용하는 고정 계약 문구
+// (C-4.10 UX 계약 잠금 — 케이스별 대체 문구로 바꾸지 않는다).
+const EXTERNAL_FIRE_NEEDS_DECISION_MESSAGE =
+  "현재 선택한 화재 상황은 이 기준에서 압력방출장치의 방출량 계산식이 제공되지 않습니다.\n" +
+  "따라서 자동 sizing을 진행하지 않고 전문가 판단이 필요합니다.";
+
+// ① 화재 상황 선택 — 6개 카드. 계산가능/전문가판단필요를 색상 외 배지 텍스트로도 구분.
+// 그리드는 auto-fit(240px 최소폭)으로 좁은 화면 1열/넓은 화면 2열이 자연스럽게 나온다.
+function ExternalFireCaseGrid({ selected, onSelect }) {
+  return (
+    <div style={{marginBottom:10}}>
+      <div style={{fontSize:10,color:T.sub,fontFamily:font.mono,marginBottom:6}}>① 어떤 화재 상황인가요?</div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(240px, 1fr))",gap:8}}>
+        {EXTERNAL_FIRE_CASE_ORDER.map(id => {
+          const meta = EXTERNAL_FIRE_CASE_META[id];
+          const isSel = selected === id;
+          return (
+            <div key={id} onClick={()=>onSelect(id)}
+              style={{padding:"10px 11px",borderRadius:10,cursor:"pointer",
+                border:`2px solid ${isSel?T.navyLight:T.border}`,
+                background: isSel ? T.navy+"0D" : (meta.computable ? T.white : T.bg)}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:6}}>
+                <div style={{fontSize:11,fontWeight:700,color:isSel?T.navy:T.text,fontFamily:font.sans}}>{meta.label}</div>
+                <span style={{flexShrink:0,fontSize:8,padding:"2px 6px",borderRadius:5,fontFamily:font.mono,fontWeight:700,whiteSpace:"nowrap",
+                  background: meta.computable ? T.greenBg : T.orangeBg,
+                  color: meta.computable ? T.greenDk : "#946200",
+                  border:`1px solid ${meta.computable ? T.green : T.orange}`}}>
+                  {meta.computable ? "✓ 계산 가능" : "⚙ 전문가 판단 필요"}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ② 선택한 상황 설명
+function ExternalFireCaseDescription({ fireCase }) {
+  const meta = EXTERNAL_FIRE_CASE_META[fireCase];
+  if (!meta) return null;
+  return (
+    <div style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:10,padding:"10px 12px",
+      marginBottom:10,fontSize:11,color:T.text,fontFamily:font.sans,lineHeight:1.6}}>
+      ② {meta.desc}
+    </div>
+  );
+}
+
+// ③④ 개방 액면화재(액체)/제한공간 소·중규모 — 동일 입력 스키마(라벨만 areaLabel로 구분)
+function ExternalFireOpenPoolForm({ scenarioInput, areaLabel, onFieldChange, onFMethodChange,
+  onInsulationLayerAdd, onInsulationLayerRemove, onInsulationLayerFieldChange }) {
+  const fMethod = scenarioInput.fMethod;
+  const layers = scenarioInput.insulationLayers || [];
+  return (
+    <div>
+      <ScenarioEnumToggle label="배수설비(Adequate Drainage)"
+        value={scenarioInput.adequateDrainage === true ? "YES" : scenarioInput.adequateDrainage === false ? "NO" : undefined}
+        onChange={v=>onFieldChange("adequateDrainage", v === "YES")}
+        options={[{id:"YES",label:"있음(화재 열 절반 이상 배수)"},{id:"NO",label:"없음"}]}/>
+      <ScenarioNumberField label={`젖은 면적 (${areaLabel})`} unit="m²"
+        value={scenarioInput.wettedArea_m2} onChange={v=>onFieldChange("wettedArea_m2", v)}/>
+      <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:-5,marginBottom:8,lineHeight:1.5}}>화재에 노출된 표면적입니다.</div>
+      <ScenarioNumberField label="잠열 (Latent Heat)" unit="kcal/kg"
+        value={scenarioInput.latentHeat_kcal_per_kg} onChange={v=>onFieldChange("latentHeat_kcal_per_kg", v)}/>
+      <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:-5,marginBottom:8,lineHeight:1.5}}>저장 물질이 증발하며 흡수하는 열량입니다.</div>
+
+      <div style={{fontSize:10,color:T.sub,fontFamily:font.mono,margin:"10px 0 5px"}}>환경인자 F, 어떻게 입력하시겠어요?</div>
+      <div style={{display:"flex",gap:6,marginBottom:8}}>
+        {[{id:"DIRECT",label:"F 값을 알고 있습니다"},{id:"INSULATION",label:"단열재 정보로 계산합니다"}].map(({id,label})=>(
+          <div key={id} onClick={()=>onFMethodChange(id)}
+            style={{flex:1,padding:"9px 10px",borderRadius:9,cursor:"pointer",textAlign:"center",
+              border:`2px solid ${fMethod===id?T.navyLight:T.border}`,
+              background:fMethod===id?T.navy+"0D":T.white,
+              fontSize:11,fontWeight:700,color:fMethod===id?T.navy:T.text,fontFamily:font.sans}}>
+            {label}
+          </div>
+        ))}
+      </div>
+
+      {fMethod === "DIRECT" && (
+        <ScenarioNumberField label="F (환경인자, 0~1 — 표3 값 또는 산정값)" unit=""
+          value={scenarioInput.F} onChange={v=>onFieldChange("F", v)}/>
+      )}
+
+      {fMethod === "INSULATION" && (
+        <div>
+          <ScenarioNumberField label="Tf (화재측 표면온도)" unit="℃"
+            value={scenarioInput.Tf_degC} onChange={v=>onFieldChange("Tf_degC", v)}/>
+          <div style={{fontSize:10,color:T.sub,fontFamily:font.mono,margin:"8px 0 5px"}}>단열재 층 (여러 겹이면 추가)</div>
+          {layers.map((layer, idx) => (
+            <div key={idx} style={{display:"flex",gap:6,alignItems:"flex-end",marginBottom:6}}>
+              <div style={{flex:1}}>
+                <ScenarioNumberField label="열전도율 k" unit="kcal·mm/hr·m²·℃"
+                  value={layer.k_kcal_mm_per_hr_m2_degC}
+                  onChange={v=>onInsulationLayerFieldChange(idx,"k_kcal_mm_per_hr_m2_degC",v)}/>
+              </div>
+              <div style={{flex:1}}>
+                <ScenarioNumberField label="두께" unit="mm"
+                  value={layer.thickness_mm}
+                  onChange={v=>onInsulationLayerFieldChange(idx,"thickness_mm",v)}/>
+              </div>
+              <button onClick={()=>onInsulationLayerRemove(idx)} disabled={layers.length<=1}
+                style={{marginBottom:8,padding:"8px 10px",borderRadius:8,border:`1px solid ${T.border}`,
+                  background:T.white,color:layers.length<=1?T.gray:T.red,
+                  cursor:layers.length<=1?"not-allowed":"pointer",fontSize:11,fontWeight:700,fontFamily:font.sans}}>
+                − 삭제
+              </button>
+            </div>
+          ))}
+          <button onClick={onInsulationLayerAdd}
+            style={{fontSize:10,color:T.navyLight,background:"none",border:`1px dashed ${T.navyLight}`,
+              borderRadius:7,padding:"6px 10px",cursor:"pointer",fontFamily:font.mono}}>
+            + 층 추가
+          </button>
+          <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:6,lineHeight:1.5}}>단열재가 여러 겹이면 층을 추가해 각각 입력하세요. F는 이 정보로 자동 계산됩니다(마지막 1개 층은 삭제할 수 없습니다).</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ③④ 가스·증기 화재 — Case M 프리필/재정의(C안), T1 상호배타, Tw≤T1 즉시 검증
+function ExternalFireGasVaporForm({ scenarioInput, onFieldChange, onMChange, onT1MethodChange }) {
+  const t1Method = scenarioInput.t1Method;
+  const t1Confirmed = t1Method === "DIRECT"
+    ? scenarioInput.T1_K
+    : (t1Method === "PN_TN" && isFiniteNum(scenarioInput.Pn_MPa) && scenarioInput.Pn_MPa > 0
+        && isFiniteNum(scenarioInput.Tn_K) && isFiniteNum(scenarioInput.P1_MPa))
+      ? (scenarioInput.P1_MPa / scenarioInput.Pn_MPa) * scenarioInput.Tn_K
+      : undefined;
+  const twViolation = isFiniteNum(scenarioInput.Tw_K) && isFiniteNum(t1Confirmed) && scenarioInput.Tw_K <= t1Confirmed;
+
+  return (
+    <div>
+      <ScenarioNumberField label="분자량 (M)" unit="kg/kmol"
+        value={scenarioInput.M} onChange={v=>onMChange(v)}/>
+      <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:-5,marginBottom:8}}>
+        {scenarioInput.scenarioMSource === "SCENARIO_OVERRIDE"
+          ? "(직접 입력값 사용 중)"
+          : scenarioInput.scenarioMSource === "CASE_DEFAULT"
+          ? "(Case 사양의 M값 사용 중 — 다른 값 사용 시 직접 수정)"
+          : null}
+      </div>
+      <ScenarioNumberField label="P1 (설정압력)" unit="MPa"
+        value={scenarioInput.P1_MPa} onChange={v=>onFieldChange("P1_MPa", v)}/>
+      <ScenarioNumberField label="A (노출 면적)" unit="m²"
+        value={scenarioInput.A_m2} onChange={v=>onFieldChange("A_m2", v)}/>
+      <ScenarioNumberField label="Tw — 화재 시 용기 벽 온도" unit="K"
+        value={scenarioInput.Tw_K} onChange={v=>onFieldChange("Tw_K", v)}/>
+
+      <div style={{fontSize:10,color:T.sub,fontFamily:font.mono,margin:"10px 0 5px"}}>T1(인입측 가스 초기 온도), 어떻게 입력하시겠어요?</div>
+      <div style={{display:"flex",gap:6,marginBottom:8}}>
+        {[{id:"DIRECT",label:"온도를 알고 있습니다"},{id:"PN_TN",label:"압력·온도로 계산합니다"}].map(({id,label})=>(
+          <div key={id} onClick={()=>onT1MethodChange(id)}
+            style={{flex:1,padding:"9px 10px",borderRadius:9,cursor:"pointer",textAlign:"center",
+              border:`2px solid ${t1Method===id?T.navyLight:T.border}`,
+              background:t1Method===id?T.navy+"0D":T.white,
+              fontSize:11,fontWeight:700,color:t1Method===id?T.navy:T.text,fontFamily:font.sans}}>
+            {label}
+          </div>
+        ))}
+      </div>
+
+      {t1Method === "DIRECT" && (
+        <ScenarioNumberField label="T1 — 화재 발생 전 가스 초기 온도" unit="K"
+          value={scenarioInput.T1_K} onChange={v=>onFieldChange("T1_K", v)}/>
+      )}
+      {t1Method === "PN_TN" && (
+        <div>
+          <ScenarioNumberField label="Pn — 정상운전 압력" unit="MPa"
+            value={scenarioInput.Pn_MPa} onChange={v=>onFieldChange("Pn_MPa", v)}/>
+          <ScenarioNumberField label="Tn — 정상운전 온도" unit="K"
+            value={scenarioInput.Tn_K} onChange={v=>onFieldChange("Tn_K", v)}/>
+          {isFiniteNum(t1Confirmed) && (
+            <div style={{fontSize:9,color:T.gray,fontFamily:font.mono,marginTop:-4,marginBottom:8}}>
+              산정된 T1 = {t1Confirmed.toFixed(1)} K
+            </div>
+          )}
+        </div>
+      )}
+
+      {twViolation && (
+        <div style={{background:T.redBg,border:`1.5px solid ${T.red}`,borderRadius:10,padding:"10px 12px",marginTop:6}}>
+          <div style={{fontSize:11,fontWeight:900,color:T.red,fontFamily:font.sans,marginBottom:4}}>
+            벽면 최대온도(Tw)는 인입측 가스온도(T1)보다 높아야 합니다.
+          </div>
+          <div style={{display:"flex",gap:16,fontSize:11,fontFamily:font.mono,color:T.text}}>
+            <span>Tw = {scenarioInput.Tw_K} K</span>
+            <span>T1 = {t1Confirmed.toFixed(1)} K</span>
+          </div>
+          <div style={{fontSize:9,color:T.sub,fontFamily:font.sans,marginTop:4,lineHeight:1.5}}>
+            화재로 가열된 용기 벽 온도(Tw)가 화재 이전 가스 온도(T1)보다 낮으면 물리적으로 열이 가스로 전달될 수 없어 계산이 성립하지 않습니다.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── RELIEF LOAD — 시나리오별 원시 입력 폼 ──
 // 각 시나리오는 조건부 필드만 보여준다(원문에 없는 필드를 요구하지 않음).
-function ReliefLoadScenarioInputForm({ scenarioType, scenarioInput, onFieldChange }) {
+function ReliefLoadScenarioInputForm({ scenarioType, scenarioInput, onFieldChange,
+  onExternalFireCaseChange, onExternalFireMChange, onExternalFireFMethodChange, onExternalFireT1MethodChange,
+  onExternalFireInsulationLayerAdd, onExternalFireInsulationLayerRemove, onExternalFireInsulationLayerFieldChange }) {
   if (scenarioType === "OUTLET_BLOCKED") {
     return (
       <div>
@@ -3834,6 +4071,47 @@ function ReliefLoadScenarioInputForm({ scenarioType, scenarioInput, onFieldChang
       </div>
     );
   }
+  if (scenarioType === "EXTERNAL_FIRE") {
+    const fireCase = scenarioInput.fireCase;
+    const meta = fireCase ? EXTERNAL_FIRE_CASE_META[fireCase] : null;
+    return (
+      <div>
+        <ExternalFireCaseGrid selected={fireCase} onSelect={onExternalFireCaseChange}/>
+        {meta && <ExternalFireCaseDescription fireCase={fireCase}/>}
+        {meta && !meta.computable && (
+          <div style={{background:T.orangeBg,border:`1.5px solid ${T.orange}`,borderRadius:10,
+            padding:"10px 12px",fontSize:11,color:"#7A4F00",fontFamily:font.sans,lineHeight:1.7,whiteSpace:"pre-line"}}>
+            {EXTERNAL_FIRE_NEEDS_DECISION_MESSAGE}
+          </div>
+        )}
+        {meta && meta.computable && (fireCase === "OPEN_POOL_LIQUID" || fireCase === "CONFINED_POOL_FUEL_SMALL_MEDIUM") && (
+          <div>
+            <div style={{fontSize:10,color:T.sub,fontFamily:font.mono,marginBottom:6}}>③ 필요한 정보만 입력</div>
+            <ExternalFireOpenPoolForm
+              scenarioInput={scenarioInput}
+              areaLabel={fireCase === "OPEN_POOL_LIQUID" ? "Aws" : "Awi(대체 면적)"}
+              onFieldChange={onFieldChange}
+              onFMethodChange={onExternalFireFMethodChange}
+              onInsulationLayerAdd={onExternalFireInsulationLayerAdd}
+              onInsulationLayerRemove={onExternalFireInsulationLayerRemove}
+              onInsulationLayerFieldChange={onExternalFireInsulationLayerFieldChange}
+            />
+          </div>
+        )}
+        {meta && meta.computable && fireCase === "OPEN_POOL_GAS_VAPOR" && (
+          <div>
+            <div style={{fontSize:10,color:T.sub,fontFamily:font.mono,marginBottom:6}}>③ 필요한 정보만 입력</div>
+            <ExternalFireGasVaporForm
+              scenarioInput={scenarioInput}
+              onFieldChange={onFieldChange}
+              onMChange={onExternalFireMChange}
+              onT1MethodChange={onExternalFireT1MethodChange}
+            />
+          </div>
+        )}
+      </div>
+    );
+  }
   return null;
 }
 
@@ -3884,12 +4162,15 @@ function ReliefLoadScenarioResultPanel({ result, adapter }) {
 function ReliefLoadScenarioSection({
   scenarioType, scenarioInput, scenarioResult, adapter,
   onScenarioTypeChange, onFieldChange,
+  onExternalFireCaseChange, onExternalFireMChange, onExternalFireFMethodChange, onExternalFireT1MethodChange,
+  onExternalFireInsulationLayerAdd, onExternalFireInsulationLayerRemove, onExternalFireInsulationLayerFieldChange,
 }) {
   const SCENARIOS = [
     { id:"OUTLET_BLOCKED",     label:"출구 차단",          tag:"§5.1" },
     { id:"OVERFILLING",         label:"과충전",              tag:"§5.6" },
     { id:"CONTROL_VALVE_FAIL",  label:"자동제어밸브 고장",   tag:"§5.7" },
     { id:"ABNORMAL_HEAT_VAPOR", label:"비정상 열/증기 유입", tag:"§5.8" },
+    { id:"EXTERNAL_FIRE",       label:"외부화재",            tag:"§5.12" },
   ];
   return (
     <div style={{background:T.cardBg,borderRadius:14,padding:14,marginBottom:10,border:`1.5px solid ${T.border}`}}>
@@ -3920,7 +4201,15 @@ function ReliefLoadScenarioSection({
 
       {scenarioType !== null && (
         <div style={{background:T.bg,borderRadius:10,padding:"10px 12px",border:`1px solid ${T.border}`}}>
-          <ReliefLoadScenarioInputForm scenarioType={scenarioType} scenarioInput={scenarioInput} onFieldChange={onFieldChange}/>
+          <ReliefLoadScenarioInputForm scenarioType={scenarioType} scenarioInput={scenarioInput} onFieldChange={onFieldChange}
+            onExternalFireCaseChange={onExternalFireCaseChange}
+            onExternalFireMChange={onExternalFireMChange}
+            onExternalFireFMethodChange={onExternalFireFMethodChange}
+            onExternalFireT1MethodChange={onExternalFireT1MethodChange}
+            onExternalFireInsulationLayerAdd={onExternalFireInsulationLayerAdd}
+            onExternalFireInsulationLayerRemove={onExternalFireInsulationLayerRemove}
+            onExternalFireInsulationLayerFieldChange={onExternalFireInsulationLayerFieldChange}
+          />
           <ReliefLoadScenarioResultPanel result={scenarioResult} adapter={adapter}/>
         </div>
       )}
@@ -4087,7 +4376,9 @@ const RELIEF_LOAD_BASIS_LABEL = {
 
 function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dischargeSystem, equipment,
   reliefLoadScenarioType, reliefLoadScenarioInput, reliefLoadScenarioResult, reliefLoadAdapter,
-  effectiveW, effectiveWSource, onReliefLoadScenarioTypeChange, onReliefLoadScenarioInputChange }) {
+  effectiveW, effectiveWSource, onReliefLoadScenarioTypeChange, onReliefLoadScenarioInputChange,
+  onExternalFireCaseChange, onExternalFireMChange, onExternalFireFMethodChange, onExternalFireT1MethodChange,
+  onExternalFireInsulationLayerAdd, onExternalFireInsulationLayerRemove, onExternalFireInsulationLayerFieldChange }) {
   const [fluidId, setFluidId]   = useState("co2");
   const [kdId,    setKdId]      = useState("sv_std");
   const [showCustomFluid, setShowCustomFluid] = useState(false);
@@ -4219,6 +4510,13 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         adapter={reliefLoadAdapter}
         onScenarioTypeChange={onReliefLoadScenarioTypeChange}
         onFieldChange={onReliefLoadScenarioInputChange}
+        onExternalFireCaseChange={onExternalFireCaseChange}
+        onExternalFireMChange={onExternalFireMChange}
+        onExternalFireFMethodChange={onExternalFireFMethodChange}
+        onExternalFireT1MethodChange={onExternalFireT1MethodChange}
+        onExternalFireInsulationLayerAdd={onExternalFireInsulationLayerAdd}
+        onExternalFireInsulationLayerRemove={onExternalFireInsulationLayerRemove}
+        onExternalFireInsulationLayerFieldChange={onExternalFireInsulationLayerFieldChange}
       />
 
       {/* ── 3. 유체 사양 결정 ── */}
@@ -6265,17 +6563,57 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
 //  CASE VIEW
 // ════════════════════════════════════════════════════════════════
 
-// ── RELIEF LOAD — MVP 대상 4개 시나리오 메타(라벨 + 계산 함수 매핑) ──
-// C-4.9 범위: §5.1/§5.6/§5.7/§5.8만. §5.11/§5.12/§5.13은 governing
-// 후보가 아니거나(§5.11/§5.13) UI 복잡도가 높아(§5.12) 이번 단계에서
+// ── RELIEF LOAD — 대상 시나리오 메타(라벨 + 계산 함수 매핑) ──
+// C-4.9 범위: §5.1/§5.6/§5.7/§5.8. C-4.10에서 §5.12(외부화재)를 추가한다.
+// §5.11/§5.13은 governing 후보가 아니므로(단위가 kg/h가 아님) 이번에도
 // 제외 — relief_load.js의 계산 함수 자체는 이미 구현되어 있으나
 // 이 UI에서 호출하지 않는다.
 const RELIEF_LOAD_SCENARIO_META = {
-  OUTLET_BLOCKED:     { label: "출구 차단",           section: "§5.1", calc: calculateOutletBlockedScenario },
-  OVERFILLING:         { label: "과충전",               section: "§5.6", calc: calculateOverfillingScenario },
-  CONTROL_VALVE_FAIL:  { label: "자동제어밸브 고장",    section: "§5.7", calc: calculateControlValveFailureScenario },
-  ABNORMAL_HEAT_VAPOR: { label: "비정상 열/증기 유입",  section: "§5.8", calc: calculateAbnormalHeatVaporScenario },
+  OUTLET_BLOCKED:     { label: "출구 차단",           section: "§5.1",  calc: calculateOutletBlockedScenario },
+  OVERFILLING:         { label: "과충전",               section: "§5.6",  calc: calculateOverfillingScenario },
+  CONTROL_VALVE_FAIL:  { label: "자동제어밸브 고장",    section: "§5.7",  calc: calculateControlValveFailureScenario },
+  ABNORMAL_HEAT_VAPOR: { label: "비정상 열/증기 유입",  section: "§5.8",  calc: calculateAbnormalHeatVaporScenario },
+  EXTERNAL_FIRE:       { label: "외부화재",             section: "§5.12", calc: calculateExternalFireScenario },
 };
+
+// ── C-4.10 — §5.12 EXTERNAL_FIRE 전용 입력 조립기 ──
+// fMethod/t1Method/scenarioMSource는 계산 함수(calculateExternalFireScenario)의
+// 파라미터가 아니라 UI 전용 판별자다(설계 확정본 9장). 이 함수는 relief_load.js를
+// 전혀 수정하지 않고, 계산 호출 직전에 "선택된 경로의 필드만" 남긴 입력 객체를
+// UI 레이어에서 조립한다 — relief_load.js는 입력을 { ...input }으로 그대로
+// 되돌려 주므로(결과의 inputs 필드), scenarioMSource를 조립된 입력에 실어
+// 보내면 계산 로직 변경 없이 Snapshot.reliefLoad까지 그대로 전달된다.
+function buildExternalFireScenarioInput(raw) {
+  if (!raw || typeof raw !== "object") return {};
+  const { fMethod, t1Method, ...rest } = raw;
+  const assembled = { ...rest };
+
+  if (raw.fireCase === "OPEN_POOL_LIQUID" || raw.fireCase === "CONFINED_POOL_FUEL_SMALL_MEDIUM") {
+    delete assembled.F;
+    delete assembled.Tf_degC;
+    delete assembled.insulationLayers;
+    if (fMethod === "DIRECT") {
+      assembled.F = raw.F;
+    } else if (fMethod === "INSULATION") {
+      assembled.Tf_degC = raw.Tf_degC;
+      assembled.insulationLayers = raw.insulationLayers;
+    }
+  }
+
+  if (raw.fireCase === "OPEN_POOL_GAS_VAPOR") {
+    delete assembled.T1_K;
+    delete assembled.Pn_MPa;
+    delete assembled.Tn_K;
+    if (t1Method === "DIRECT") {
+      assembled.T1_K = raw.T1_K;
+    } else if (t1Method === "PN_TN") {
+      assembled.Pn_MPa = raw.Pn_MPa;
+      assembled.Tn_K = raw.Tn_K;
+    }
+  }
+
+  return assembled;
+}
 
 function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onApprovalUpdate }) {
   const equipment = caseData.equipment || null;
@@ -6332,6 +6670,83 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   const handleReliefLoadScenarioInputChange = (key, val) =>
     setReliefLoadScenarioInput(p => ({ ...p, [key]: val }));
 
+  // ── C-4.10 — §5.12 EXTERNAL_FIRE 전용 state 핸들러 ──
+  // 기존 4개 시나리오(§5.1/5.6/5.7/5.8)의 handleReliefLoadScenarioTypeChange/
+  // handleReliefLoadScenarioInputChange는 위에서 전혀 수정하지 않았다.
+  // 아래는 §5.12의 fireCase 전환/F·T1 방법 전환/단열재 배열에서만 쓰이는
+  // 추가 핸들러다.
+
+  // fireCase 전환 — 이전 fireCase 전용 입력을 완전히 제거(state collision 방지,
+  // 기존 시나리오 전환 리셋 원칙과 동일). Case M 기본값 프리필(권고안 C안):
+  // OPEN_POOL_GAS_VAPOR로 "최초" 진입할 때만 Case의 M을 기본값으로 제시하고
+  // scenarioMSource="CASE_DEFAULT"를 남긴다 — 자동 동기화가 아니므로 이후
+  // Case M이 바뀌어도 이미 채워진 시나리오 M을 조용히 따라 바꾸지 않는다.
+  const handleExternalFireCaseChange = (newFireCase) => {
+    setReliefLoadScenarioInput(prev => {
+      if (prev.fireCase === newFireCase) return prev;
+      const next = { fireCase: newFireCase };
+      if (newFireCase === "OPEN_POOL_GAS_VAPOR") {
+        next.M = inputs.M;
+        next.scenarioMSource = "CASE_DEFAULT";
+      }
+      return next;
+    });
+  };
+
+  // 시나리오 M을 사용자가 직접 수정 — 그 즉시 provenance를 SCENARIO_OVERRIDE로 전환.
+  const handleExternalFireMChange = (val) =>
+    setReliefLoadScenarioInput(prev => ({ ...prev, M: val, scenarioMSource: "SCENARIO_OVERRIDE" }));
+
+  // F 입력 방법(직접값 ↔ 단열재) 전환 — 반대 경로의 입력값을 완전히 제거하고,
+  // INSULATION으로 전환 시 최소 1개 층을 기본 제공한다(빈 배열은 READY 불가 원칙).
+  const handleExternalFireFMethodChange = (newMethod) => {
+    setReliefLoadScenarioInput(prev => {
+      if (prev.fMethod === newMethod) return prev;
+      const { F, Tf_degC, insulationLayers, ...rest } = prev;
+      return {
+        ...rest, fMethod: newMethod,
+        ...(newMethod === "INSULATION"
+          ? { insulationLayers: [{ k_kcal_mm_per_hr_m2_degC: undefined, thickness_mm: undefined }] }
+          : {}),
+      };
+    });
+  };
+
+  // T1 입력 방법(직접값 ↔ Pn/Tn) 전환 — 반대 경로의 입력값을 완전히 제거.
+  const handleExternalFireT1MethodChange = (newMethod) => {
+    setReliefLoadScenarioInput(prev => {
+      if (prev.t1Method === newMethod) return prev;
+      const { T1_K, Pn_MPa, Tn_K, ...rest } = prev;
+      return { ...rest, t1Method: newMethod };
+    });
+  };
+
+  // 단열재 층 Add/Remove/필드수정 — 마지막 1개 층은 삭제할 수 없다(임의 상한 없음).
+  const handleExternalFireInsulationLayerAdd = () =>
+    setReliefLoadScenarioInput(prev => ({
+      ...prev,
+      insulationLayers: [...(prev.insulationLayers || []), { k_kcal_mm_per_hr_m2_degC: undefined, thickness_mm: undefined }],
+    }));
+  const handleExternalFireInsulationLayerRemove = (idx) =>
+    setReliefLoadScenarioInput(prev => {
+      const layers = prev.insulationLayers || [];
+      if (layers.length <= 1) return prev;
+      return { ...prev, insulationLayers: layers.filter((_, i) => i !== idx) };
+    });
+  const handleExternalFireInsulationLayerFieldChange = (idx, key, val) =>
+    setReliefLoadScenarioInput(prev => {
+      const layers = [...(prev.insulationLayers || [])];
+      layers[idx] = { ...layers[idx], [key]: val };
+      return { ...prev, insulationLayers: layers };
+    });
+
+  // C-4.10: EXTERNAL_FIRE는 계산 호출 직전에 UI 전용 판별자(fMethod/t1Method)를
+  // 제거하고 선택된 경로의 필드만 남긴 입력을 조립한다(relief_load.js 무수정).
+  // 기존 4개 시나리오는 reliefLoadScenarioInput을 그대로 사용해 동작이 동일하다.
+  const reliefLoadCalcInput = reliefLoadScenarioType === "EXTERNAL_FIRE"
+    ? buildExternalFireScenarioInput(reliefLoadScenarioInput)
+    : reliefLoadScenarioInput;
+
   // ── §5 scenario → selector → adapter 체인 (파생값, 매 렌더 재계산) ──
   // 이 세 함수(calculate*Scenario/selectGoverningReliefLoad/
   // buildReliefSizingInput)는 relief_load.js의 순수 함수다. api520Engine
@@ -6340,7 +6755,7 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   // 이미 CaseView가 매 렌더 computeWorkflowState()(engine 함수)를
   // 호출하는 기존 패턴과 동일한 층위의 파생 계산이다.
   const reliefLoadScenarioResult = reliefLoadScenarioType
-    ? RELIEF_LOAD_SCENARIO_META[reliefLoadScenarioType].calc(reliefLoadScenarioInput)
+    ? RELIEF_LOAD_SCENARIO_META[reliefLoadScenarioType].calc(reliefLoadCalcInput)
     : null;
   const reliefLoadSelectorResult = reliefLoadScenarioResult
     ? selectGoverningReliefLoad([reliefLoadScenarioResult])
@@ -6691,6 +7106,13 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
           effectiveWSource={effectiveWSource}
           onReliefLoadScenarioTypeChange={handleReliefLoadScenarioTypeChange}
           onReliefLoadScenarioInputChange={handleReliefLoadScenarioInputChange}
+          onExternalFireCaseChange={handleExternalFireCaseChange}
+          onExternalFireMChange={handleExternalFireMChange}
+          onExternalFireFMethodChange={handleExternalFireFMethodChange}
+          onExternalFireT1MethodChange={handleExternalFireT1MethodChange}
+          onExternalFireInsulationLayerAdd={handleExternalFireInsulationLayerAdd}
+          onExternalFireInsulationLayerRemove={handleExternalFireInsulationLayerRemove}
+          onExternalFireInsulationLayerFieldChange={handleExternalFireInsulationLayerFieldChange}
         />
       )}
 
