@@ -3,9 +3,12 @@
 
 // ── RELIEF LOAD — 대상 시나리오 메타(라벨 + 계산 함수 매핑) ──
 // C-4.9 범위: §5.1/§5.6/§5.7/§5.8. C-4.10에서 §5.12(외부화재)를 추가한다.
-// §5.11/§5.13은 governing 후보가 아니므로(단위가 kg/h가 아님) 이번에도
-// 제외 — relief_load.js의 계산 함수 자체는 이미 구현되어 있으나
-// 이 UI에서 호출하지 않는다.
+// §5.11/§5.13은 governing 후보가 아니므로(단위가 kg/h가 아님) 이 메타에는
+// 절대 포함하지 않는다 — relief_load.js의 계산 함수 자체는 이미 구현되어
+// 있으나, 이 메타는 "governing 배타 선택 라디오 그룹"만을 위한 것이다.
+// §5.11(액체부피팽창)은 C-4.12 REV2부터 이 메타·라디오 그룹과 완전히
+// 분리된 독립 state(liquidExpansionInput/liquidExpansionResult, 아래
+// 참고)로 직접 호출한다.
 const RELIEF_LOAD_SCENARIO_META = {
   OUTLET_BLOCKED:     { label: "출구 차단",           section: "§5.1",  calc: calculateOutletBlockedScenario },
   OVERFILLING:         { label: "과충전",               section: "§5.6",  calc: calculateOverfillingScenario },
@@ -94,6 +97,17 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   // collision 방지, RELIEF-LOAD-UI-001의 STATE_COLLISION 계약으로 고정).
   const [reliefLoadScenarioType,  setReliefLoadScenarioType]  = useState(null);
   const [reliefLoadScenarioInput, setReliefLoadScenarioInput] = useState({});
+
+  // ── C-4.12 REV2 — §5.11 액체부피팽창 독립 state ──
+  // 위 reliefLoadScenarioType/reliefLoadScenarioInput(배타 선택 governing
+  // 시나리오)과 완전히 분리된 별도 state다. §5.11은 governing 후보가 될
+  // 수 없으므로(VOLUME_FLOW) 애초에 같은 라디오 그룹에 둘 이유가 없고,
+  // Manual W나 다른 §5 시나리오 선택 상태와 무관하게 항상 독립적으로
+  // 입력·계산할 수 있어야 한다(요구사항: "§5.11 선택 때문에 Manual W가
+  // 사라지는 것/다른 relief scenario state가 깨지는 것 금지").
+  const [liquidExpansionInput, setLiquidExpansionInput] = useState({});
+  const handleLiquidExpansionFieldChange = (key, val) =>
+    setLiquidExpansionInput(p => ({ ...p, [key]: val }));
 
   const handleInputChange = (key, val) => setInputs(p => ({ ...p, [key]: val }));
 
@@ -210,32 +224,97 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   const effectiveWSource = (reliefLoadActive && reliefLoadAdapter?.valid) ? "GOVERNING_RELIEF_LOAD" : "MANUAL_INPUT";
   const effectiveW = effectiveWSource === "GOVERNING_RELIEF_LOAD" ? reliefLoadAdapter.W : inputs.W;
 
+  // ── C-4.12 REV2 — §5.11 계산 (governing 체인과 완전히 분리) ──
+  // reliefLoadScenarioType/reliefLoadSelectorResult/reliefLoadAdapter
+  // 어디에도 §5.11이 관여하지 않는다. Engine 함수를 UI에서 직접,
+  // 무조건(입력이 비어 있어도 INSUFFICIENT_INPUT을 그대로 받기 위해)
+  // 호출한다 — UI에서 계산식을 재구현하지 않는다는 원칙 그대로.
+  const liquidExpansionResult = calculateLiquidThermalExpansionScenario(liquidExpansionInput);
+
+  // ── C-4.12 REV2 — MASS_FLOW 계열 판별 ──
+  // classifyReliefLoadQuantity/RELIEF_LOAD_QUANTITY는 relief_load.js
+  // (Engine)의 기존 순수 함수/상수를 그대로 참조만 한다. RELIEF_LOAD_
+  // SCENARIO_META에는 이제 MASS_FLOW 계열(§5.1/5.6/5.7/5.8/5.12)만
+  // 존재하므로 이 분기는 사실상 항상 참이지만, 향후 실수로 non-MASS_FLOW
+  // 시나리오가 이 메타에 다시 섞여 들어가더라도 "계산 실패"와 "애초에
+  // governing 후보가 아님"을 혼동하지 않도록 판별 로직 자체는 그대로
+  // 유지한다(불필요한 재설계 금지 원칙).
+  const reliefLoadQuantity = reliefLoadScenarioResult
+    ? classifyReliefLoadQuantity(reliefLoadScenarioResult.unit) : null;
+  const reliefLoadIsMassFlowCandidate = reliefLoadQuantity === RELIEF_LOAD_QUANTITY.MASS_FLOW;
+  const reliefLoadScenarioComputed = !!reliefLoadScenarioResult &&
+    (reliefLoadScenarioResult.status === "OK" || reliefLoadScenarioResult.status === "COMPUTABLE");
+  const reliefLoadBlocking = reliefLoadActive && (
+    reliefLoadIsMassFlowCandidate ? !reliefLoadAdapter?.valid : !reliefLoadScenarioComputed
+  );
+
   const handleCalculate = () => {
-    // 시나리오가 활성화됐는데 유효한 governing W가 없으면 즉시 중단—
-    // manual W로 조용히 대체하지 않는다(자동 fallback 금지 원칙).
-    // 이 가드는 InputView의 blockReason과 동일한 조건이라 정상 흐름에서는
-    // 버튼 자체가 비활성화되어 여기 도달하지 않지만, 방어적으로 다시 확인.
-    if (reliefLoadActive && !reliefLoadAdapter?.valid) {
-      alert(`Relief Load 시나리오 입력이 완료되지 않았습니다 — ${reliefLoadAdapter?.reason || "INSUFFICIENT_INPUT"}`);
+    // 시나리오가 활성화됐는데 차단 상태면 즉시 중단 — manual W로 조용히
+    // 대체하지 않는다(자동 fallback 금지 원칙). 이 가드는 InputView의
+    // blockReason과 동일한 조건이라 정상 흐름에서는 버튼 자체가
+    // 비활성화되어 여기 도달하지 않지만, 방어적으로 다시 확인.
+    // reliefLoadIsMassFlowCandidate가 false인 경우(§5.11 등)는 계산이
+    // 성공한 상태이므로 여기서 막히지 않고 그대로 진행한다 — Manual W가
+    // 계속 실제 sizing에 쓰이는 정상 흐름이다(governing 후보가 아닐 뿐
+    // 계산 실패가 아님).
+    if (reliefLoadBlocking) {
+      const friendlyReason = !reliefLoadIsMassFlowCandidate
+        ? "필요한 입력값을 모두 채워주세요."
+        : (reliefLoadAdapter?.reason === "NO_GOVERNING_SCENARIO" ? "필요한 입력값을 모두 채워주세요." : (reliefLoadAdapter?.reason || "INSUFFICIENT_INPUT"));
+      alert(`Relief Load 시나리오 입력이 완료되지 않았습니다 — ${friendlyReason}`);
       return;
     }
-    const adapterForEngine = reliefLoadActive ? reliefLoadAdapter : undefined;
+    const adapterForEngine = (reliefLoadActive && reliefLoadIsMassFlowCandidate) ? reliefLoadAdapter : undefined;
     const engineResult = api520Engine(inputs, deviceType, equipment?.inletPiping || null, adapterForEngine);
     if (!engineResult.valid) {
       alert(`입력 오류: ${engineResult.error.field} — ${engineResult.error.reason}`);
       return;
     }
-    // RELIEF-LOAD-UI-001: 시나리오가 활성화되어 있고 유효할 때만
-    // Snapshot에 reliefLoad를 싣는다. 미사용 Case는 이 키 자체를 아예
-    // 넘기지 않아(undefined) 기존 hash/스키마와 100% 동일하게 유지한다
-    // (createSnapshot의 하위호환 계약, RELIEF-SIZING-ADAPTER-001 참고).
-    const reliefLoadForSnapshot = (reliefLoadActive && reliefLoadAdapter.valid) ? {
-      scenarios: reliefLoadSelectorResult.allScenarios,
-      governing: reliefLoadSelectorResult.governingScenarioId,
-      quantity: "MASS_FLOW",
-      unit: "kg/h",
-      provenance: reliefLoadAdapter.provenance,
-    } : undefined;
+    // RELIEF-LOAD-UI-001 확장: governing scenario가 활성화되어 있으면
+    // Snapshot에 reliefLoad.governing을 싣는다. 미사용 Case는 이 키
+    // 자체를 아예 넘기지 않아(undefined) 기존 hash/스키마와 100% 동일하게
+    // 유지한다(createSnapshot의 하위호환 계약, RELIEF-SIZING-ADAPTER-001
+    // 참고). 이 분기는 §5.11 도입 이전과 단 한 글자도 다르지 않다.
+    const reliefLoadForSnapshot = !reliefLoadActive ? undefined
+      : reliefLoadIsMassFlowCandidate
+        ? (reliefLoadAdapter.valid ? {
+            scenarios: reliefLoadSelectorResult.allScenarios,
+            governing: reliefLoadSelectorResult.governingScenarioId,
+            quantity: "MASS_FLOW",
+            unit: "kg/h",
+            provenance: reliefLoadAdapter.provenance,
+          } : undefined)
+        // RELIEF_LOAD_SCENARIO_META에는 이제 MASS_FLOW 계열만 존재하므로
+        // 이 분기는 도달 불가능하다 — 향후 실수로 non-MASS_FLOW 시나리오가
+        // 다시 섞여도 조용히 통과시키지 않도록 방어적으로 undefined 유지.
+        : undefined;
+
+    // ── C-4.12 REV2 — §5.11 supplementary ──
+    // liquidExpansionInput/Result는 reliefLoadScenarioType과 완전히
+    // 독립이므로, governing 시나리오 선택 여부와 무관하게 계산이
+    // 성공했으면(COMPUTABLE) 항상 Snapshot에 보존한다. 이 값은 절대
+    // governing에 들어가지 않는다 — 아래 병합에서도 governing 필드는
+    // reliefLoadForSnapshot 쪽에서만 채워진다.
+    const liquidExpansionSupplementary = (liquidExpansionResult.status === "COMPUTABLE") ? [{
+      scenario: "LIQUID_THERMAL_EXPANSION",
+      section: "§5.11",
+      status: liquidExpansionResult.status,
+      value: liquidExpansionResult.value,
+      unit: liquidExpansionResult.unit,
+      formula: liquidExpansionResult.formula,
+      inputs: liquidExpansionResult.inputs,
+      upstreamReference: liquidExpansionResult.upstreamReference,
+    }] : null;
+
+    // governing(위)과 supplementary(§5.11)를 하나의 reliefLoad 객체로
+    // 병합한다. §5.11을 전혀 쓰지 않는 기존 Case는 이 병합을 거쳐도
+    // reliefLoadForSnapshot과 완전히 동일한 결과가 나온다(하위호환 —
+    // supplementary 키 자체가 생기지 않음). §5.11만 쓰고 governing
+    // 시나리오는 비활성인 Case는 governing:null과 supplementary만 남는다.
+    const reliefLoadMerged = (!reliefLoadForSnapshot && !liquidExpansionSupplementary) ? undefined : {
+      ...(reliefLoadForSnapshot || { governing: null }),
+      ...(liquidExpansionSupplementary ? { supplementary: liquidExpansionSupplementary } : {}),
+    };
     // Engine이 workflow 결정 — timestamp는 UI에서 주입 (Engine 순수성 유지)
     const wfDec = computeWorkflowState(null, equipment, dischargeSystem);
     const snap = createSnapshot({
@@ -247,7 +326,7 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
       equipment,
       dischargeSystem,
       workflowDecision: { ...wfDec, state: "INSPECTION" },
-      reliefLoad:       reliefLoadForSnapshot,
+      reliefLoad:       reliefLoadMerged,
     });
     setSnapshot(snap);
     onSnapshotCreate(caseData.id, snap);
@@ -540,6 +619,7 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
           reliefLoadScenarioInput={reliefLoadScenarioInput}
           reliefLoadScenarioResult={reliefLoadScenarioResult}
           reliefLoadAdapter={reliefLoadAdapter}
+          reliefLoadBlocking={reliefLoadBlocking}
           effectiveW={effectiveW}
           effectiveWSource={effectiveWSource}
           onReliefLoadScenarioTypeChange={handleReliefLoadScenarioTypeChange}
@@ -551,6 +631,9 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
           onExternalFireInsulationLayerAdd={handleExternalFireInsulationLayerAdd}
           onExternalFireInsulationLayerRemove={handleExternalFireInsulationLayerRemove}
           onExternalFireInsulationLayerFieldChange={handleExternalFireInsulationLayerFieldChange}
+          liquidExpansionInput={liquidExpansionInput}
+          liquidExpansionResult={liquidExpansionResult}
+          onLiquidExpansionFieldChange={handleLiquidExpansionFieldChange}
         />
       )}
 

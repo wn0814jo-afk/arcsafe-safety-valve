@@ -419,6 +419,34 @@ function ReliefLoadScenarioInputForm({ scenarioType, scenarioInput, onFieldChang
   return null;
 }
 
+// ── C-4.12 REV2 — §5.11 액체부피팽창(LIQUID_EXPANSION) 전용 입력 폼 ──
+// 이 컴포넌트는 더 이상 ReliefLoadScenarioInputForm(기존 5개 MASS_FLOW
+// exclusive-radio 시나리오 전용)의 scenarioType 분기가 아니다 — §5.11은
+// governing scenario 선택(reliefLoadScenarioType)과 완전히 무관한 독립
+// state(liquidExpansionInput)를 입력받는 별도 컴포넌트다. 원문 기호
+// (α/Q/SG/Cp)와 직결되므로 일반 사용자가 헷갈리지 않도록 각 필드에 쉬운
+// 한글 설명을 덧붙인다(개발자 필드명 alpha_per_degC 등은 화면 비노출).
+function LiquidExpansionInputForm({ value, onFieldChange }) {
+  return (
+    <div>
+      <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginBottom:10,lineHeight:1.6,
+        background:T.bg,borderRadius:8,padding:"8px 10px",border:`1px solid ${T.border}`}}>
+        배관/열교환기 안에 액체가 갇힌 상태에서 외부 열원(태양열, 인접 고온 배관 등)에 의해
+        액체가 팽창하며 압력이 상승하는 상황을 산정합니다. 유입 열량(Q) 산정 방법은
+        열팽창용 안전밸브 기술지침(KOSHA D-31)을 참고하세요.
+      </div>
+      <ScenarioNumberField label="체적팽창계수 α (Volumetric Expansion Coefficient)" unit="1/°C"
+        value={value.alpha_per_degC} onChange={v=>onFieldChange("alpha_per_degC",v)}/>
+      <ScenarioNumberField label="유입 열량 Q (Heat Input Rate)" unit="kcal/hr"
+        value={value.Q_kcal_per_hr} onChange={v=>onFieldChange("Q_kcal_per_hr",v)}/>
+      <ScenarioNumberField label="비중 SG (Specific Gravity)" unit="-"
+        value={value.SG} onChange={v=>onFieldChange("SG",v)}/>
+      <ScenarioNumberField label="비열 Cp (Specific Heat)" unit="kcal/kg·°C"
+        value={value.Cp_kcal_per_kgC} onChange={v=>onFieldChange("Cp_kcal_per_kgC",v)}/>
+    </div>
+  );
+}
+
 // ── RELIEF LOAD — 시나리오 계산 결과 패널 ──
 function ReliefLoadScenarioResultPanel({ result, adapter }) {
   if (!result) return null;
@@ -456,6 +484,37 @@ function ReliefLoadScenarioResultPanel({ result, adapter }) {
           {result.W.toLocaleString(undefined,{maximumFractionDigits:1})} <span style={{fontSize:13,color:T.sub}}>kg/h</span>
         </div>
         <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginTop:6,lineHeight:1.6}}>{result.formula}</div>
+      </div>
+    );
+  }
+  // C-4.12 REV2 — VOLUME_FLOW/AREA quantity 계열(예: §5.11)의 "계산
+  // 성공" 상태. "OK"(MASS_FLOW, governing 후보)와 의도적으로 분기를
+  // 분리한다 — COMPUTABLE은 "계산 자체는 성공했다"는 뜻일 뿐 governing
+  // 여부와는 무관하므로, 절대 GOVERNING RELIEF LOAD 배지를 붙이지 않고
+  // 대신 "이 값은 sizing에 자동 반영되지 않는다"는 문구를 텍스트로
+  // (색상에만 의존하지 않고) 항상 함께 표시한다. 이 분기는 result.status만
+  // 보고 어떤 scenario 계열인지는 신경 쓰지 않는 범용 렌더러이므로,
+  // 기존 5-scenario radio 그룹과 신규 독립 §5.11 블록이 모두 그대로
+  // 재사용한다(코드 중복 방지 — 새 판정 로직을 추가하지 않는다).
+  if (result.status === "COMPUTABLE") {
+    const displayUnit = result.unit === "m3/h" ? "m³/h" : result.unit;
+    return (
+      <div style={{background:T.bg,border:`1.5px solid ${T.border}`,borderRadius:12,
+        padding:"12px 14px",marginTop:8}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+          <span style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono,letterSpacing:0.5}}>SCENARIO RESULT</span>
+          <span style={{fontSize:9,padding:"2px 8px",borderRadius:6,background:T.white,border:`1px solid ${T.border}`,
+            color:T.sub,fontFamily:font.mono,fontWeight:700}}>참고용 계산값</span>
+        </div>
+        <div style={{fontSize:22,fontWeight:900,color:T.navy,fontFamily:font.mono}}>
+          {Number(result.value).toLocaleString(undefined,{maximumFractionDigits:3})} <span style={{fontSize:13,color:T.sub}}>{displayUnit}</span>
+        </div>
+        <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginTop:6,lineHeight:1.6}}>{result.formula}</div>
+        <div style={{background:T.orangeBg,border:`1px solid ${T.orange}`,borderRadius:8,padding:"7px 10px",
+          marginTop:8,fontSize:10,color:"#7A4F00",fontFamily:font.sans,fontWeight:700,lineHeight:1.6}}>
+          ⚠ 이 계산값은 최종 PSV sizing에 자동 반영되지 않습니다 — 부피유량({displayUnit})은 소요분출량(kg/h) 산정에
+          직접 합산되지 않으며, 위의 설계 방출량(Manual W)이 그대로 사양 결정에 사용됩니다.
+        </div>
       </div>
     );
   }
@@ -515,6 +574,43 @@ function ReliefLoadScenarioSection({
             onExternalFireInsulationLayerFieldChange={onExternalFireInsulationLayerFieldChange}
           />
           <ReliefLoadScenarioResultPanel result={scenarioResult} adapter={adapter}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── C-4.12 REV2 — §5.11 액체부피팽창 독립 부가 계산 블록 ──
+// 위 ReliefLoadScenarioSection(기존 5개 MASS_FLOW exclusive-radio
+// 시나리오)과 완전히 분리된 컴포넌트다. 이 블록의 열림/닫힘은 이
+// 컴포넌트 내부의 로컬 state(open)로만 관리한다 — governing scenario
+// 선택(reliefLoadScenarioType)이나 Manual W와 아무 관계가 없으므로
+// CaseView까지 끌어올릴 이유가 없다(순수 표시 상태). 반면 실제 계산
+// 입력값(value)과 결과(result)는 CaseView가 Engine을 호출해 만든
+// 값을 그대로 props로 받는다 — 이 컴포넌트는 read-only 표시 계층
+// 원칙을 지켜 여기서 calculateLiquidThermalExpansionScenario를 직접
+// 호출하거나 계산식을 재구현하지 않는다.
+function LiquidExpansionSupplementaryBlock({ value, onFieldChange, result }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{background:T.cardBg,borderRadius:14,padding:14,marginBottom:10,border:`1.5px solid ${T.border}`}}>
+      <div style={{fontSize:12,fontWeight:900,color:T.navy,fontFamily:font.sans,marginBottom:3}}>
+        부가 계산 — 액체부피팽창 (§5.11, 참고용)
+      </div>
+      <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginBottom:10,lineHeight:1.5}}>
+        위의 방출 시나리오 선택(Manual W 포함)과는 완전히 독립적으로 계산할 수 있는 참고용 항목입니다.
+        어떤 시나리오가 선택되어 있든 상관없이 열어서 계산할 수 있으며, 결과는 소요분출량(W, kg/h) 산정에
+        자동으로 반영되지 않습니다.
+      </div>
+      <button onClick={()=>setOpen(o=>!o)}
+        style={{fontSize:10,color:T.sub,background:"none",border:`1px dashed ${T.border}`,
+          borderRadius:7,padding:"6px 10px",cursor:"pointer",fontFamily:font.mono}}>
+        {open ? "▲ 닫기" : "▼ 액체부피팽창 계산 열기"}
+      </button>
+      {open && (
+        <div style={{background:T.bg,borderRadius:10,padding:"10px 12px",border:`1px solid ${T.border}`,marginTop:10}}>
+          <LiquidExpansionInputForm value={value} onFieldChange={onFieldChange}/>
+          <ReliefLoadScenarioResultPanel result={result} adapter={null}/>
         </div>
       )}
     </div>
@@ -679,10 +775,11 @@ const RELIEF_LOAD_BASIS_LABEL = {
 };
 
 function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dischargeSystem, equipment,
-  reliefLoadScenarioType, reliefLoadScenarioInput, reliefLoadScenarioResult, reliefLoadAdapter,
+  reliefLoadScenarioType, reliefLoadScenarioInput, reliefLoadScenarioResult, reliefLoadAdapter, reliefLoadBlocking,
   effectiveW, effectiveWSource, onReliefLoadScenarioTypeChange, onReliefLoadScenarioInputChange,
   onExternalFireCaseChange, onExternalFireMChange, onExternalFireFMethodChange, onExternalFireT1MethodChange,
-  onExternalFireInsulationLayerAdd, onExternalFireInsulationLayerRemove, onExternalFireInsulationLayerFieldChange }) {
+  onExternalFireInsulationLayerAdd, onExternalFireInsulationLayerRemove, onExternalFireInsulationLayerFieldChange,
+  liquidExpansionInput, liquidExpansionResult, onLiquidExpansionFieldChange }) {
   const [fluidId, setFluidId]   = useState("co2");
   const [kdId,    setKdId]      = useState("sv_std");
   const [showCustomFluid, setShowCustomFluid] = useState(false);
@@ -791,12 +888,20 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
       {/* ── 2. 방출 시나리오 ── */}
       <SectionHeader step="2" title="방출 시나리오" sub="어떤 상황에서 밸브가 열리는가 — API 521 시나리오"/>
       <div style={{position:"relative"}}>
+        {/* C-4.12: 이 배지는 "Manual W가 실제로 sizing에 쓰이는가"를
+            그대로 보여준다 — effectiveWSource는 하단 "사양 결정 요약"의
+            GOVERNING RELIEF LOAD 배지와 정확히 같은 파생값이므로 두 배지가
+            서로 모순될 수 없다. 시나리오 선택 여부(reliefLoadScenarioType)
+            만으로 판단하지 않는 이유: §5.11처럼 시나리오를 선택하고
+            계산까지 성공해도 governing 후보가 될 수 없는(VOLUME_FLOW)
+            경우, Manual W는 계속 실제로 쓰이므로 "참고용 — 미사용"이라고
+            하면 사실과 다르다. */}
         <div style={{position:"absolute",top:-6,right:0,zIndex:1,fontSize:9,padding:"2px 8px",borderRadius:6,
           fontFamily:font.mono,fontWeight:700,
-          background: reliefLoadScenarioType !== null ? T.orangeBg : T.greenBg,
-          color: reliefLoadScenarioType !== null ? "#946200" : T.greenDk,
-          border:`1px solid ${reliefLoadScenarioType !== null ? T.orange : T.green}`}}>
-          {reliefLoadScenarioType !== null ? "참고용 — 미사용" : "MANUAL INPUT 사용 중"}
+          background: effectiveWSource==="GOVERNING_RELIEF_LOAD" ? T.orangeBg : T.greenBg,
+          color: effectiveWSource==="GOVERNING_RELIEF_LOAD" ? "#946200" : T.greenDk,
+          border:`1px solid ${effectiveWSource==="GOVERNING_RELIEF_LOAD" ? T.orange : T.green}`}}>
+          {effectiveWSource==="GOVERNING_RELIEF_LOAD" ? "참고용 — 미사용" : "MANUAL INPUT 사용 중"}
         </div>
         <DecisionSlider
           param="W" label="설계 방출량 (Manual)" unit="kg/h"
@@ -821,6 +926,13 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         onExternalFireInsulationLayerAdd={onExternalFireInsulationLayerAdd}
         onExternalFireInsulationLayerRemove={onExternalFireInsulationLayerRemove}
         onExternalFireInsulationLayerFieldChange={onExternalFireInsulationLayerFieldChange}
+      />
+
+      {/* ── 2c. §5.11 액체부피팽창 — 독립 부가 계산(참고용, governing과 무관) ── */}
+      <LiquidExpansionSupplementaryBlock
+        value={liquidExpansionInput}
+        onFieldChange={onLiquidExpansionFieldChange}
+        result={liquidExpansionResult}
       />
 
       {/* ── 3. 유체 사양 결정 ── */}
@@ -1143,7 +1255,12 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
       </div>
 
       {(() => {
-        const reliefLoadIncomplete = reliefLoadScenarioType !== null && reliefLoadAdapter?.valid !== true;
+        // C-4.12: reliefLoadBlocking은 CaseView에서 계산되는 단일
+        // 진실 소스다 — §5.1/5.6/5.7/5.8/5.12(MASS_FLOW)는 기존과 동일한
+        // adapter.valid 조건, §5.11(VOLUME_FLOW) 등은 "이 시나리오 자체
+        // 계산 성공 여부"로 판정한 값이 그대로 넘어온다. 여기서 새로
+        // 판정 로직을 만들지 않고 그 값을 그대로 쓴다(판정 중복/불일치 방지).
+        const reliefLoadIncomplete = !!reliefLoadBlocking;
         const blockReason = mawpWarning
           ? "⚠ 설정압 오류 — 수정 후 진행 가능"
           : (kbOverride && !kbOverrideReason.trim())

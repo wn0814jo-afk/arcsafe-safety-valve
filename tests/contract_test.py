@@ -3488,11 +3488,16 @@ def test_external_fire_ux_contract() -> TestResult:
              re.search(r"setReliefLoadScenarioType\(type\);\s*\n\s*setReliefLoadScenarioInput\(\{\}\);", casev_src) is not None,
              "§5.12↔기존 4개 시나리오 전환은 기존 handleReliefLoadScenarioTypeChange 리셋 메커니즘을 그대로 재사용해야 함(신규 우회 경로 금지)")
 
-    # ── §5.11/§5.13 미포함(범위 준수) ────────────────────────────────
-    tr.check("EF_020_scope_excludes_5_11_and_5_13",
-             "calculateLiquidThermalExpansionScenario" not in casev_src
-             and "calculateExchangerFailureScenario" not in casev_src,
-             "§5.11/§5.13 계산 함수가 CaseView에서 호출되면 안 됨(이번 범위 제외)")
+    # ── §5.13 미포함 유지(범위 준수) / §5.11은 C-4.12에서 신규 포함 ──────
+    # 원래 EF_020은 "§5.11/§5.13 둘 다 미포함"을 검증했으나, C-4.12에서
+    # §5.11(액체부피팽창)을 의도적으로 CaseView에 연결했다 — 이는 회귀가
+    # 아니라 이번 스프린트의 목표 자체다(§5.13은 여전히 범위 밖으로 유지).
+    tr.check("EF_020_scope_excludes_5_13_only",
+             "calculateExchangerFailureScenario" not in casev_src,
+             "§5.13 계산 함수가 CaseView에서 호출되면 안 됨(이번 범위 제외, §5.11은 C-4.12에서 포함됨)")
+    tr.check("LE_001_scope_includes_5_11",
+             "calculateLiquidThermalExpansionScenario" in casev_src,
+             "§5.11(액체부피팽창) 계산 함수가 CaseView RELIEF_LOAD_SCENARIO_META에 연결되어야 함(C-4.12)")
 
     node = shutil.which("node")
     if not node:
@@ -3713,14 +3718,23 @@ def test_relief_load_ui_contract() -> TestResult:
              "동일 시나리오 재클릭 시 입력 중이던 값이 리셋되면 안 됨(멱등 가드 필요)")
 
     # ── 자동 fallback 금지: handleCalculate가 engine 호출 전에 차단 ──
+    # C-4.12: 가드 조건이 "reliefLoadActive && !reliefLoadAdapter?.valid"에서
+    # "reliefLoadBlocking"(파생 변수)으로 바뀌었다 — MASS_FLOW 계열
+    # (§5.1/5.6/5.7/5.8/5.12)에서는 reliefLoadBlocking이 여전히 정확히
+    # !reliefLoadAdapter?.valid로 환원되므로(UI_004b가 이를 별도 검증)
+    # 기존 계약(차단 조건 자체)은 값 수준에서 그대로 보존된다. §5.11처럼
+    # governing 후보가 아닌 시나리오만 "계산 성공 여부"로 판정이 바뀐다.
     handle_calc_body = casev_src.split("const handleCalculate = ()")[1].split("const _buildAdvancedSnapshot")[0] \
         if "const handleCalculate = ()" in casev_src else ""
-    guard_idx = handle_calc_body.find("if (reliefLoadActive && !reliefLoadAdapter?.valid)")
+    guard_idx = handle_calc_body.find("if (reliefLoadBlocking)")
     return_idx = handle_calc_body.find("return;", guard_idx) if guard_idx != -1 else -1
     engine_call_idx = handle_calc_body.find("api520Engine(inputs, deviceType, equipment?.inletPiping")
     tr.check("UI_004_handle_calculate_blocks_before_engine_when_invalid",
              guard_idx != -1 and return_idx != -1 and engine_call_idx != -1 and return_idx < engine_call_idx,
-             "handleCalculate가 시나리오 활성화+invalid 상태에서 api520Engine 호출 전에 즉시 return해야 함")
+             "handleCalculate가 reliefLoadBlocking 상태에서 api520Engine 호출 전에 즉시 return해야 함")
+    tr.check("UI_004b_relief_load_blocking_preserves_mass_flow_gate",
+             re.search(r"reliefLoadIsMassFlowCandidate\s*\?\s*!reliefLoadAdapter\?\.valid", casev_src) is not None,
+             "MASS_FLOW 계열 시나리오(§5.1/5.6/5.7/5.8/5.12)는 여전히 adapter.valid 하나만으로 차단 여부를 판정해야 함(기존 계약 보존)")
     tr.check("UI_005_no_hardcoded_max_or_reduce_governing_logic_in_caseview",
              not re.search(r"\.reduce\s*\(|\bMath\.max\s*\(",
                            casev_src.split("function CaseView")[1] if "function CaseView" in casev_src else casev_src),
