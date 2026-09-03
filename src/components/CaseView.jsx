@@ -109,6 +109,14 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   const handleLiquidExpansionFieldChange = (key, val) =>
     setLiquidExpansionInput(p => ({ ...p, [key]: val }));
 
+  // ── C-4.13 — §5.13 열교환기 고장 독립 state (§5.11과 형제) ──
+  // 마찬가지로 reliefLoadScenarioType과 완전히 분리되어 있다. §5.11과도
+  // 서로 독립이다 — 두 supplementary 블록을 동시에 열고 계산해도 서로의
+  // state를 전혀 건드리지 않는다.
+  const [exchangerFailureInput, setExchangerFailureInput] = useState({});
+  const handleExchangerFailureFieldChange = (key, val) =>
+    setExchangerFailureInput(p => ({ ...p, [key]: val }));
+
   const handleInputChange = (key, val) => setInputs(p => ({ ...p, [key]: val }));
 
   // 시나리오 전환 — 반드시 입력을 리셋한다(동일 타입 재클릭은 리셋하지
@@ -231,6 +239,10 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   // 호출한다 — UI에서 계산식을 재구현하지 않는다는 원칙 그대로.
   const liquidExpansionResult = calculateLiquidThermalExpansionScenario(liquidExpansionInput);
 
+  // ── C-4.13 — §5.13 계산 (§5.11과 마찬가지로 governing 체인과 완전히
+  // 분리, Engine 직접 호출) ──
+  const exchangerFailureResult = calculateExchangerFailureScenario(exchangerFailureInput);
+
   // ── C-4.12 REV2 — MASS_FLOW 계열 판별 ──
   // classifyReliefLoadQuantity/RELIEF_LOAD_QUANTITY는 relief_load.js
   // (Engine)의 기존 순수 함수/상수를 그대로 참조만 한다. RELIEF_LOAD_
@@ -289,13 +301,15 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
         // 다시 섞여도 조용히 통과시키지 않도록 방어적으로 undefined 유지.
         : undefined;
 
-    // ── C-4.12 REV2 — §5.11 supplementary ──
-    // liquidExpansionInput/Result는 reliefLoadScenarioType과 완전히
-    // 독립이므로, governing 시나리오 선택 여부와 무관하게 계산이
-    // 성공했으면(COMPUTABLE) 항상 Snapshot에 보존한다. 이 값은 절대
-    // governing에 들어가지 않는다 — 아래 병합에서도 governing 필드는
-    // reliefLoadForSnapshot 쪽에서만 채워진다.
-    const liquidExpansionSupplementary = (liquidExpansionResult.status === "COMPUTABLE") ? [{
+    // ── C-4.12 REV2 / C-4.13 — supplementary 결과들 ──
+    // liquidExpansionInput/Result, exchangerFailureInput/Result 모두
+    // reliefLoadScenarioType과 완전히 독립이므로, governing 시나리오
+    // 선택 여부와 무관하게 계산이 성공했으면(COMPUTABLE) 항상 Snapshot에
+    // 보존한다. 이 값들은 절대 governing에 들어가지 않는다 — 아래
+    // 병합에서도 governing 필드는 reliefLoadForSnapshot 쪽에서만
+    // 채워진다. 각 항목은 자기 identity(scenario/section)를 명확히
+    // 갖는다.
+    const liquidExpansionSupplementary = (liquidExpansionResult.status === "COMPUTABLE") ? {
       scenario: "LIQUID_THERMAL_EXPANSION",
       section: "§5.11",
       status: liquidExpansionResult.status,
@@ -304,16 +318,41 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
       formula: liquidExpansionResult.formula,
       inputs: liquidExpansionResult.inputs,
       upstreamReference: liquidExpansionResult.upstreamReference,
-    }] : null;
+    } : null;
 
-    // governing(위)과 supplementary(§5.11)를 하나의 reliefLoad 객체로
-    // 병합한다. §5.11을 전혀 쓰지 않는 기존 Case는 이 병합을 거쳐도
-    // reliefLoadForSnapshot과 완전히 동일한 결과가 나온다(하위호환 —
-    // supplementary 키 자체가 생기지 않음). §5.11만 쓰고 governing
-    // 시나리오는 비활성인 Case는 governing:null과 supplementary만 남는다.
-    const reliefLoadMerged = (!reliefLoadForSnapshot && !liquidExpansionSupplementary) ? undefined : {
+    // C-4.13 — §5.13 결과 필드는 requiredOrificeArea_m2다(§5.11의
+    // value와 다른 이름) — Engine이 실제로 부여한 필드명을 그대로
+    // 옮겨 담을 뿐, "value"라는 의미가 다른 이름으로 억지로 바꾸지
+    // 않는다. COMPUTABLE일 때만 보존한다(NOT_APPLICABLE/NEEDS_
+    // ENGINEERING_DECISION/INSUFFICIENT_INPUT은 산정된 면적값 자체가
+    // 없으므로 supplementary에 넣지 않는다 — 화면에는 별도로 표시되지만
+    // Snapshot 감사 기록은 "실제로 산정된 값"만 남긴다).
+    const exchangerFailureSupplementary = (exchangerFailureResult.status === "COMPUTABLE") ? {
+      scenario: "EXCHANGER_FAILURE",
+      section: "§5.13",
+      status: exchangerFailureResult.status,
+      requiredOrificeArea_m2: exchangerFailureResult.requiredOrificeArea_m2,
+      unit: exchangerFailureResult.unit,
+      formula: exchangerFailureResult.formula,
+      inputs: exchangerFailureResult.inputs,
+      source: exchangerFailureResult.source,
+    } : null;
+
+    // 여러 supplementary 결과를 배열로 합친다 — null/undefined는
+    // 안전하게 걸러내고, 예상 못한 객체가 배열에 섞여 들어가지 않도록
+    // 위에서 만든 두 값만 명시적으로 나열한다(향후 §5.x가 추가되면
+    // 이 배열에 한 줄만 추가하면 된다).
+    const supplementaryList = [liquidExpansionSupplementary, exchangerFailureSupplementary].filter(Boolean);
+
+    // governing(위)과 supplementary(§5.11/§5.13)를 하나의 reliefLoad
+    // 객체로 병합한다. 둘 다 전혀 쓰지 않는 기존 Case는 이 병합을
+    // 거쳐도 reliefLoadForSnapshot과 완전히 동일한 결과가 나온다
+    // (하위호환 — supplementary 키 자체가 생기지 않음). supplementary만
+    // 쓰고 governing 시나리오는 비활성인 Case는 governing:null과
+    // supplementary만 남는다.
+    const reliefLoadMerged = (!reliefLoadForSnapshot && supplementaryList.length === 0) ? undefined : {
       ...(reliefLoadForSnapshot || { governing: null }),
-      ...(liquidExpansionSupplementary ? { supplementary: liquidExpansionSupplementary } : {}),
+      ...(supplementaryList.length > 0 ? { supplementary: supplementaryList } : {}),
     };
     // Engine이 workflow 결정 — timestamp는 UI에서 주입 (Engine 순수성 유지)
     const wfDec = computeWorkflowState(null, equipment, dischargeSystem);
@@ -634,6 +673,9 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
           liquidExpansionInput={liquidExpansionInput}
           liquidExpansionResult={liquidExpansionResult}
           onLiquidExpansionFieldChange={handleLiquidExpansionFieldChange}
+          exchangerFailureInput={exchangerFailureInput}
+          exchangerFailureResult={exchangerFailureResult}
+          onExchangerFailureFieldChange={handleExchangerFailureFieldChange}
         />
       )}
 

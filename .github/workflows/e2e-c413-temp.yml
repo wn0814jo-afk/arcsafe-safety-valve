@@ -1,0 +1,45 @@
+name: e2e-c413-temp
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  run-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install puppeteer
+        run: npm install puppeteer --no-save
+      - name: Contract regression
+        run: python3 tests/contract_test.py > /tmp/contract_result.txt 2>&1; echo "EXIT_CODE=$?" >> /tmp/contract_result.txt
+      - name: Run C-4.11 Browser E2E (regression check)
+        run: node tests/e2e_c411_relief_load_retroactive.js > /tmp/e2e411_result.txt 2>&1; echo "EXIT_CODE=$?" >> /tmp/e2e411_result.txt
+        continue-on-error: true
+      - name: Run C-4.12 Browser E2E (regression check)
+        run: node tests/e2e_c412_liquid_expansion.js > /tmp/e2e412_result.txt 2>&1; echo "EXIT_CODE=$?" >> /tmp/e2e412_result.txt
+        continue-on-error: true
+      - name: Run C-4.13 Browser E2E
+        run: node tests/e2e_c413_exchanger_failure.js > /tmp/e2e413_result.txt 2>&1; echo "EXIT_CODE=$?" >> /tmp/e2e413_result.txt
+        continue-on-error: true
+      - name: Record env info
+        run: |
+          echo "=== ENV ===" > /tmp/env_info.txt
+          node --version >> /tmp/env_info.txt
+          git rev-parse HEAD >> /tmp/env_info.txt
+          date -u >> /tmp/env_info.txt
+      - name: Commit results back
+        run: |
+          cat /tmp/env_info.txt /tmp/contract_result.txt /tmp/e2e411_result.txt /tmp/e2e412_result.txt /tmp/e2e413_result.txt > .e2e_c413_ci_result.txt
+          git config user.email "actions@github.com"
+          git config user.name "github-actions[bot]"
+          git add .e2e_c413_ci_result.txt
+          git commit -m "temp: C-4.13 CI E2E result (auto, to be removed)" || echo "nothing to commit"
+          git push origin HEAD:e2e-c413-ci-results --force

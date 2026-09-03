@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:e88be8b8fc31\n\n' +
+    box.textContent = '[ERROR] BUILD:711644104d99\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:e88be8b8fc31\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:711644104d99\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:e88be8b8fc31 | 2026-09-02T21:51:40Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:711644104d99 | 2026-09-03T22:37:32Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "e88be8b8fc31";
+const __BUILD_HASH__ = "711644104d99";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -4143,6 +4143,36 @@ function LiquidExpansionInputForm({ value, onFieldChange }) {
   );
 }
 
+// ── C-4.13 — COMPUTABLE quantity별 표시 메타(필드명/라벨/안내문) ──
+// §5.11(m3/h)과 §5.13(m2)은 Engine 결과 필드명 자체가 다르다
+// (result.value vs result.requiredOrificeArea_m2) — 이 테이블이 그
+// 매핑의 단일 진실 소스다. 새 VOLUME_FLOW/AREA 계열 시나리오가 추가될
+// 때는 반드시 여기에 항목을 등록해야 ReliefLoadScenarioResultPanel이
+// 렌더링한다(등록 안 하면 안전하게 아무것도 안 보임 — 암묵적 추정 금지).
+const QUANTITY_DISPLAY_META = {
+  "m3/h": {
+    valueField: "value",
+    displayUnit: "m³/h",
+    resultLabel: "액체부피팽창률",
+    nonGoverningNotice: "⚠ 이 계산값은 최종 PSV sizing에 자동 반영되지 않습니다 — 부피유량(m³/h)은 소요분출량(kg/h) 산정에 " +
+      "직접 합산되지 않으며, 위의 설계 방출량(Manual W)이 그대로 사양 결정에 사용됩니다.",
+  },
+  "m2": {
+    valueField: "requiredOrificeArea_m2",
+    displayUnit: "m²",
+    resultLabel: "요구 오리피스 면적",
+    // C-4.13 — §5.11보다 한 단계 더 강한 경고가 필요하다: 이 값은
+    // "governing이 아니다"를 넘어 "그 자체로 유량이 아닌 중간값"이다.
+    // relief_load.js의 flowEquationNote가 밝히듯 원문 §5.13(1)(마)는
+    // 유체 상태별 흐름식 적용을 지시할 뿐 식 자체를 제시하지 않으므로,
+    // 이 Engine은 면적 산정까지만 하고 면적→유량 환산은 절대 여기서
+    // 만들지 않는다(요구사항 E — 자동 환산 금지).
+    nonGoverningNotice: "⚠ 이 값은 열교환기 튜브 파열 시 필요한 오리피스 면적(참고용)이며 유량이 아닙니다 — " +
+      "최종 PSV sizing의 governing relief load로 자동 반영되지 않고, kg/h·m³/h로도 자동 환산되지 않습니다. " +
+      "유체 상태(액체/증기·가스/플래싱)에 맞는 흐름식 적용과 별도의 엔지니어링 판단이 필요합니다.",
+  },
+};
+
 // ── RELIEF LOAD — 시나리오 계산 결과 패널 ──
 function ReliefLoadScenarioResultPanel({ result, adapter }) {
   if (!result) return null;
@@ -4183,17 +4213,16 @@ function ReliefLoadScenarioResultPanel({ result, adapter }) {
       </div>
     );
   }
-  // C-4.12 REV2 — VOLUME_FLOW/AREA quantity 계열(예: §5.11)의 "계산
-  // 성공" 상태. "OK"(MASS_FLOW, governing 후보)와 의도적으로 분기를
-  // 분리한다 — COMPUTABLE은 "계산 자체는 성공했다"는 뜻일 뿐 governing
-  // 여부와는 무관하므로, 절대 GOVERNING RELIEF LOAD 배지를 붙이지 않고
-  // 대신 "이 값은 sizing에 자동 반영되지 않는다"는 문구를 텍스트로
-  // (색상에만 의존하지 않고) 항상 함께 표시한다. 이 분기는 result.status만
-  // 보고 어떤 scenario 계열인지는 신경 쓰지 않는 범용 렌더러이므로,
-  // 기존 5-scenario radio 그룹과 신규 독립 §5.11 블록이 모두 그대로
-  // 재사용한다(코드 중복 방지 — 새 판정 로직을 추가하지 않는다).
+  // C-4.13 — result.status만 보고 quantity(unit)로 표시 필드/문구를
+  // 분기하는 범용 렌더러. §5.11(m3/h, result.value)과 §5.13(m2,
+  // result.requiredOrificeArea_m2)은 Engine 결과 필드명 자체가 다르므로
+  // "result.value 하나만 있다"고 가정하지 않는다 — QUANTITY_DISPLAY_META
+  // 테이블에 필드/라벨/안내문을 unit별로 명시하고, 인식하지 못하는
+  // unit은 안전하게 아무것도 렌더링하지 않는다(암묵적 추정 금지 원칙).
   if (result.status === "COMPUTABLE") {
-    const displayUnit = result.unit === "m3/h" ? "m³/h" : result.unit;
+    const meta = QUANTITY_DISPLAY_META[result.unit];
+    if (!meta) return null; // UNRECOGNIZED_QUANTITY — 새 quantity 추가 시 표에 반드시 등록
+    const rawValue = result[meta.valueField];
     return (
       <div style={{background:T.bg,border:`1.5px solid ${T.border}`,borderRadius:12,
         padding:"12px 14px",marginTop:8}}>
@@ -4202,15 +4231,29 @@ function ReliefLoadScenarioResultPanel({ result, adapter }) {
           <span style={{fontSize:9,padding:"2px 8px",borderRadius:6,background:T.white,border:`1px solid ${T.border}`,
             color:T.sub,fontFamily:font.mono,fontWeight:700}}>참고용 계산값</span>
         </div>
+        <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginBottom:2}}>{meta.resultLabel}</div>
         <div style={{fontSize:22,fontWeight:900,color:T.navy,fontFamily:font.mono}}>
-          {Number(result.value).toLocaleString(undefined,{maximumFractionDigits:3})} <span style={{fontSize:13,color:T.sub}}>{displayUnit}</span>
+          {Number(rawValue).toLocaleString(undefined,{maximumFractionDigits:4})} <span style={{fontSize:13,color:T.sub}}>{meta.displayUnit}</span>
         </div>
         <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginTop:6,lineHeight:1.6}}>{result.formula}</div>
         <div style={{background:T.orangeBg,border:`1px solid ${T.orange}`,borderRadius:8,padding:"7px 10px",
           marginTop:8,fontSize:10,color:"#7A4F00",fontFamily:font.sans,fontWeight:700,lineHeight:1.6}}>
-          ⚠ 이 계산값은 최종 PSV sizing에 자동 반영되지 않습니다 — 부피유량({displayUnit})은 소요분출량(kg/h) 산정에
-          직접 합산되지 않으며, 위의 설계 방출량(Manual W)이 그대로 사양 결정에 사용됩니다.
+          {meta.nonGoverningNotice}
         </div>
+      </div>
+    );
+  }
+  // C-4.13 — DOUBLE_PIPE + SCHEDULE_PIPE 등 "계산할 게 없는 게 아니라
+  // 애초에 압력방출장치가 불요하다"는 Engine의 정상적인 공학적 결론.
+  // INSUFFICIENT_INPUT(입력 오류)과 절대 같은 스타일을 쓰지 않는다 —
+  // 여기서만 쓰는 중립 색상(T.blue/T.blueBg)으로 "오류가 아니라 결론"
+  // 임을 색상+텍스트 이중으로 전달한다.
+  if (result.status === "NOT_APPLICABLE") {
+    return (
+      <div style={{background:T.blueBg,border:`1.5px solid ${T.blue}`,borderRadius:10,
+        padding:"10px 12px",marginTop:8,fontSize:11,color:T.navy,fontFamily:font.sans,lineHeight:1.6}}>
+        <div style={{fontWeight:900,marginBottom:3}}>해당 없음 — 압력방출장치 설치 불요</div>
+        {result.reason}
       </div>
     );
   }
@@ -4301,11 +4344,80 @@ function LiquidExpansionSupplementaryBlock({ value, onFieldChange, result }) {
       <button onClick={()=>setOpen(o=>!o)}
         style={{fontSize:10,color:T.sub,background:"none",border:`1px dashed ${T.border}`,
           borderRadius:7,padding:"6px 10px",cursor:"pointer",fontFamily:font.mono}}>
-        {open ? "▲ 닫기" : "▼ 액체부피팽창 계산 열기"}
+        {open ? "▲ 액체부피팽창 닫기" : "▼ 액체부피팽창 계산 열기"}
       </button>
       {open && (
         <div style={{background:T.bg,borderRadius:10,padding:"10px 12px",border:`1px solid ${T.border}`,marginTop:10}}>
           <LiquidExpansionInputForm value={value} onFieldChange={onFieldChange}/>
+          <ReliefLoadScenarioResultPanel result={result} adapter={null}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── C-4.13 — §5.13 열교환기(튜브) 고장 전용 입력 폼 ──
+// Engine 계약(calculateExchangerFailureScenario)을 그대로 반영한다:
+// exchangerType에 따라 요구 입력이 갈린다 — SHELL_AND_TUBE/PLATE_AND_
+// FRAME은 튜브 단면적 하나만, DOUBLE_PIPE는 내관 종류(스케줄배관/
+// 게이지튜브)만 필요하고 단면적 입력 자체가 없다(Engine이 애초에 그
+// 필드를 보지 않음 — UI에서 불필요한 입력을 보여주지 않는다).
+function ExchangerFailureInputForm({ value, onFieldChange }) {
+  const exchangerType = value.exchangerType;
+  return (
+    <div>
+      <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginBottom:10,lineHeight:1.6,
+        background:T.bg,borderRadius:8,padding:"8px 10px",border:`1px solid ${T.border}`}}>
+        열교환기 튜브(관)가 파열됐을 때 필요한 오리피스 "면적"을 산정합니다 — 유량이 아닙니다.
+        형식에 따라 입력 항목이 다릅니다.
+      </div>
+      <ScenarioEnumToggle label="열교환기 형식 (Exchanger Type)"
+        options={[
+          { id:"SHELL_AND_TUBE",  label:"다관형 (Shell & Tube)" },
+          { id:"PLATE_AND_FRAME", label:"판형 (Plate & Frame)" },
+          { id:"DOUBLE_PIPE",     label:"이중관형 (Double Pipe)" },
+        ]}
+        value={exchangerType} onChange={v=>onFieldChange("exchangerType", v)}/>
+      {(exchangerType === "SHELL_AND_TUBE" || exchangerType === "PLATE_AND_FRAME") && (
+        <ScenarioNumberField label="튜브 단면적 (Tube Cross-Section Area)" unit="m²"
+          value={value.tubeCrossSectionArea_m2} onChange={v=>onFieldChange("tubeCrossSectionArea_m2", v)}/>
+      )}
+      {exchangerType === "DOUBLE_PIPE" && (
+        <ScenarioEnumToggle label="내관 종류 (Inner Tube Type)"
+          options={[
+            { id:"SCHEDULE_PIPE", label:"스케줄 배관 (Schedule Pipe)" },
+            { id:"GAUGE_TUBE",    label:"게이지 튜브 (Gauge Tube)" },
+          ]}
+          value={value.innerTubeType} onChange={v=>onFieldChange("innerTubeType", v)}/>
+      )}
+    </div>
+  );
+}
+
+// ── C-4.13 — §5.13 열교환기 고장 독립 부가 계산 블록 ──
+// §5.11(LiquidExpansionSupplementaryBlock)과 형제 컴포넌트다 — 구조를
+// 그대로 재사용하되(독립 로컬 open state, CaseView가 Engine을 호출해
+// 내려준 값/결과를 표시만 함) 열기/닫기 텍스트에 시나리오명을 넣어
+// 두 블록이 동시에 화면에 있어도 서로 구분되게 한다.
+function ExchangerFailureSupplementaryBlock({ value, onFieldChange, result }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{background:T.cardBg,borderRadius:14,padding:14,marginBottom:10,border:`1.5px solid ${T.border}`}}>
+      <div style={{fontSize:12,fontWeight:900,color:T.navy,fontFamily:font.sans,marginBottom:3}}>
+        부가 계산 — 열교환기 고장 (§5.13, 참고용)
+      </div>
+      <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginBottom:10,lineHeight:1.5}}>
+        위의 방출 시나리오 선택(Manual W 포함)이나 §5.11 계산과 완전히 독립적으로 계산할 수 있는 참고용 항목입니다.
+        결과는 면적(m²)이며, 소요분출량(W, kg/h) 산정에 자동으로 반영되지 않습니다.
+      </div>
+      <button onClick={()=>setOpen(o=>!o)}
+        style={{fontSize:10,color:T.sub,background:"none",border:`1px dashed ${T.border}`,
+          borderRadius:7,padding:"6px 10px",cursor:"pointer",fontFamily:font.mono}}>
+        {open ? "▲ 열교환기 고장 닫기" : "▼ 열교환기 고장 계산 열기"}
+      </button>
+      {open && (
+        <div style={{background:T.bg,borderRadius:10,padding:"10px 12px",border:`1px solid ${T.border}`,marginTop:10}}>
+          <ExchangerFailureInputForm value={value} onFieldChange={onFieldChange}/>
           <ReliefLoadScenarioResultPanel result={result} adapter={null}/>
         </div>
       )}
@@ -4475,7 +4587,8 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
   effectiveW, effectiveWSource, onReliefLoadScenarioTypeChange, onReliefLoadScenarioInputChange,
   onExternalFireCaseChange, onExternalFireMChange, onExternalFireFMethodChange, onExternalFireT1MethodChange,
   onExternalFireInsulationLayerAdd, onExternalFireInsulationLayerRemove, onExternalFireInsulationLayerFieldChange,
-  liquidExpansionInput, liquidExpansionResult, onLiquidExpansionFieldChange }) {
+  liquidExpansionInput, liquidExpansionResult, onLiquidExpansionFieldChange,
+  exchangerFailureInput, exchangerFailureResult, onExchangerFailureFieldChange }) {
   const [fluidId, setFluidId]   = useState("co2");
   const [kdId,    setKdId]      = useState("sv_std");
   const [showCustomFluid, setShowCustomFluid] = useState(false);
@@ -4629,6 +4742,13 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         value={liquidExpansionInput}
         onFieldChange={onLiquidExpansionFieldChange}
         result={liquidExpansionResult}
+      />
+
+      {/* ── 2d. §5.13 열교환기 고장 — 독립 부가 계산(참고용, governing과 무관) ── */}
+      <ExchangerFailureSupplementaryBlock
+        value={exchangerFailureInput}
+        onFieldChange={onExchangerFailureFieldChange}
+        result={exchangerFailureResult}
       />
 
       {/* ── 3. 유체 사양 결정 ── */}
@@ -6788,6 +6908,14 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   const handleLiquidExpansionFieldChange = (key, val) =>
     setLiquidExpansionInput(p => ({ ...p, [key]: val }));
 
+  // ── C-4.13 — §5.13 열교환기 고장 독립 state (§5.11과 형제) ──
+  // 마찬가지로 reliefLoadScenarioType과 완전히 분리되어 있다. §5.11과도
+  // 서로 독립이다 — 두 supplementary 블록을 동시에 열고 계산해도 서로의
+  // state를 전혀 건드리지 않는다.
+  const [exchangerFailureInput, setExchangerFailureInput] = useState({});
+  const handleExchangerFailureFieldChange = (key, val) =>
+    setExchangerFailureInput(p => ({ ...p, [key]: val }));
+
   const handleInputChange = (key, val) => setInputs(p => ({ ...p, [key]: val }));
 
   // 시나리오 전환 — 반드시 입력을 리셋한다(동일 타입 재클릭은 리셋하지
@@ -6910,6 +7038,10 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   // 호출한다 — UI에서 계산식을 재구현하지 않는다는 원칙 그대로.
   const liquidExpansionResult = calculateLiquidThermalExpansionScenario(liquidExpansionInput);
 
+  // ── C-4.13 — §5.13 계산 (§5.11과 마찬가지로 governing 체인과 완전히
+  // 분리, Engine 직접 호출) ──
+  const exchangerFailureResult = calculateExchangerFailureScenario(exchangerFailureInput);
+
   // ── C-4.12 REV2 — MASS_FLOW 계열 판별 ──
   // classifyReliefLoadQuantity/RELIEF_LOAD_QUANTITY는 relief_load.js
   // (Engine)의 기존 순수 함수/상수를 그대로 참조만 한다. RELIEF_LOAD_
@@ -6968,13 +7100,15 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
         // 다시 섞여도 조용히 통과시키지 않도록 방어적으로 undefined 유지.
         : undefined;
 
-    // ── C-4.12 REV2 — §5.11 supplementary ──
-    // liquidExpansionInput/Result는 reliefLoadScenarioType과 완전히
-    // 독립이므로, governing 시나리오 선택 여부와 무관하게 계산이
-    // 성공했으면(COMPUTABLE) 항상 Snapshot에 보존한다. 이 값은 절대
-    // governing에 들어가지 않는다 — 아래 병합에서도 governing 필드는
-    // reliefLoadForSnapshot 쪽에서만 채워진다.
-    const liquidExpansionSupplementary = (liquidExpansionResult.status === "COMPUTABLE") ? [{
+    // ── C-4.12 REV2 / C-4.13 — supplementary 결과들 ──
+    // liquidExpansionInput/Result, exchangerFailureInput/Result 모두
+    // reliefLoadScenarioType과 완전히 독립이므로, governing 시나리오
+    // 선택 여부와 무관하게 계산이 성공했으면(COMPUTABLE) 항상 Snapshot에
+    // 보존한다. 이 값들은 절대 governing에 들어가지 않는다 — 아래
+    // 병합에서도 governing 필드는 reliefLoadForSnapshot 쪽에서만
+    // 채워진다. 각 항목은 자기 identity(scenario/section)를 명확히
+    // 갖는다.
+    const liquidExpansionSupplementary = (liquidExpansionResult.status === "COMPUTABLE") ? {
       scenario: "LIQUID_THERMAL_EXPANSION",
       section: "§5.11",
       status: liquidExpansionResult.status,
@@ -6983,16 +7117,41 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
       formula: liquidExpansionResult.formula,
       inputs: liquidExpansionResult.inputs,
       upstreamReference: liquidExpansionResult.upstreamReference,
-    }] : null;
+    } : null;
 
-    // governing(위)과 supplementary(§5.11)를 하나의 reliefLoad 객체로
-    // 병합한다. §5.11을 전혀 쓰지 않는 기존 Case는 이 병합을 거쳐도
-    // reliefLoadForSnapshot과 완전히 동일한 결과가 나온다(하위호환 —
-    // supplementary 키 자체가 생기지 않음). §5.11만 쓰고 governing
-    // 시나리오는 비활성인 Case는 governing:null과 supplementary만 남는다.
-    const reliefLoadMerged = (!reliefLoadForSnapshot && !liquidExpansionSupplementary) ? undefined : {
+    // C-4.13 — §5.13 결과 필드는 requiredOrificeArea_m2다(§5.11의
+    // value와 다른 이름) — Engine이 실제로 부여한 필드명을 그대로
+    // 옮겨 담을 뿐, "value"라는 의미가 다른 이름으로 억지로 바꾸지
+    // 않는다. COMPUTABLE일 때만 보존한다(NOT_APPLICABLE/NEEDS_
+    // ENGINEERING_DECISION/INSUFFICIENT_INPUT은 산정된 면적값 자체가
+    // 없으므로 supplementary에 넣지 않는다 — 화면에는 별도로 표시되지만
+    // Snapshot 감사 기록은 "실제로 산정된 값"만 남긴다).
+    const exchangerFailureSupplementary = (exchangerFailureResult.status === "COMPUTABLE") ? {
+      scenario: "EXCHANGER_FAILURE",
+      section: "§5.13",
+      status: exchangerFailureResult.status,
+      requiredOrificeArea_m2: exchangerFailureResult.requiredOrificeArea_m2,
+      unit: exchangerFailureResult.unit,
+      formula: exchangerFailureResult.formula,
+      inputs: exchangerFailureResult.inputs,
+      source: exchangerFailureResult.source,
+    } : null;
+
+    // 여러 supplementary 결과를 배열로 합친다 — null/undefined는
+    // 안전하게 걸러내고, 예상 못한 객체가 배열에 섞여 들어가지 않도록
+    // 위에서 만든 두 값만 명시적으로 나열한다(향후 §5.x가 추가되면
+    // 이 배열에 한 줄만 추가하면 된다).
+    const supplementaryList = [liquidExpansionSupplementary, exchangerFailureSupplementary].filter(Boolean);
+
+    // governing(위)과 supplementary(§5.11/§5.13)를 하나의 reliefLoad
+    // 객체로 병합한다. 둘 다 전혀 쓰지 않는 기존 Case는 이 병합을
+    // 거쳐도 reliefLoadForSnapshot과 완전히 동일한 결과가 나온다
+    // (하위호환 — supplementary 키 자체가 생기지 않음). supplementary만
+    // 쓰고 governing 시나리오는 비활성인 Case는 governing:null과
+    // supplementary만 남는다.
+    const reliefLoadMerged = (!reliefLoadForSnapshot && supplementaryList.length === 0) ? undefined : {
       ...(reliefLoadForSnapshot || { governing: null }),
-      ...(liquidExpansionSupplementary ? { supplementary: liquidExpansionSupplementary } : {}),
+      ...(supplementaryList.length > 0 ? { supplementary: supplementaryList } : {}),
     };
     // Engine이 workflow 결정 — timestamp는 UI에서 주입 (Engine 순수성 유지)
     const wfDec = computeWorkflowState(null, equipment, dischargeSystem);
@@ -7313,6 +7472,9 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
           liquidExpansionInput={liquidExpansionInput}
           liquidExpansionResult={liquidExpansionResult}
           onLiquidExpansionFieldChange={handleLiquidExpansionFieldChange}
+          exchangerFailureInput={exchangerFailureInput}
+          exchangerFailureResult={exchangerFailureResult}
+          onExchangerFailureFieldChange={handleExchangerFailureFieldChange}
         />
       )}
 

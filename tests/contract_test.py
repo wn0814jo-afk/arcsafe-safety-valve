@@ -3488,16 +3488,21 @@ def test_external_fire_ux_contract() -> TestResult:
              re.search(r"setReliefLoadScenarioType\(type\);\s*\n\s*setReliefLoadScenarioInput\(\{\}\);", casev_src) is not None,
              "§5.12↔기존 4개 시나리오 전환은 기존 handleReliefLoadScenarioTypeChange 리셋 메커니즘을 그대로 재사용해야 함(신규 우회 경로 금지)")
 
-    # ── §5.13 미포함 유지(범위 준수) / §5.11은 C-4.12에서 신규 포함 ──────
-    # 원래 EF_020은 "§5.11/§5.13 둘 다 미포함"을 검증했으나, C-4.12에서
-    # §5.11(액체부피팽창)을 의도적으로 CaseView에 연결했다 — 이는 회귀가
-    # 아니라 이번 스프린트의 목표 자체다(§5.13은 여전히 범위 밖으로 유지).
-    tr.check("EF_020_scope_excludes_5_13_only",
-             "calculateExchangerFailureScenario" not in casev_src,
-             "§5.13 계산 함수가 CaseView에서 호출되면 안 됨(이번 범위 제외, §5.11은 C-4.12에서 포함됨)")
+    # ── §5.11/§5.13 모두 포함(C-4.12/C-4.13) — 과거 EF_020은 "둘 다
+    # 미포함"→"§5.13만 미포함"으로 축소됐다가, C-4.13에서 §5.13도
+    # supplementary로 연결되며 최종적으로 "둘 다 포함"이 됐다. 이력을
+    # 남기기 위해 이름은 유지하되 의미를 뒤집는다(회귀 아님 — 이번
+    # 스프린트의 목표 자체).
+    tr.check("EF_020_superseded_c413_scope_now_includes_5_13",
+             "calculateExchangerFailureScenario" in casev_src,
+             "§5.13(열교환기 고장) 계산 함수가 CaseView에서 호출되어야 함(C-4.13)")
     tr.check("LE_001_scope_includes_5_11",
              "calculateLiquidThermalExpansionScenario" in casev_src,
              "§5.11(액체부피팽창) 계산 함수가 CaseView RELIEF_LOAD_SCENARIO_META에 연결되어야 함(C-4.12)")
+    tr.check("EX_001_not_in_exclusive_scenario_meta",
+             re.search(r"RELIEF_LOAD_SCENARIO_META\s*=\s*\{[^}]*\}", casev_src, re.S) is not None
+             and "EXCHANGER_FAIL:" not in re.search(r"RELIEF_LOAD_SCENARIO_META\s*=\s*\{[^}]*\}", casev_src, re.S).group(0),
+             "§5.13(EXCHANGER_FAIL)이 기존 5개 배타 라디오 그룹(RELIEF_LOAD_SCENARIO_META)에 섞여 들어가면 안 됨 — §5.11과 동일하게 독립 supplementary여야 함")
 
     node = shutil.which("node")
     if not node:
@@ -3948,6 +3953,173 @@ console.log(JSON.stringify(out));
     tr.check("UI_110_relief_load_content_and_hash_preserved_across_advance",
              out.get("reliefContentPreserved") is True and out.get("reliefHashStableAcrossAdvance") is True,
              f"reliefLoad 사용 Case의 workflow 전이 시 근거/hash가 보존되지 않음: {out}")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
+#  C-4.13 §5.13 EXCHANGER FAILURE — Supplementary UI/Snapshot 계약
+#  §5.11(C-4.12)과 §5.13(C-4.13)이 동시에 reliefLoad.supplementary[]로
+#  보존되는지, governing과 절대 섞이지 않는지를 실제 Engine 함수 체인을
+#  재현해 실행 검증한다(정적 소스 검사만으로는 병합 로직의 실제 동작을
+#  증명할 수 없음 — Contract GREEN ≠ Browser GREEN 원칙과 같은 이유로,
+#  "소스에 코드가 있다"와 "실행하면 계약대로 동작한다"는 다른 질문이다).
+# ════════════════════════════════════════════════════════════════
+def test_c413_exchanger_failure_supplementary_contract() -> TestResult:
+    tr = TestResult("C413-EXCHANGER-SUPPLEMENTARY-001", "Sprint C-4.13 — §5.13 열교환기 고장 Supplementary 계약")
+
+    casev_src = (SRC / "components" / "CaseView.jsx").read_text()
+    inputv_src = (SRC / "components" / "InputView.jsx").read_text()
+
+    # ── 정적 소스 확인 ──────────────────────────────────────────
+    tr.check("EX_002_independent_state_exists",
+             re.search(r"const\s*\[exchangerFailureInput,\s*setExchangerFailureInput\]\s*=\s*useState\(\{\}\)", casev_src) is not None,
+             "exchangerFailureInput이 reliefLoadScenarioType/liquidExpansionInput과 분리된 독립 state로 존재해야 함")
+    tr.check("EX_003_direct_engine_call_no_reimplementation",
+             "calculateExchangerFailureScenario(exchangerFailureInput)" in casev_src,
+             "CaseView가 calculateExchangerFailureScenario를 exchangerFailureInput에 대해 직접 호출해야 함(UI 재구현 금지)")
+    tr.check("EX_004_field_name_preserved_not_renamed_to_value",
+             "requiredOrificeArea_m2" in casev_src and "requiredOrificeArea_m2" in inputv_src,
+             "Engine 결과 필드명 requiredOrificeArea_m2를 value 등으로 임의 변환하면 안 됨")
+    tr.check("EX_005_not_applicable_branch_exists",
+             '"NOT_APPLICABLE"' in inputv_src,
+             "ReliefLoadScenarioResultPanel에 NOT_APPLICABLE 분기가 없음 — §5.13 Schedule pipe 결론이 렌더링되지 않음")
+    tr.check("EX_006_inputview_never_calls_5_11_5_13_calculators",
+             "calculateLiquidThermalExpansionScenario(" not in inputv_src
+             and "calculateExchangerFailureScenario(" not in inputv_src,
+             "InputView.jsx가 §5.11/§5.13 계산 함수를 직접 호출(...)하면 안 됨 — CaseView가 계산한 결과를 props로만 받아야 함 "
+             "(함수명을 설명하는 주석은 허용 — 실제 호출 패턴인 '함수명(' 형태만 검사)")
+
+    node = shutil.which("node")
+    if not node:
+        tr.check("EX_node_available", False, "node를 찾을 수 없어 실행 검증을 건너뜀")
+        return tr
+
+    check_script = f"""
+const fs = require('fs');
+const files = ['engine/relief_load.js'].map(f => fs.readFileSync('{SRC}/' + f, 'utf8')).join('\\n');
+eval(files);
+
+const out = {{}};
+
+// CaseView.jsx handleCalculate의 실제 병합 로직을 그대로 재현한다 —
+// 이 재현이 실제 소스의 규칙과 같다는 것은 위 정적 검사(EX_002~006)와
+// 이전 C-4.12 회귀 테스트가 보증하고, 여기서는 그 규칙의 실행 결과
+// (governing/supplementary 분리, determinism)를 실측 검증한다.
+function buildReliefLoadSnapshot(reliefLoadAdapter, reliefLoadSelectorResult,
+                                  liquidExpansionResult, exchangerFailureResult, reliefLoadActive, reliefLoadIsMassFlowCandidate) {{
+  const reliefLoadForSnapshot = !reliefLoadActive ? undefined
+    : reliefLoadIsMassFlowCandidate
+      ? (reliefLoadAdapter.valid ? {{
+          scenarios: reliefLoadSelectorResult.allScenarios,
+          governing: reliefLoadSelectorResult.governingScenarioId,
+          quantity: "MASS_FLOW", unit: "kg/h",
+          provenance: reliefLoadAdapter.provenance,
+        }} : undefined)
+      : undefined;
+
+  const liquidExpansionSupplementary = (liquidExpansionResult.status === "COMPUTABLE") ? {{
+    scenario: "LIQUID_THERMAL_EXPANSION", section: "§5.11", status: liquidExpansionResult.status,
+    value: liquidExpansionResult.value, unit: liquidExpansionResult.unit,
+  }} : null;
+  const exchangerFailureSupplementary = (exchangerFailureResult.status === "COMPUTABLE") ? {{
+    scenario: "EXCHANGER_FAILURE", section: "§5.13", status: exchangerFailureResult.status,
+    requiredOrificeArea_m2: exchangerFailureResult.requiredOrificeArea_m2, unit: exchangerFailureResult.unit,
+  }} : null;
+  const supplementaryList = [liquidExpansionSupplementary, exchangerFailureSupplementary].filter(Boolean);
+
+  return (!reliefLoadForSnapshot && supplementaryList.length === 0) ? undefined : {{
+    ...(reliefLoadForSnapshot || {{ governing: null }}),
+    ...(supplementaryList.length > 0 ? {{ supplementary: supplementaryList }} : {{}}),
+  }};
+}}
+
+// ── Case 1: governing(§5.1) + §5.11 + §5.13 동시 ──
+{{
+  const obResult = calculateOutletBlockedScenario({{ phase:"LIQUID", inflow_kgh:100 }});
+  const selector = selectGoverningReliefLoad([obResult]);
+  const adapter = buildReliefSizingInput(selector);
+  const le = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.001, Q_kcal_per_hr:5000, SG:0.8, Cp_kcal_per_kgC:0.5 }});
+  const ex = calculateExchangerFailureScenario({{ exchangerType:"SHELL_AND_TUBE", tubeCrossSectionArea_m2:0.01 }});
+  const snap = buildReliefLoadSnapshot(adapter, selector, le, ex, true, true);
+  out.bothGoverningPreserved = snap.governing === "OUTLET_BLOCKED";
+  out.bothSupplementaryLen = snap.supplementary.length;
+  out.bothHasLE = snap.supplementary.some(s => s.scenario === "LIQUID_THERMAL_EXPANSION" && s.value === 0.025);
+  out.bothHasEX = snap.supplementary.some(s => s.scenario === "EXCHANGER_FAILURE" && s.requiredOrificeArea_m2 === 0.02);
+  out.governingNeverBecomesSupplementary = snap.governing !== "EXCHANGER_FAILURE" && snap.governing !== "LIQUID_THERMAL_EXPANSION";
+  const ex2 = calculateExchangerFailureScenario({{ exchangerType:"SHELL_AND_TUBE", tubeCrossSectionArea_m2:0.01 }});
+  const snap2 = buildReliefLoadSnapshot(adapter, selector, le, ex2, true, true);
+  out.deterministic = JSON.stringify(snap) === JSON.stringify(snap2);
+}}
+
+// ── Case 2: §5.13만(governing 없음) ──
+{{
+  const ex = calculateExchangerFailureScenario({{ exchangerType:"PLATE_AND_FRAME", tubeCrossSectionArea_m2:0.02 }});
+  const le = calculateLiquidThermalExpansionScenario({{}});
+  const snap = buildReliefLoadSnapshot(null, null, le, ex, false, false);
+  out.exOnlyGoverningNull = snap.governing === null;
+  out.exOnlySupplementaryLen = snap.supplementary.length === 1;
+  out.exOnlyValue = snap.supplementary[0].requiredOrificeArea_m2 === 0.02;
+}}
+
+// ── Case 3: 둘 다 미사용 — 하위호환(reliefLoad 자체가 undefined) ──
+{{
+  const le = calculateLiquidThermalExpansionScenario({{}});
+  const ex = calculateExchangerFailureScenario({{}});
+  const snap = buildReliefLoadSnapshot(null, null, le, ex, false, false);
+  out.neitherUsedUndefined = (snap === undefined);
+}}
+
+// ── Case 4: NOT_APPLICABLE/NEEDS_ENGINEERING_DECISION은 supplementary에 안 들어감 ──
+{{
+  const exNA = calculateExchangerFailureScenario({{ exchangerType:"DOUBLE_PIPE", innerTubeType:"SCHEDULE_PIPE" }});
+  const exNED = calculateExchangerFailureScenario({{ exchangerType:"DOUBLE_PIPE", innerTubeType:"GAUGE_TUBE" }});
+  const le = calculateLiquidThermalExpansionScenario({{}});
+  const snapNA = buildReliefLoadSnapshot(null, null, le, exNA, false, false);
+  const snapNED = buildReliefLoadSnapshot(null, null, le, exNED, false, false);
+  out.notApplicableExcluded = (snapNA === undefined);
+  out.needsEngDecisionExcluded = (snapNED === undefined);
+}}
+
+// ── AREA governing 제외(실제 selectGoverningReliefLoad 실행 재확인) ──
+{{
+  const ex = calculateExchangerFailureScenario({{ exchangerType:"SHELL_AND_TUBE", tubeCrossSectionArea_m2:0.01 }});
+  const selector = selectGoverningReliefLoad([ex]);
+  out.areaExcludedFromGoverning = selector.verdict === "INSUFFICIENT_INPUT" && selector.governingScenarioId === null;
+}}
+
+console.log(JSON.stringify(out));
+"""
+    cp = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=15)
+    try:
+        out = json.loads(cp.stdout.strip().splitlines()[-1]) if cp.stdout.strip() else {}
+    except Exception:
+        out = {}
+
+    tr.check("EX_101_governing_preserved_with_both_supplementary",
+             out.get("bothGoverningPreserved") is True,
+             f"§5.11+§5.13 동시 사용 시 기존 governing이 보존되지 않음: {out} stdout={cp.stdout!r} stderr={cp.stderr!r}")
+    tr.check("EX_102_both_supplementary_items_preserved_simultaneously",
+             out.get("bothSupplementaryLen") == 2 and out.get("bothHasLE") is True and out.get("bothHasEX") is True,
+             f"§5.11과 §5.13 결과가 동시에 supplementary[]에 보존되지 않음: {out}")
+    tr.check("EX_103_governing_never_becomes_supplementary_scenario",
+             out.get("governingNeverBecomesSupplementary") is True,
+             f"governing이 §5.11/§5.13 값으로 잘못 대체됨: {out}")
+    tr.check("EX_104_deterministic",
+             out.get("deterministic") is True,
+             f"동일 입력 재실행 시 Snapshot이 달라짐(determinism 위반): {out}")
+    tr.check("EX_105_exchanger_only_governing_null",
+             out.get("exOnlyGoverningNull") is True and out.get("exOnlySupplementaryLen") is True and out.get("exOnlyValue") is True,
+             f"governing 시나리오 없이 §5.13만 쓴 경우 governing:null + supplementary 단독 보존이 안 됨: {out}")
+    tr.check("EX_106_backward_compat_when_unused",
+             out.get("neitherUsedUndefined") is True,
+             f"§5.11/§5.13 둘 다 미사용 시 reliefLoad가 undefined(하위호환)여야 하는데 아님: {out}")
+    tr.check("EX_107_not_applicable_and_needs_engineering_decision_excluded_from_supplementary",
+             out.get("notApplicableExcluded") is True and out.get("needsEngDecisionExcluded") is True,
+             f"NOT_APPLICABLE/NEEDS_ENGINEERING_DECISION 결과가 산정값 없이 supplementary에 잘못 들어감: {out}")
+    tr.check("EX_108_area_quantity_excluded_from_governing_runtime",
+             out.get("areaExcludedFromGoverning") is True,
+             f"AREA quantity(§5.13)가 실제 selectGoverningReliefLoad 실행에서 governing 후보로 잘못 선정됨: {out}")
 
     return tr
 
@@ -6088,6 +6260,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [RELIEF-LOAD-UI-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── §5.13 Exchanger Failure Supplementary contract (C-4.13) ───
+    print("\n── C413-EXCHANGER-SUPPLEMENTARY-001 (Sprint C-4.13) ─")
+    tr = test_c413_exchanger_failure_supplementary_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [C413-EXCHANGER-SUPPLEMENTARY-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"

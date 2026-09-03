@@ -447,6 +447,36 @@ function LiquidExpansionInputForm({ value, onFieldChange }) {
   );
 }
 
+// ── C-4.13 — COMPUTABLE quantity별 표시 메타(필드명/라벨/안내문) ──
+// §5.11(m3/h)과 §5.13(m2)은 Engine 결과 필드명 자체가 다르다
+// (result.value vs result.requiredOrificeArea_m2) — 이 테이블이 그
+// 매핑의 단일 진실 소스다. 새 VOLUME_FLOW/AREA 계열 시나리오가 추가될
+// 때는 반드시 여기에 항목을 등록해야 ReliefLoadScenarioResultPanel이
+// 렌더링한다(등록 안 하면 안전하게 아무것도 안 보임 — 암묵적 추정 금지).
+const QUANTITY_DISPLAY_META = {
+  "m3/h": {
+    valueField: "value",
+    displayUnit: "m³/h",
+    resultLabel: "액체부피팽창률",
+    nonGoverningNotice: "⚠ 이 계산값은 최종 PSV sizing에 자동 반영되지 않습니다 — 부피유량(m³/h)은 소요분출량(kg/h) 산정에 " +
+      "직접 합산되지 않으며, 위의 설계 방출량(Manual W)이 그대로 사양 결정에 사용됩니다.",
+  },
+  "m2": {
+    valueField: "requiredOrificeArea_m2",
+    displayUnit: "m²",
+    resultLabel: "요구 오리피스 면적",
+    // C-4.13 — §5.11보다 한 단계 더 강한 경고가 필요하다: 이 값은
+    // "governing이 아니다"를 넘어 "그 자체로 유량이 아닌 중간값"이다.
+    // relief_load.js의 flowEquationNote가 밝히듯 원문 §5.13(1)(마)는
+    // 유체 상태별 흐름식 적용을 지시할 뿐 식 자체를 제시하지 않으므로,
+    // 이 Engine은 면적 산정까지만 하고 면적→유량 환산은 절대 여기서
+    // 만들지 않는다(요구사항 E — 자동 환산 금지).
+    nonGoverningNotice: "⚠ 이 값은 열교환기 튜브 파열 시 필요한 오리피스 면적(참고용)이며 유량이 아닙니다 — " +
+      "최종 PSV sizing의 governing relief load로 자동 반영되지 않고, kg/h·m³/h로도 자동 환산되지 않습니다. " +
+      "유체 상태(액체/증기·가스/플래싱)에 맞는 흐름식 적용과 별도의 엔지니어링 판단이 필요합니다.",
+  },
+};
+
 // ── RELIEF LOAD — 시나리오 계산 결과 패널 ──
 function ReliefLoadScenarioResultPanel({ result, adapter }) {
   if (!result) return null;
@@ -487,17 +517,16 @@ function ReliefLoadScenarioResultPanel({ result, adapter }) {
       </div>
     );
   }
-  // C-4.12 REV2 — VOLUME_FLOW/AREA quantity 계열(예: §5.11)의 "계산
-  // 성공" 상태. "OK"(MASS_FLOW, governing 후보)와 의도적으로 분기를
-  // 분리한다 — COMPUTABLE은 "계산 자체는 성공했다"는 뜻일 뿐 governing
-  // 여부와는 무관하므로, 절대 GOVERNING RELIEF LOAD 배지를 붙이지 않고
-  // 대신 "이 값은 sizing에 자동 반영되지 않는다"는 문구를 텍스트로
-  // (색상에만 의존하지 않고) 항상 함께 표시한다. 이 분기는 result.status만
-  // 보고 어떤 scenario 계열인지는 신경 쓰지 않는 범용 렌더러이므로,
-  // 기존 5-scenario radio 그룹과 신규 독립 §5.11 블록이 모두 그대로
-  // 재사용한다(코드 중복 방지 — 새 판정 로직을 추가하지 않는다).
+  // C-4.13 — result.status만 보고 quantity(unit)로 표시 필드/문구를
+  // 분기하는 범용 렌더러. §5.11(m3/h, result.value)과 §5.13(m2,
+  // result.requiredOrificeArea_m2)은 Engine 결과 필드명 자체가 다르므로
+  // "result.value 하나만 있다"고 가정하지 않는다 — QUANTITY_DISPLAY_META
+  // 테이블에 필드/라벨/안내문을 unit별로 명시하고, 인식하지 못하는
+  // unit은 안전하게 아무것도 렌더링하지 않는다(암묵적 추정 금지 원칙).
   if (result.status === "COMPUTABLE") {
-    const displayUnit = result.unit === "m3/h" ? "m³/h" : result.unit;
+    const meta = QUANTITY_DISPLAY_META[result.unit];
+    if (!meta) return null; // UNRECOGNIZED_QUANTITY — 새 quantity 추가 시 표에 반드시 등록
+    const rawValue = result[meta.valueField];
     return (
       <div style={{background:T.bg,border:`1.5px solid ${T.border}`,borderRadius:12,
         padding:"12px 14px",marginTop:8}}>
@@ -506,15 +535,29 @@ function ReliefLoadScenarioResultPanel({ result, adapter }) {
           <span style={{fontSize:9,padding:"2px 8px",borderRadius:6,background:T.white,border:`1px solid ${T.border}`,
             color:T.sub,fontFamily:font.mono,fontWeight:700}}>참고용 계산값</span>
         </div>
+        <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginBottom:2}}>{meta.resultLabel}</div>
         <div style={{fontSize:22,fontWeight:900,color:T.navy,fontFamily:font.mono}}>
-          {Number(result.value).toLocaleString(undefined,{maximumFractionDigits:3})} <span style={{fontSize:13,color:T.sub}}>{displayUnit}</span>
+          {Number(rawValue).toLocaleString(undefined,{maximumFractionDigits:4})} <span style={{fontSize:13,color:T.sub}}>{meta.displayUnit}</span>
         </div>
         <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginTop:6,lineHeight:1.6}}>{result.formula}</div>
         <div style={{background:T.orangeBg,border:`1px solid ${T.orange}`,borderRadius:8,padding:"7px 10px",
           marginTop:8,fontSize:10,color:"#7A4F00",fontFamily:font.sans,fontWeight:700,lineHeight:1.6}}>
-          ⚠ 이 계산값은 최종 PSV sizing에 자동 반영되지 않습니다 — 부피유량({displayUnit})은 소요분출량(kg/h) 산정에
-          직접 합산되지 않으며, 위의 설계 방출량(Manual W)이 그대로 사양 결정에 사용됩니다.
+          {meta.nonGoverningNotice}
         </div>
+      </div>
+    );
+  }
+  // C-4.13 — DOUBLE_PIPE + SCHEDULE_PIPE 등 "계산할 게 없는 게 아니라
+  // 애초에 압력방출장치가 불요하다"는 Engine의 정상적인 공학적 결론.
+  // INSUFFICIENT_INPUT(입력 오류)과 절대 같은 스타일을 쓰지 않는다 —
+  // 여기서만 쓰는 중립 색상(T.blue/T.blueBg)으로 "오류가 아니라 결론"
+  // 임을 색상+텍스트 이중으로 전달한다.
+  if (result.status === "NOT_APPLICABLE") {
+    return (
+      <div style={{background:T.blueBg,border:`1.5px solid ${T.blue}`,borderRadius:10,
+        padding:"10px 12px",marginTop:8,fontSize:11,color:T.navy,fontFamily:font.sans,lineHeight:1.6}}>
+        <div style={{fontWeight:900,marginBottom:3}}>해당 없음 — 압력방출장치 설치 불요</div>
+        {result.reason}
       </div>
     );
   }
@@ -605,11 +648,80 @@ function LiquidExpansionSupplementaryBlock({ value, onFieldChange, result }) {
       <button onClick={()=>setOpen(o=>!o)}
         style={{fontSize:10,color:T.sub,background:"none",border:`1px dashed ${T.border}`,
           borderRadius:7,padding:"6px 10px",cursor:"pointer",fontFamily:font.mono}}>
-        {open ? "▲ 닫기" : "▼ 액체부피팽창 계산 열기"}
+        {open ? "▲ 액체부피팽창 닫기" : "▼ 액체부피팽창 계산 열기"}
       </button>
       {open && (
         <div style={{background:T.bg,borderRadius:10,padding:"10px 12px",border:`1px solid ${T.border}`,marginTop:10}}>
           <LiquidExpansionInputForm value={value} onFieldChange={onFieldChange}/>
+          <ReliefLoadScenarioResultPanel result={result} adapter={null}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── C-4.13 — §5.13 열교환기(튜브) 고장 전용 입력 폼 ──
+// Engine 계약(calculateExchangerFailureScenario)을 그대로 반영한다:
+// exchangerType에 따라 요구 입력이 갈린다 — SHELL_AND_TUBE/PLATE_AND_
+// FRAME은 튜브 단면적 하나만, DOUBLE_PIPE는 내관 종류(스케줄배관/
+// 게이지튜브)만 필요하고 단면적 입력 자체가 없다(Engine이 애초에 그
+// 필드를 보지 않음 — UI에서 불필요한 입력을 보여주지 않는다).
+function ExchangerFailureInputForm({ value, onFieldChange }) {
+  const exchangerType = value.exchangerType;
+  return (
+    <div>
+      <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginBottom:10,lineHeight:1.6,
+        background:T.bg,borderRadius:8,padding:"8px 10px",border:`1px solid ${T.border}`}}>
+        열교환기 튜브(관)가 파열됐을 때 필요한 오리피스 "면적"을 산정합니다 — 유량이 아닙니다.
+        형식에 따라 입력 항목이 다릅니다.
+      </div>
+      <ScenarioEnumToggle label="열교환기 형식 (Exchanger Type)"
+        options={[
+          { id:"SHELL_AND_TUBE",  label:"다관형 (Shell & Tube)" },
+          { id:"PLATE_AND_FRAME", label:"판형 (Plate & Frame)" },
+          { id:"DOUBLE_PIPE",     label:"이중관형 (Double Pipe)" },
+        ]}
+        value={exchangerType} onChange={v=>onFieldChange("exchangerType", v)}/>
+      {(exchangerType === "SHELL_AND_TUBE" || exchangerType === "PLATE_AND_FRAME") && (
+        <ScenarioNumberField label="튜브 단면적 (Tube Cross-Section Area)" unit="m²"
+          value={value.tubeCrossSectionArea_m2} onChange={v=>onFieldChange("tubeCrossSectionArea_m2", v)}/>
+      )}
+      {exchangerType === "DOUBLE_PIPE" && (
+        <ScenarioEnumToggle label="내관 종류 (Inner Tube Type)"
+          options={[
+            { id:"SCHEDULE_PIPE", label:"스케줄 배관 (Schedule Pipe)" },
+            { id:"GAUGE_TUBE",    label:"게이지 튜브 (Gauge Tube)" },
+          ]}
+          value={value.innerTubeType} onChange={v=>onFieldChange("innerTubeType", v)}/>
+      )}
+    </div>
+  );
+}
+
+// ── C-4.13 — §5.13 열교환기 고장 독립 부가 계산 블록 ──
+// §5.11(LiquidExpansionSupplementaryBlock)과 형제 컴포넌트다 — 구조를
+// 그대로 재사용하되(독립 로컬 open state, CaseView가 Engine을 호출해
+// 내려준 값/결과를 표시만 함) 열기/닫기 텍스트에 시나리오명을 넣어
+// 두 블록이 동시에 화면에 있어도 서로 구분되게 한다.
+function ExchangerFailureSupplementaryBlock({ value, onFieldChange, result }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{background:T.cardBg,borderRadius:14,padding:14,marginBottom:10,border:`1.5px solid ${T.border}`}}>
+      <div style={{fontSize:12,fontWeight:900,color:T.navy,fontFamily:font.sans,marginBottom:3}}>
+        부가 계산 — 열교환기 고장 (§5.13, 참고용)
+      </div>
+      <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginBottom:10,lineHeight:1.5}}>
+        위의 방출 시나리오 선택(Manual W 포함)이나 §5.11 계산과 완전히 독립적으로 계산할 수 있는 참고용 항목입니다.
+        결과는 면적(m²)이며, 소요분출량(W, kg/h) 산정에 자동으로 반영되지 않습니다.
+      </div>
+      <button onClick={()=>setOpen(o=>!o)}
+        style={{fontSize:10,color:T.sub,background:"none",border:`1px dashed ${T.border}`,
+          borderRadius:7,padding:"6px 10px",cursor:"pointer",fontFamily:font.mono}}>
+        {open ? "▲ 열교환기 고장 닫기" : "▼ 열교환기 고장 계산 열기"}
+      </button>
+      {open && (
+        <div style={{background:T.bg,borderRadius:10,padding:"10px 12px",border:`1px solid ${T.border}`,marginTop:10}}>
+          <ExchangerFailureInputForm value={value} onFieldChange={onFieldChange}/>
           <ReliefLoadScenarioResultPanel result={result} adapter={null}/>
         </div>
       )}
@@ -779,7 +891,8 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
   effectiveW, effectiveWSource, onReliefLoadScenarioTypeChange, onReliefLoadScenarioInputChange,
   onExternalFireCaseChange, onExternalFireMChange, onExternalFireFMethodChange, onExternalFireT1MethodChange,
   onExternalFireInsulationLayerAdd, onExternalFireInsulationLayerRemove, onExternalFireInsulationLayerFieldChange,
-  liquidExpansionInput, liquidExpansionResult, onLiquidExpansionFieldChange }) {
+  liquidExpansionInput, liquidExpansionResult, onLiquidExpansionFieldChange,
+  exchangerFailureInput, exchangerFailureResult, onExchangerFailureFieldChange }) {
   const [fluidId, setFluidId]   = useState("co2");
   const [kdId,    setKdId]      = useState("sv_std");
   const [showCustomFluid, setShowCustomFluid] = useState(false);
@@ -933,6 +1046,13 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         value={liquidExpansionInput}
         onFieldChange={onLiquidExpansionFieldChange}
         result={liquidExpansionResult}
+      />
+
+      {/* ── 2d. §5.13 열교환기 고장 — 독립 부가 계산(참고용, governing과 무관) ── */}
+      <ExchangerFailureSupplementaryBlock
+        value={exchangerFailureInput}
+        onFieldChange={onExchangerFailureFieldChange}
+        result={exchangerFailureResult}
       />
 
       {/* ── 3. 유체 사양 결정 ── */}
