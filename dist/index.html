@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:711644104d99\n\n' +
+    box.textContent = '[ERROR] BUILD:6f1cd89a82b5\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:711644104d99\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:6f1cd89a82b5\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:711644104d99 | 2026-09-03T22:37:32Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:6f1cd89a82b5 | 2026-09-04T07:59:15Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "711644104d99";
+const __BUILD_HASH__ = "6f1cd89a82b5";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -4580,6 +4580,7 @@ const RELIEF_LOAD_BASIS_LABEL = {
   OVERFILLING:          "§5.6 과충전",
   CONTROL_VALVE_FAIL:   "§5.7 자동제어밸브 고장",
   ABNORMAL_HEAT_VAPOR:  "§5.8 비정상 열/증기 유입",
+  EXTERNAL_FIRE:        "§5.12 외부화재",
 };
 
 function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dischargeSystem, equipment,

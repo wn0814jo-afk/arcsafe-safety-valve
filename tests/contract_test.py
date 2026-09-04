@@ -4125,6 +4125,73 @@ console.log(JSON.stringify(out));
 
 
 # ════════════════════════════════════════════════════════════════
+#  C-4.14 §5.12 EXTERNAL_FIRE Basis Label 버그픽스 — 회귀 방지
+#  RELIEF_LOAD_BASIS_LABEL에 EXTERNAL_FIRE 키가 없어 §5.12가 governing이
+#  되면 "사양 결정 요약" 화면에 "Basis: undefined"가 노출되던 결함.
+#  실제 소스의 object literal을 그대로 실행해 5개 governing 시나리오
+#  전부(§5.1/5.6/5.7/5.8/5.12) undefined 없이 정상 문자열을 반환하는지
+#  실측한다 — 정적 키 존재 확인이 아니라 실제 값 자체를 검증한다.
+# ════════════════════════════════════════════════════════════════
+def test_c414_external_fire_basis_label_bugfix() -> TestResult:
+    tr = TestResult("C414-BASIS-LABEL-001", "Sprint C-4.14 — §5.12 External Fire Basis Label 버그픽스")
+
+    inputv_src = (SRC / "components" / "InputView.jsx").read_text()
+
+    m = re.search(r"const RELIEF_LOAD_BASIS_LABEL = \{[^}]*\};", inputv_src, re.S)
+    tr.check("BL_001_object_literal_found", m is not None,
+             "RELIEF_LOAD_BASIS_LABEL 정의를 소스에서 찾을 수 없음")
+    if not m:
+        return tr
+
+    node = shutil.which("node")
+    if not node:
+        tr.check("BL_node_available", False, "node를 찾을 수 없어 실행 검증을 건너뜀")
+        return tr
+
+    literal = m.group(0).replace("const RELIEF_LOAD_BASIS_LABEL = ", "").rstrip(";")
+    check_script = f"""
+const obj = {literal};
+const ids = ["OUTLET_BLOCKED","OVERFILLING","CONTROL_VALVE_FAIL","ABNORMAL_HEAT_VAPOR","EXTERNAL_FIRE"];
+const out = {{}};
+for (const id of ids) {{
+  const v = obj[id];
+  out[id] = {{ value: v, isUndefined: v === undefined, isString: typeof v === "string" && v.length > 0 }};
+}}
+// 실제 InputView.jsx의 렌더링 지점과 동일한 문자열 결합을 재현 — "undefined"라는
+// 리터럴 텍스트가 실제로 화면에 나타나는지까지 확인한다(단순 키 존재 확인이 아님).
+out.renderedExternalFireLine = "Basis: " + obj["EXTERNAL_FIRE"] + " — Manual W(100 kg/h)는 사용되지 않음";
+console.log(JSON.stringify(out));
+"""
+    cp = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=10)
+    try:
+        out = json.loads(cp.stdout.strip().splitlines()[-1]) if cp.stdout.strip() else {}
+    except Exception:
+        out = {}
+
+    tr.check("BL_002_external_fire_not_undefined",
+             out.get("EXTERNAL_FIRE", {}).get("isUndefined") is False and out.get("EXTERNAL_FIRE", {}).get("isString") is True,
+             f"EXTERNAL_FIRE Basis label이 여전히 undefined이거나 빈 문자열임: {out} stdout={cp.stdout!r}")
+    tr.check("BL_003_rendered_line_has_no_literal_undefined",
+             "undefined" not in out.get("renderedExternalFireLine", "undefined"),
+             f"실제 렌더링 문자열에 'undefined'가 포함됨: {out.get('renderedExternalFireLine')}")
+    tr.check("BL_004_external_fire_follows_naming_convention",
+             out.get("EXTERNAL_FIRE", {}).get("value") == "§5.12 외부화재",
+             f"EXTERNAL_FIRE Basis label이 기존 명명 규칙(§X.Y 제목)과 다름: {out.get('EXTERNAL_FIRE')}")
+    tr.check("BL_005_existing_four_labels_unregressed",
+             all(out.get(id, {}).get("isUndefined") is False and out.get(id, {}).get("isString") is True
+                 for id in ["OUTLET_BLOCKED", "OVERFILLING", "CONTROL_VALVE_FAIL", "ABNORMAL_HEAT_VAPOR"]),
+             f"기존 4개 Basis label 중 일부가 회귀함: {out}")
+    tr.check("BL_006_existing_four_labels_values_unchanged",
+             out.get("OUTLET_BLOCKED", {}).get("value") == "§5.1 출구 차단"
+             and out.get("OVERFILLING", {}).get("value") == "§5.6 과충전"
+             and out.get("CONTROL_VALVE_FAIL", {}).get("value") == "§5.7 자동제어밸브 고장"
+             and out.get("ABNORMAL_HEAT_VAPOR", {}).get("value") == "§5.8 비정상 열/증기 유입",
+             f"기존 4개 Basis label의 문자열 값이 변경됨(이번 작업은 EXTERNAL_FIRE 추가만 허용): {out}")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
 #  BASELINE LOCK CONTRACT (Sprint A.1) — Engine 1.3.0 기준선 보호 장치
 #  1) ENGINE-VERSION-LOCK-001: Snapshot/ReportPackage/Fixture 엔진버전 일치
 #  2) GOLDEN-FIXTURE-MUTATION-GUARD-001: fixture를 손으로 고치면 감지
@@ -6271,6 +6338,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [C413-EXCHANGER-SUPPLEMENTARY-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── §5.12 External Fire Basis Label bugfix regression (C-4.14) ─
+    print("\n── C414-BASIS-LABEL-001 (Sprint C-4.14) ──────────────")
+    tr = test_c414_external_fire_basis_label_bugfix()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [C414-BASIS-LABEL-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"

@@ -884,6 +884,7 @@ const RELIEF_LOAD_BASIS_LABEL = {
   OVERFILLING:          "§5.6 과충전",
   CONTROL_VALVE_FAIL:   "§5.7 자동제어밸브 고장",
   ABNORMAL_HEAT_VAPOR:  "§5.8 비정상 열/증기 유입",
+  EXTERNAL_FIRE:        "§5.12 외부화재",
 };
 
 function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dischargeSystem, equipment,
