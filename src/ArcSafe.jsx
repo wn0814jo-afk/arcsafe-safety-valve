@@ -43,6 +43,39 @@ function ArcSafe() {
   };
   const handleLogout = () => { if (window.__archsafeAuth) window.__archsafeAuth.logout(); };
 
+  // PLAN BADGE (Phase 1, 2026-09) — 계정 상태 표시 전용. 포트폴리오 공용 plan-badge.js와
+  // 동일 계약(policy/me 직접 조회, 노출 상태 anonymous/free/pro 3개, 실패 시 Free로
+  // 추정하지 않고 미확정 유지)을 이 앱의 단일 번들 구조 안에서 그대로 재현한 것 — AuthClient
+  // (authState/authUser)의 로그인 판정 로직에는 관여하지 않는, 완전히 별도의 policy/me 조회다.
+  const [planBadgeState, setPlanBadgeState] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    function resolvePlan(attempt) {
+      fetch("https://policy.archsafe.co.kr/policy/me", { credentials: "include" })
+        .then(res => {
+          if (res.status === 401) return { state: "anonymous" };
+          if (!res.ok) throw new Error("policy/me HTTP " + res.status);
+          return res.json().then(data => {
+            const plan = data && data.billing && data.billing.plan;
+            if (plan === "PRO_MONTHLY" || plan === "pro") return { state: "pro" };
+            if (plan === "free") return { state: "free" };
+            if (!plan) return { state: "anonymous" };
+            throw new Error("unrecognized plan: " + plan);
+          });
+        })
+        .then(r => { if (!cancelled) setPlanBadgeState(r.state); })
+        .catch(() => {
+          if (!cancelled) {
+            if (attempt < 2) setTimeout(() => resolvePlan(attempt + 1), 900);
+            // 재시도 후에도 실패하면 planBadgeState는 null로 유지한다 — Free로
+            // 추정 표시하지 않는다(fail-closed).
+          }
+        });
+    }
+    resolvePlan(1);
+    return () => { cancelled = true; };
+  }, []);
+
   // B3 Impact Analysis용: 모든 Case의 snapshotHistory를 이어붙인 평탄화 배열.
   // 각 case.snapshotHistory는 append-only(순서 보존)이므로, 이를 그대로 이어붙이면
   // caseId별 마지막 등장 원소 = 그 Case의 최신 Snapshot이 된다 (analyzeRevisionImpact 전제).
@@ -162,6 +195,16 @@ function ArcSafe() {
                 textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
               {authUser.email}
             </div>
+          )}
+          {authState === "authenticated" && authUser && (planBadgeState === "free" || planBadgeState === "pro") && (
+            <a
+              href="/pro/"
+              style={{padding:"2px 9px",borderRadius:10,fontFamily:font.mono,fontSize:10,
+                fontWeight:700,letterSpacing:.3,whiteSpace:"nowrap",textDecoration:"none",cursor:"pointer",
+                color: planBadgeState === "pro" ? "#8a5c0a" : "#0d7a4e",
+                background: planBadgeState === "pro" ? "#fef3df" : "#e6f4ee"}}>
+              {planBadgeState === "pro" ? "PRO" : "FREE"}
+            </a>
           )}
           {authState === "unauthenticated" && (
             <button
