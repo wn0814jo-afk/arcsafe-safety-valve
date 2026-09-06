@@ -729,6 +729,52 @@ function ExchangerFailureSupplementaryBlock({ value, onFieldChange, result }) {
   );
 }
 
+// ── C-4.15-A — §5.2/§5.10 "추가 검토가 필요한 시나리오" 정적 안내 ──
+// §5.2(냉각/환류 중단)/§5.10(화학반응·폭주반응)은 RELIEF_LOAD_SCENARIO_
+// TAXONOMY(relief_load.js)에서 이미 NEEDS_ENGINEERING_DECISION으로
+// 분류되어 있다 — 원문 자체에 정형화된 계산식이 없다(§5.2: 물질·에너지
+// 수지 기반 케이스별 판단, §5.10: 벤치시험 데이터 필요). 이 두 절은
+// RELIEF_LOAD_SCENARIO_META(governing 배타 라디오 그룹)에도, §5.11/
+// §5.13처럼 독립 계산 state에도 포함시키지 않는다 — 계산할 것이
+// 없기 때문이다. 이 컴포넌트는 순수 표시 전용이며 CaseView에 어떤
+// state/prop도 추가하지 않는다(입력 필드/버튼/collapsible 없음).
+// 문구는 §5.7 CHECK_VALVE_FAILURE/§5.12 NEEDS_ENGINEERING_DECISION
+// 케이스에서 이미 쓰던 고정 패턴("원문에 계산식이 없어 이 앱은
+// 자동으로 산정하지 않습니다. 별도 공학적 판단이 필요합니다")을
+// 그대로 재사용한다 — 새로운 법규 해석을 만들지 않는다.
+function EngineeringDecisionNotice({ section, title, citation }) {
+  return (
+    <div style={{marginBottom:10}}>
+      <div style={{fontSize:11,fontWeight:700,color:T.navy,fontFamily:font.sans,marginBottom:4}}>
+        {section} {title}
+      </div>
+      <div style={{background:T.orangeBg,border:`1.5px solid ${T.orange}`,borderRadius:10,
+        padding:"10px 12px",fontSize:11,color:"#7A4F00",fontFamily:font.sans,lineHeight:1.6}}>
+        {citation}
+      </div>
+    </div>
+  );
+}
+
+function EngineeringDecisionReviewArea() {
+  return (
+    <div style={{background:T.cardBg,borderRadius:14,padding:14,marginBottom:10,border:`1.5px solid ${T.border}`}}>
+      <div style={{fontSize:12,fontWeight:900,color:T.navy,fontFamily:font.sans,marginBottom:3}}>
+        추가 검토가 필요한 시나리오 (계산 미제공)
+      </div>
+      <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginBottom:10,lineHeight:1.5}}>
+        아래 시나리오는 KOSHA D-18-2020 원문 자체에 정형화된 계산식이 없어 이 앱이 자동으로 산정하지
+        않습니다. 선택 가능한 항목이 아니며, 소요분출량(W) 산정이나 Snapshot 결과에 반영되지 않습니다 —
+        별도의 공학적 판단이 필요함을 안내하는 참고 정보입니다.
+      </div>
+      <EngineeringDecisionNotice section="§5.2" title="냉각/환류 중단"
+        citation="KOSHA D-18-2020 §5.2: 냉각/환류 중단 시 소요분출량은 물질·에너지 수지에 기반한 케이스별 판단이 필요합니다 — 원문에 정형화된 계산식이 없어 이 앱은 자동으로 산정하지 않습니다. 별도 공학적 판단이 필요합니다."/>
+      <EngineeringDecisionNotice section="§5.10" title="화학반응(폭주반응)"
+        citation="KOSHA D-18-2020 §5.10: 화학반응(폭주반응)에 의한 소요분출량은 벤치시험(bench-scale test) 데이터가 필요합니다 — 원문 자체가 정형화된 계산식을 제시하지 않아 이 앱은 자동으로 산정하지 않습니다. 별도 공학적 판단이 필요합니다."/>
+    </div>
+  );
+}
+
 // ── 결정 슬라이더 (수치 입력이 필요한 파라미터용) ────────────
 function DecisionSlider({ param, label, unit, value, min, max, step, onChange, basis, warning }) {
   const [open, setOpen] = useState(false);
@@ -1055,6 +1101,9 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         onFieldChange={onExchangerFailureFieldChange}
         result={exchangerFailureResult}
       />
+
+      {/* ── 2e. §5.2/§5.10 — 추가 검토가 필요한 시나리오(계산 미제공, 정적 안내) ── */}
+      <EngineeringDecisionReviewArea/>
 
       {/* ── 3. 유체 사양 결정 ── */}
       <SectionHeader step="3" title="유체 사양" sub="M, k 값은 유체 선택 시 자동 결정됨"/>

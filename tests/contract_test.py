@@ -4191,6 +4191,68 @@ console.log(JSON.stringify(out));
     return tr
 
 
+def test_c415a_engineering_decision_notice_contract() -> TestResult:
+    tr = TestResult("C415A-ENGINEERING-DECISION-001", "Sprint C-4.15-A — §5.2/§5.10 추가 검토 안내 계약")
+
+    inputv_src = (SRC / "components" / "InputView.jsx").read_text()
+    casev_src = (SRC / "components" / "CaseView.jsx").read_text()
+
+    tr.check("EDN_001_notice_component_exists",
+             "function EngineeringDecisionNotice(" in inputv_src,
+             "EngineeringDecisionNotice 컴포넌트가 InputView.jsx에 없음")
+    tr.check("EDN_002_review_area_component_exists",
+             "function EngineeringDecisionReviewArea(" in inputv_src,
+             "EngineeringDecisionReviewArea 컴포넌트가 InputView.jsx에 없음")
+    tr.check("EDN_003_review_area_mounted",
+             "<EngineeringDecisionReviewArea/>" in inputv_src or "<EngineeringDecisionReviewArea />" in inputv_src,
+             "EngineeringDecisionReviewArea가 실제로 렌더링 트리에 마운트되지 않음")
+    tr.check("EDN_004_section_5_2_present",
+             "§5.2" in inputv_src and "냉각/환류 중단" in inputv_src,
+             "§5.2(냉각/환류 중단) 안내 텍스트가 없음")
+    tr.check("EDN_005_section_5_10_present",
+             "§5.10" in inputv_src and "화학반응" in inputv_src,
+             "§5.10(화학반응/폭주반응) 안내 텍스트가 없음")
+    tr.check("EDN_006_reuses_existing_needs_decision_wording",
+             "원문에 계산식이 없어 이 앱은 자동으로 산정하지 않습니다" in inputv_src
+             or "원문 자체가 정형화된 계산식을 제시하지 않아 이 앱은 자동으로 산정하지 않습니다" in inputv_src,
+             "기존 §5.7/§5.8/§5.12에서 쓰던 NEEDS_ENGINEERING_DECISION 고정 문구 패턴을 재사용하지 않음"
+             " — 새 표현을 임의로 만들면 안 됨")
+    review_area_match = re.search(r"function EngineeringDecisionReviewArea\(\)\s*\{[\s\S]*?\n\}\n", inputv_src)
+    review_area_src = review_area_match.group(0) if review_area_match else ""
+    tr.check("EDN_007_review_area_block_found",
+             review_area_match is not None,
+             "EngineeringDecisionReviewArea 함수 본문을 소스에서 정확히 추출하지 못함")
+    tr.check("EDN_007b_no_judgment_words",
+             review_area_match is not None
+             and not any(w in review_area_src for w in ["PASS", "FAIL", "적합", "부적합", "승인"]),
+             "안내 영역에 PASS/FAIL/적합/부적합/승인 등 판정성 단어가 포함되면 안 됨(정보 제공용일 뿐 승인/안전판정이 아님)")
+
+    meta_match = re.search(r"const RELIEF_LOAD_SCENARIO_META = \{[\s\S]*?\n\};", casev_src)
+    meta_src = meta_match.group(0) if meta_match else ""
+    tr.check("EDN_008_not_in_governing_meta",
+             meta_match is not None
+             and "COOLING_LOSS" not in meta_src and "RUNAWAY_REACTION" not in meta_src,
+             "COOLING_LOSS(§5.2)/RUNAWAY_REACTION(§5.10)이 RELIEF_LOAD_SCENARIO_META(governing 배타 라디오)에 추가되면 안 됨"
+             " — 계산 함수가 없으므로 선택 가능한 시나리오가 될 수 없음")
+    tr.check("EDN_009_not_in_five_scenario_cards",
+             "COOLING_LOSS" not in inputv_src.split("const SCENARIOS = [")[1].split("];")[0]
+             and "RUNAWAY_REACTION" not in inputv_src.split("const SCENARIOS = [")[1].split("];")[0],
+             "COOLING_LOSS/RUNAWAY_REACTION이 ReliefLoadScenarioSection의 기존 5개 시나리오 카드 배열에 포함되면 안 됨")
+    tr.check("EDN_010_no_new_engine_calc_functions",
+             "calculateCoolingLossScenario" not in casev_src and "calculateRunawayReactionScenario" not in casev_src
+             and "calculateCoolingLossScenario" not in inputv_src and "calculateRunawayReactionScenario" not in inputv_src,
+             "§5.2/§5.10용 가짜 Engine 계산 함수를 새로 만들거나 호출하면 안 됨(UI-only 변경)")
+    tr.check("EDN_011_no_casev_state_added",
+             "coolingLossInput" not in casev_src and "runawayReactionInput" not in casev_src
+             and "coolingLossResult" not in casev_src and "runawayReactionResult" not in casev_src,
+             "CaseView.jsx에 §5.2/§5.10용 state가 추가되면 안 됨(순수 정적 표시, Snapshot에 반영되지 않음)")
+    tr.check("EDN_012_existing_5_11_5_13_supplementary_intact",
+             "LiquidExpansionSupplementaryBlock" in inputv_src and "ExchangerFailureSupplementaryBlock" in inputv_src,
+             "기존 §5.11/§5.13 supplementary 구조가 훼손됨")
+
+    return tr
+
+
 # ════════════════════════════════════════════════════════════════
 #  BASELINE LOCK CONTRACT (Sprint A.1) — Engine 1.3.0 기준선 보호 장치
 #  1) ENGINE-VERSION-LOCK-001: Snapshot/ReportPackage/Fixture 엔진버전 일치
@@ -6349,6 +6411,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [C414-BASIS-LABEL-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── §5.2/§5.10 Engineering Decision Notice contract (C-4.15-A) ─
+    print("\n── C415A-ENGINEERING-DECISION-001 (Sprint C-4.15-A) ──")
+    tr = test_c415a_engineering_decision_notice_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [C415A-ENGINEERING-DECISION-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"
