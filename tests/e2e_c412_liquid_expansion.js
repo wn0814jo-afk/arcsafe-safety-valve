@@ -212,13 +212,13 @@ async function main() {
     results.openedIndependently = openClicked;
     await new Promise(r => setTimeout(r, 150));
     t = await visibleText(page);
-    results.formShownAfterOpen = t.includes('체적팽창계수') && t.includes('유입 열량') &&
+    results.formShownAfterOpen = t.includes('열팽창계수') && t.includes('유입 열량') &&
       t.includes('비중') && t.includes('비열');
     results.insufficientBeforeInput = t.includes('입력을 완료하면 결과가 표시됩니다');
 
     // 5~7. α/Q/SG/Cp 입력 → 계산(버튼 없이 즉시 반영) → COMPUTABLE 결과 표시
     // V = α·Q / (500·SG·Cp) = (0.001 * 5000) / (500 * 0.8 * 0.5) = 5 / 200 = 0.025 m3/h
-    await fillNumberFieldByLabel(page, '체적팽창계수 α', 0.001);
+    await fillNumberFieldByLabel(page, '열팽창계수 α', 0.001);
     await fillNumberFieldByLabel(page, '유입 열량 Q', 5000);
     await fillNumberFieldByLabel(page, '비중 SG', 0.8);
     await fillNumberFieldByLabel(page, '비열 Cp', 0.5);
@@ -244,12 +244,12 @@ async function main() {
     results.s51ResultShown = /100\s*kg\/h/.test(t);
     // §5.11 블록/입력이 §5.1 선택 이후에도 그대로 남아있는지(state 오염 없음)
     results.liquidExpansionSurvivesOtherScenarioSelection = t.includes('부가 계산 — 액체부피팽창') &&
-      t.includes('체적팽창계수') && /0\.025/.test(t);
+      t.includes('열팽창계수') && /0\.025/.test(t);
     // §5.1의 governing 결과가 §5.11 값 때문에 바뀌지 않았는지(정확히 100 유지)
     results.governingUnaffectedByLiquidExpansion = /100\s*kg\/h/.test(t) && !/125\s*kg\/h/.test(t);
 
     // 10~11. §5.11 재계산 — 입력을 바꿔도 §5.1 결과가 변하지 않는지 재확인
-    await fillNumberFieldByLabel(page, '체적팽창계수 α', 0.002);
+    await fillNumberFieldByLabel(page, '열팽창계수 α', 0.002);
     await new Promise(r => setTimeout(r, 250));
     t = await visibleText(page);
     // 새 값: (0.002*5000)/(500*0.8*0.5) = 10/200 = 0.05
@@ -269,7 +269,7 @@ async function main() {
     const closedClicked = await clickByText(page, '닫기');
     await new Promise(r => setTimeout(r, 150));
     t = await visibleText(page);
-    results.closedHidesForm = !t.includes('체적팽창계수');
+    results.closedHidesForm = !t.includes('열팽창계수');
     const reopenClicked = await clickByText(page, '액체부피팽창 계산 열기');
     await new Promise(r => setTimeout(r, 150));
     t = await visibleText(page);
@@ -301,7 +301,7 @@ async function main() {
     await new Promise(r => setTimeout(r, 200));
     await clickByText(page, '액체부피팽창 계산 열기');
     await new Promise(r => setTimeout(r, 150));
-    await fillNumberFieldByLabel(page, '체적팽창계수 α', 0.001);
+    await fillNumberFieldByLabel(page, '열팽창계수 α', 0.001);
     await fillNumberFieldByLabel(page, '유입 열량 Q', 5000);
     await fillNumberFieldByLabel(page, '비중 SG', 0.8);
     await fillNumberFieldByLabel(page, '비열 Cp', 0.5);
@@ -328,7 +328,7 @@ async function main() {
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle0', timeout: 30000 });
     await new Promise(r => setTimeout(r, 200));
     await clickByText(page, '액체부피팽창 계산 열기');
-    await fillNumberFieldByLabel(page, '체적팽창계수 α', 0.001);
+    await fillNumberFieldByLabel(page, '열팽창계수 α', 0.001);
     await fillNumberFieldByLabel(page, '유입 열량 Q', 5000);
     await fillNumberFieldByLabel(page, '비중 SG', 0.8);
     await fillNumberFieldByLabel(page, '비열 Cp', 0.5);

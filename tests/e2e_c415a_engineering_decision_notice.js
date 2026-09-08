@@ -239,7 +239,7 @@ async function main() {
     // ── §5.11 액체부피팽창 supplementary 정상 동작 ──
     await clickByText(page, '액체부피팽창 계산 열기');
     await new Promise(r => setTimeout(r, 150));
-    await fillNumberFieldByLabel(page, '체적팽창계수', 0.001);
+    await fillNumberFieldByLabel(page, '열팽창계수', 0.001);
     await fillNumberFieldByLabel(page, '유입 열량', 5000);
     await fillNumberFieldByLabel(page, '비중', 0.8);
     await fillNumberFieldByLabel(page, '비열', 0.5);

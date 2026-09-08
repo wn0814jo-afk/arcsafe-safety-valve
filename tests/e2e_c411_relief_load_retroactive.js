@@ -286,9 +286,9 @@ async function main() {
     await new Promise(r => setTimeout(r, 200));
     t = await visibleText(page);
     s57.oldResultGone = !/SCENARIO RESULT[\s\S]{0,40}200\s*kg\/h/.test(t);
-    s57.formShown = t.includes('FAILURE MODE') && t.includes('인입 밸브 고장');
+    s57.formShown = t.includes('FAILURE MODE') && t.includes('인입 밸브가 열리는 방향으로 고장');
 
-    s57.modeSelected = await clickByText(page, '인입 밸브 고장');
+    s57.modeSelected = await clickByText(page, '인입 밸브가 열리는 방향으로 고장');
     await new Promise(r => setTimeout(r, 150));
     t = await visibleText(page);
     s57.fieldsShown = t.includes('유입량 (Inflow)') && t.includes('유출량 (Outflow)');
@@ -302,7 +302,7 @@ async function main() {
     s57.resultCorrect = s57.resultValue === '250'; // 300 - 50
 
     // FAIL_STATIONARY 분기 전환 시 이전 INLET_VALVE 입력이 남지 않는지 확인
-    s57.failStationarySelected = await clickByText(page, 'Fail-stationary');
+    s57.failStationarySelected = await clickByText(page, '현재 위치에 고정되는 고장');
     await new Promise(r => setTimeout(r, 150));
     t = await visibleText(page);
     s57.failStationaryFieldsShown = t.includes('개방 가정 유출량') && t.includes('폐쇄 가정 유출량');
@@ -315,7 +315,7 @@ async function main() {
     transition_57_to_58.switched = await clickByText(page, '비정상 열/증기 유입');
     await new Promise(r => setTimeout(r, 200));
     t = await visibleText(page);
-    transition_57_to_58.oldScenarioFormGone = !t.includes('FAILURE MODE') || !t.includes('Fail-stationary');
+    transition_57_to_58.oldScenarioFormGone = !t.includes('FAILURE MODE') || !t.includes('현재 위치에 고정되는 고장');
     results.transition_57_to_58 = transition_57_to_58;
 
     // ══════════════════════════════════════════════════════════════
@@ -352,7 +352,7 @@ async function main() {
     const errState = {};
     await clickByText(page, '자동제어밸브 고장');
     await new Promise(r => setTimeout(r, 150));
-    await clickByText(page, '인입 밸브 고장');
+    await clickByText(page, '인입 밸브가 열리는 방향으로 고장');
     await new Promise(r => setTimeout(r, 150));
     await fillNumberFieldByLabel(page, '유입량 (Inflow)', 400);
     await new Promise(r => setTimeout(r, 200));

@@ -47,6 +47,40 @@ function ScenarioEnumToggle({ label, options, value, onChange }) {
 
 function isFiniteNum(v) { return typeof v === "number" && isFinite(v); }
 
+// ── C-4.16-B — Relieving Pressure(P1abs, bara) 미리보기 계산 ──
+// api520.js가 sizing 시 실제로 쓰는 것과 동일한 산식(P1abs = Pset×(1+OP/100)
+// +1.01325)을 그대로 재사용한다. 이 파일 안에서 기존에 이미 인라인으로
+// 중복 존재하던 표현식을 여기 하나로 추출한 것뿐이며, 새 계산식을
+// 만든 게 아니다 — Engine의 sizing 결과(Snapshot)와는 별개로 "제출 전
+// 미리보기"용이라는 기존 설계를 그대로 유지한다.
+function computeP1absBara(inputs) {
+  if (!isFiniteNum(inputs.P1) || typeof inputs.OP !== "number" || isNaN(inputs.OP)) return undefined;
+  return inputs.P1 * (1 + inputs.OP / 100) + 1.01325;
+}
+
+// ── C-4.16-B — 입력 가이드 배지 (Pattern A/B/C, 순수 표시 컴포넌트) ──
+// A/B/C/D/E 분류 자체는 화면에 노출하지 않는다(UX Rules 원칙) — 색상과
+// 문구로만 "확인 위치"와 "성격"을 전달한다. 계산/검증 로직 없음, Engine
+// 입력에도 관여하지 않는다(순수 도움말).
+//   lookup(파랑)  = 문서/명판/물성표에서 확인하는 값(A/B형)
+//   external(보라) = 외부 계산서/시뮬레이션 결과를 그대로 입력하는 값(C형)
+//   expert(주황)   = 전문가 판단·근거 확인이 필요한 값(E형) — 임의입력 금지
+const FIELD_GUIDE_STYLE = {
+  lookup:   { bg: "#EFF6FF", border: "#BFDBFE", color: "#1D4ED8" },
+  external: { bg: "#F5F3FF", border: "#DDD6FE", color: "#6D28D9" },
+  expert:   { bg: T.orangeBg, border: T.orange, color: "#7A4F00" },
+};
+function FieldGuide({ kind, children }) {
+  const s = FIELD_GUIDE_STYLE[kind] || FIELD_GUIDE_STYLE.lookup;
+  return (
+    <div style={{fontSize:10,lineHeight:1.55,color:s.color,background:s.bg,
+      border:`1px solid ${s.border}`,borderRadius:8,padding:"6px 9px",
+      marginTop:-4,marginBottom:9,fontFamily:font.sans}}>
+      {children}
+    </div>
+  );
+}
+
 // ── C-4.10 — §5.12 EXTERNAL_FIRE fireCase 메타 ──
 // 표시명/설명/계산가능여부는 C-4.10 설계 확정본(2장)을 그대로 따른다.
 const EXTERNAL_FIRE_CASE_ORDER = [
@@ -142,7 +176,10 @@ function ExternalFireOpenPoolForm({ scenarioInput, areaLabel, onFieldChange, onF
         options={[{id:"YES",label:"있음(화재 열 절반 이상 배수)"},{id:"NO",label:"없음"}]}/>
       <ScenarioNumberField label={`젖은 면적 (${areaLabel})`} unit="m²"
         value={scenarioInput.wettedArea_m2} onChange={v=>onFieldChange("wettedArea_m2", v)}/>
-      <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:-5,marginBottom:8,lineHeight:1.5}}>화재에 노출된 표면적입니다.</div>
+      <FieldGuide kind="external">
+        화재에 노출된 습윤 표면적입니다. 이 화면에서 계산하지 않습니다 — 용기 도면과 액위(液位) 조건으로
+        직접 산정한 값을 입력하세요.
+      </FieldGuide>
       <ScenarioNumberField label="잠열 (Latent Heat)" unit="kcal/kg"
         value={scenarioInput.latentHeat_kcal_per_kg} onChange={v=>onFieldChange("latentHeat_kcal_per_kg", v)}/>
       <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:-5,marginBottom:8,lineHeight:1.5}}>저장 물질이 증발하며 흡수하는 열량입니다.</div>
@@ -161,19 +198,30 @@ function ExternalFireOpenPoolForm({ scenarioInput, areaLabel, onFieldChange, onF
       </div>
 
       {fMethod === "DIRECT" && (
-        <ScenarioNumberField label="F (환경인자, 0~1 — 표3 값 또는 산정값)" unit=""
-          value={scenarioInput.F} onChange={v=>onFieldChange("F", v)}/>
+        <div>
+          <ScenarioNumberField label="F (환경인자, 0~1)" unit=""
+            value={scenarioInput.F} onChange={v=>onFieldChange("F", v)}/>
+          <FieldGuide kind="expert">
+            임의로 입력하지 마세요. KOSHA D-18-2020 &lt;표 3&gt;에서 해당 조건의 F값을 확인하거나,
+            정확한 값을 모르면 "단열재 정보로 계산" 방식을 사용하세요. F는 화재 방출량(W) 산정에
+            직접 반영되는 값입니다.
+          </FieldGuide>
+        </div>
       )}
 
       {fMethod === "INSULATION" && (
         <div>
-          <ScenarioNumberField label="Tf (화재측 표면온도)" unit="℃"
+          <ScenarioNumberField label="Tf — 단열재 표면온도(화재측)" unit="℃"
             value={scenarioInput.Tf_degC} onChange={v=>onFieldChange("Tf_degC", v)}/>
+          <FieldGuide kind="expert">
+            단열재 바깥쪽(화재 노출측) 표면의 온도입니다. 임의 추정값이 아니라 설계기준서 또는
+            적용 코드에서 정한 근거값을 확인해 입력하세요.
+          </FieldGuide>
           <div style={{fontSize:10,color:T.sub,fontFamily:font.mono,margin:"8px 0 5px"}}>단열재 층 (여러 겹이면 추가)</div>
           {layers.map((layer, idx) => (
             <div key={idx} style={{display:"flex",gap:6,alignItems:"flex-end",marginBottom:6}}>
               <div style={{flex:1}}>
-                <ScenarioNumberField label="열전도율 k" unit="kcal·mm/hr·m²·℃"
+                <ScenarioNumberField label="단열재 열전도율 k (비열비 k와 다른 값)" unit="kcal·mm/hr·m²·℃"
                   value={layer.k_kcal_mm_per_hr_m2_degC}
                   onChange={v=>onInsulationLayerFieldChange(idx,"k_kcal_mm_per_hr_m2_degC",v)}/>
               </div>
@@ -203,8 +251,24 @@ function ExternalFireOpenPoolForm({ scenarioInput, areaLabel, onFieldChange, onF
 }
 
 // ③④ 가스·증기 화재 — Case M 프리필/재정의(C안), T1 상호배타, Tw≤T1 즉시 검증
-function ExternalFireGasVaporForm({ scenarioInput, onFieldChange, onMChange, onT1MethodChange }) {
+// C-4.16-B: P1(분출압력) 조건부 자동 제안 — fireScenarioActive(=inputs.fireScenario
+// ===true)이고 아직 사용자가 값을 넣지 않았을 때 "이 값 사용" 버튼으로만 1회
+// 채워준다(M 프리필과 동일 원칙 — 자동 동기화 아님, 조용히 덮어쓰지 않음).
+// p1AbsSuggestedMPa는 InputView 최상단에서 computeP1absBara(inputs)를 재사용해
+// 계산한 값을 그대로 전달받는다 — 이 컴포넌트는 압력 계산을 하지 않는다.
+function ExternalFireGasVaporForm({ scenarioInput, onFieldChange, onMChange, onT1MethodChange,
+  fireScenarioActive, p1AbsSuggestedMPa }) {
   const t1Method = scenarioInput.t1Method;
+  const p1Source = scenarioInput.scenarioP1Source;
+  const useSuggestedP1 = () => {
+    if (!isFiniteNum(p1AbsSuggestedMPa)) return;
+    onFieldChange("P1_MPa", p1AbsSuggestedMPa);
+    onFieldChange("scenarioP1Source", "CASE_DEFAULT");
+  };
+  const handleP1Edit = (v) => {
+    onFieldChange("P1_MPa", v);
+    onFieldChange("scenarioP1Source", "SCENARIO_OVERRIDE");
+  };
   const t1Confirmed = t1Method === "DIRECT"
     ? scenarioInput.T1_K
     : (t1Method === "PN_TN" && isFiniteNum(scenarioInput.Pn_MPa) && scenarioInput.Pn_MPa > 0
@@ -224,12 +288,59 @@ function ExternalFireGasVaporForm({ scenarioInput, onFieldChange, onMChange, onT
           ? "(Case 사양의 M값 사용 중 — 다른 값 사용 시 직접 수정)"
           : null}
       </div>
-      <ScenarioNumberField label="P1 (설정압력)" unit="MPa"
-        value={scenarioInput.P1_MPa} onChange={v=>onFieldChange("P1_MPa", v)}/>
-      <ScenarioNumberField label="A (노출 면적)" unit="m²"
+      {!fireScenarioActive && (
+        <FieldGuide kind="expert">
+          화재 시나리오 계산 조건과 현재 Case 설정이 일치하지 않습니다.
+          화재계산 조건을 확인한 후 P1을 입력하세요.
+        </FieldGuide>
+      )}
+      <ScenarioNumberField label="P1 — 분출압력 (Relieving Pressure, 화재계산용)" unit="MPa abs"
+        value={scenarioInput.P1_MPa} onChange={handleP1Edit}/>
+      <FieldGuide kind="expert">
+        Step4의 설정압력(Set Pressure)과 같은 값이 아닙니다 — 화재 조건에서의 인입측 분출압력(절대압,
+        MPa abs)입니다. 임의로 입력하지 마세요.
+      </FieldGuide>
+      {fireScenarioActive && isFiniteNum(p1AbsSuggestedMPa) && (
+        <FieldGuide kind="lookup">
+          Case의 기존 분출압력 계산값(Step4 설정압력·Overpressure 기준)을 기준으로 제안합니다.
+          필요한 경우 화재계산 기준에 따라 직접 수정할 수 있습니다.
+        </FieldGuide>
+      )}
+      {fireScenarioActive && isFiniteNum(p1AbsSuggestedMPa) && (
+        <div style={{display:"flex",alignItems:"center",gap:8,marginTop:-5,marginBottom:9}}>
+          {p1Source === "SCENARIO_OVERRIDE" ? (
+            <>
+              <span style={{fontSize:9,color:T.sub,fontFamily:font.mono}}>사용자 수정값</span>
+              <button onClick={useSuggestedP1}
+                style={{fontSize:9,color:T.navyLight,background:"none",border:`1px dashed ${T.border}`,
+                  borderRadius:6,padding:"3px 8px",cursor:"pointer",fontFamily:font.mono}}>
+                자동값으로 되돌리기 ({p1AbsSuggestedMPa.toFixed(4)} MPa abs)
+              </button>
+            </>
+          ) : scenarioInput.P1_MPa === p1AbsSuggestedMPa && p1Source === "CASE_DEFAULT" ? (
+            <span style={{fontSize:9,color:T.sub,fontFamily:font.mono}}>
+              자동 입력값 (Step4 설정압력·Overpressure 기준 분출압력)
+            </span>
+          ) : (
+            <button onClick={useSuggestedP1}
+              style={{fontSize:9,color:T.navyLight,background:"none",border:`1px dashed ${T.border}`,
+                borderRadius:6,padding:"3px 8px",cursor:"pointer",fontFamily:font.mono}}>
+              자동 제안값 사용 ({p1AbsSuggestedMPa.toFixed(4)} MPa abs — Step4 기준)
+            </button>
+          )}
+        </div>
+      )}
+      <ScenarioNumberField label="A — 화재 노출 면적" unit="m²"
         value={scenarioInput.A_m2} onChange={v=>onFieldChange("A_m2", v)}/>
-      <ScenarioNumberField label="Tw — 화재 시 용기 벽 온도" unit="K"
+      <FieldGuide kind="external">
+        용기·설비 도면 기준 화재 노출 면적입니다. 외부에서 산정한 값을 입력하세요.
+      </FieldGuide>
+      <ScenarioNumberField label="Tw — 화재노출 벽면온도" unit="K"
         value={scenarioInput.Tw_K} onChange={v=>onFieldChange("Tw_K", v)}/>
+      <FieldGuide kind="expert">
+        설계기준 또는 적용 코드에서 정한 근거를 확인해 입력하세요(예: 탄소강 866K). 임의 추정값을
+        넣지 마세요 — Tw는 T1보다 커야 하며(아래 자동 검증), 화재 W 산정에 직접 반영됩니다.
+      </FieldGuide>
 
       <div style={{fontSize:10,color:T.sub,fontFamily:font.mono,margin:"10px 0 5px"}}>T1(인입측 가스 초기 온도), 어떻게 입력하시겠어요?</div>
       <div style={{display:"flex",gap:6,marginBottom:8}}>
@@ -284,7 +395,8 @@ function ExternalFireGasVaporForm({ scenarioInput, onFieldChange, onMChange, onT
 // 각 시나리오는 조건부 필드만 보여준다(원문에 없는 필드를 요구하지 않음).
 function ReliefLoadScenarioInputForm({ scenarioType, scenarioInput, onFieldChange,
   onExternalFireCaseChange, onExternalFireMChange, onExternalFireFMethodChange, onExternalFireT1MethodChange,
-  onExternalFireInsulationLayerAdd, onExternalFireInsulationLayerRemove, onExternalFireInsulationLayerFieldChange }) {
+  onExternalFireInsulationLayerAdd, onExternalFireInsulationLayerRemove, onExternalFireInsulationLayerFieldChange,
+  fireScenarioActive, p1AbsSuggestedMPa }) {
   if (scenarioType === "OUTLET_BLOCKED") {
     return (
       <div>
@@ -293,17 +405,32 @@ function ReliefLoadScenarioInputForm({ scenarioType, scenarioInput, onFieldChang
           options={[{id:"LIQUID",label:"액체(Liquid)"},{id:"VAPOR",label:"증기(Vapor)"}]}/>
         <ScenarioNumberField label="최대 유입량 (Inflow)" unit="kg/h"
           value={scenarioInput.inflow_kgh} onChange={v=>onFieldChange("inflow_kgh",v)}/>
+        <FieldGuide kind="external">
+          정상운전 중 발생할 수 있는 최대 유입 조건의 유량입니다. 어디서 확인? 물질수지(Mass
+          Balance) / PFD / 공정 계산서.
+        </FieldGuide>
         {scenarioInput.phase === "VAPOR" && (
-          <ScenarioNumberField label="생성량 (Generation Rate)" unit="kg/h"
-            value={scenarioInput.generationRate_kgh} onChange={v=>onFieldChange("generationRate_kgh",v)}/>
+          <div>
+            <ScenarioNumberField label="생성량 (Generation Rate)" unit="kg/h"
+              value={scenarioInput.generationRate_kgh} onChange={v=>onFieldChange("generationRate_kgh",v)}/>
+            <FieldGuide kind="external">
+              외부 계산 결과를 입력하세요. 반응열·공정 시뮬레이션·열수지 등의 계산서에서 확인합니다.
+            </FieldGuide>
+          </div>
         )}
       </div>
     );
   }
   if (scenarioType === "OVERFILLING") {
     return (
-      <ScenarioNumberField label="최대 유입량 (Inflow)" unit="kg/h"
-        value={scenarioInput.inflow_kgh} onChange={v=>onFieldChange("inflow_kgh",v)}/>
+      <div>
+        <ScenarioNumberField label="최대 유입량 (Inflow)" unit="kg/h"
+          value={scenarioInput.inflow_kgh} onChange={v=>onFieldChange("inflow_kgh",v)}/>
+        <FieldGuide kind="external">
+          정상운전 중 발생할 수 있는 최대 유입 조건의 유량입니다. 어디서 확인? 물질수지(Mass
+          Balance) / PFD / 공정 계산서.
+        </FieldGuide>
+      </div>
     );
   }
   if (scenarioType === "CONTROL_VALVE_FAIL") {
@@ -313,10 +440,15 @@ function ReliefLoadScenarioInputForm({ scenarioType, scenarioInput, onFieldChang
         <ScenarioEnumToggle label="FAILURE MODE" value={mode}
           onChange={v=>onFieldChange("failureMode",v)}
           options={[
-            {id:"INLET_VALVE",  label:"인입 밸브 고장"},
-            {id:"OUTLET_VALVE", label:"출구 밸브 고장"},
-            {id:"FAIL_STATIONARY", label:"Fail-stationary"},
+            {id:"INLET_VALVE",  label:"인입 밸브가 열리는 방향으로 고장"},
+            {id:"OUTLET_VALVE", label:"출구 밸브가 닫히는 방향으로 고장"},
+            {id:"FAIL_STATIONARY", label:"현재 위치에 고정되는 고장 (Fail-stationary)"},
           ]}/>
+        <FieldGuide kind="lookup">
+          어디서 확인? P&amp;ID상 어떤 자동제어밸브가 고장 시 어느 방향으로 움직이는지(설계기준서
+          기재값). 실제 고장 위치는 밸브·제어계통별로 다르므로 P&amp;ID/설계기준서에서 개별 확인이
+          필요합니다.
+        </FieldGuide>
         {(mode === "INLET_VALVE" || mode === "OUTLET_VALVE") && (
           <div>
             <ScenarioNumberField label="유입량 (Inflow)" unit="kg/h"
@@ -333,6 +465,10 @@ function ReliefLoadScenarioInputForm({ scenarioType, scenarioInput, onFieldChang
               value={scenarioInput.openOutflow_kgh} onChange={v=>onFieldChange("openOutflow_kgh",v)}/>
             <ScenarioNumberField label="폐쇄 가정 유출량 (Closed Outflow)" unit="kg/h"
               value={scenarioInput.closedOutflow_kgh} onChange={v=>onFieldChange("closedOutflow_kgh",v)}/>
+            <FieldGuide kind="lookup">
+              밸브가 열리는 경우와 닫히는 경우의 유출량을 각각 입력합니다. 두 값 중 큰 유출량이
+              자동으로 적용됩니다(계산 로직 변경 없음).
+            </FieldGuide>
           </div>
         )}
       </div>
@@ -353,6 +489,9 @@ function ReliefLoadScenarioInputForm({ scenarioType, scenarioInput, onFieldChang
           <div>
             <ScenarioNumberField label="증기 발생량 (Vapor Generation)" unit="kg/h"
               value={scenarioInput.vaporGeneration_kgh} onChange={v=>onFieldChange("vaporGeneration_kgh",v)}/>
+            <FieldGuide kind="external">
+              외부 열수지 또는 별도 계산서에서 산정한 결과를 입력하세요.
+            </FieldGuide>
             <ScenarioNumberField label="정상 유출량 (Outflow)" unit="kg/h"
               value={scenarioInput.outflow_kgh} onChange={v=>onFieldChange("outflow_kgh",v)}/>
           </div>
@@ -410,6 +549,8 @@ function ReliefLoadScenarioInputForm({ scenarioType, scenarioInput, onFieldChang
               onFieldChange={onFieldChange}
               onMChange={onExternalFireMChange}
               onT1MethodChange={onExternalFireT1MethodChange}
+              fireScenarioActive={fireScenarioActive}
+              p1AbsSuggestedMPa={p1AbsSuggestedMPa}
             />
           </div>
         )}
@@ -435,10 +576,17 @@ function LiquidExpansionInputForm({ value, onFieldChange }) {
         액체가 팽창하며 압력이 상승하는 상황을 산정합니다. 유입 열량(Q) 산정 방법은
         열팽창용 안전밸브 기술지침(KOSHA D-31)을 참고하세요.
       </div>
-      <ScenarioNumberField label="체적팽창계수 α (Volumetric Expansion Coefficient)" unit="1/°C"
+      <ScenarioNumberField label="액체 열팽창계수 α (Volumetric Expansion Coefficient)" unit="1/°C"
         value={value.alpha_per_degC} onChange={v=>onFieldChange("alpha_per_degC",v)}/>
+      <FieldGuide kind="expert">
+        물성표 또는 적용 기준에서 확인합니다. 참고용 대표값이 있더라도 실제 계산에는 해당
+        물질·온도조건의 값을 확인하세요 — 임의 추정값을 넣지 마세요.
+      </FieldGuide>
       <ScenarioNumberField label="유입 열량 Q (Heat Input Rate)" unit="kcal/hr"
         value={value.Q_kcal_per_hr} onChange={v=>onFieldChange("Q_kcal_per_hr",v)}/>
+      <FieldGuide kind="external">
+        태양복사 또는 인접 설비의 열전달 등을 고려한 별도 계산 결과를 입력하세요(KOSHA D-31 참고).
+      </FieldGuide>
       <ScenarioNumberField label="비중 SG (Specific Gravity)" unit="-"
         value={value.SG} onChange={v=>onFieldChange("SG",v)}/>
       <ScenarioNumberField label="비열 Cp (Specific Heat)" unit="kcal/kg·°C"
@@ -570,6 +718,7 @@ function ReliefLoadScenarioSection({
   onScenarioTypeChange, onFieldChange,
   onExternalFireCaseChange, onExternalFireMChange, onExternalFireFMethodChange, onExternalFireT1MethodChange,
   onExternalFireInsulationLayerAdd, onExternalFireInsulationLayerRemove, onExternalFireInsulationLayerFieldChange,
+  fireScenarioActive, p1AbsSuggestedMPa,
 }) {
   const SCENARIOS = [
     { id:"OUTLET_BLOCKED",     label:"출구 차단",          tag:"§5.1" },
@@ -615,6 +764,8 @@ function ReliefLoadScenarioSection({
             onExternalFireInsulationLayerAdd={onExternalFireInsulationLayerAdd}
             onExternalFireInsulationLayerRemove={onExternalFireInsulationLayerRemove}
             onExternalFireInsulationLayerFieldChange={onExternalFireInsulationLayerFieldChange}
+            fireScenarioActive={fireScenarioActive}
+            p1AbsSuggestedMPa={p1AbsSuggestedMPa}
           />
           <ReliefLoadScenarioResultPanel result={scenarioResult} adapter={adapter}/>
         </div>
@@ -683,16 +834,29 @@ function ExchangerFailureInputForm({ value, onFieldChange }) {
         ]}
         value={exchangerType} onChange={v=>onFieldChange("exchangerType", v)}/>
       {(exchangerType === "SHELL_AND_TUBE" || exchangerType === "PLATE_AND_FRAME") && (
-        <ScenarioNumberField label="튜브 단면적 (Tube Cross-Section Area)" unit="m²"
-          value={value.tubeCrossSectionArea_m2} onChange={v=>onFieldChange("tubeCrossSectionArea_m2", v)}/>
+        <div>
+          <ScenarioNumberField label="튜브 단면적 (Tube Cross-Section Area, 단일 튜브 기준)" unit="m²"
+            value={value.tubeCrossSectionArea_m2} onChange={v=>onFieldChange("tubeCrossSectionArea_m2", v)}/>
+          <FieldGuide kind="external">
+            단일 튜브 1개의 단면적입니다(외경에서 자동 환산하지 않습니다 — 튜브 데이터시트에서
+            직접 확인한 값을 입력하세요).
+          </FieldGuide>
+        </div>
       )}
       {exchangerType === "DOUBLE_PIPE" && (
-        <ScenarioEnumToggle label="내관 종류 (Inner Tube Type)"
-          options={[
-            { id:"SCHEDULE_PIPE", label:"스케줄 배관 (Schedule Pipe)" },
-            { id:"GAUGE_TUBE",    label:"게이지 튜브 (Gauge Tube)" },
-          ]}
-          value={value.innerTubeType} onChange={v=>onFieldChange("innerTubeType", v)}/>
+        <div>
+          <ScenarioEnumToggle label="내관 종류 (Inner Tube Type)"
+            options={[
+              { id:"SCHEDULE_PIPE", label:"스케줄 배관 (Schedule Pipe)" },
+              { id:"GAUGE_TUBE",    label:"게이지 튜브 (Gauge Tube)" },
+            ]}
+            value={value.innerTubeType} onChange={v=>onFieldChange("innerTubeType", v)}/>
+          <FieldGuide kind={value.innerTubeType === "GAUGE_TUBE" ? "expert" : "lookup"}>
+            {value.innerTubeType === "GAUGE_TUBE"
+              ? "게이지 튜브는 원문에 필요한 계산식이 없어 전문가 판단(공학적 검토)이 필요합니다 — 이 앱은 자동으로 산정하지 않습니다."
+              : "이중관형 열교환기 사양서에서 내관 형식을 확인하세요. 스케줄 배관은 설치가 필요하지 않은 것으로 판정됩니다."}
+          </FieldGuide>
+        </div>
       )}
     </div>
   );
@@ -872,8 +1036,8 @@ function TempInput({ value, onChange }) {
       <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8,marginBottom:8}}>
         <div>
           <span style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono,letterSpacing:0.5}}>T</span>
-          <div style={{fontSize:13,fontWeight:900,color:T.navy,fontFamily:font.sans,marginTop:1}}>방출 온도</div>
-          <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginTop:2}}>정상 운전 온도가 아닌 방출 시나리오 온도</div>
+          <div style={{fontSize:13,fontWeight:900,color:T.navy,fontFamily:font.sans,marginTop:1}}>방출 온도 (Relieving Temperature)</div>
+          <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginTop:2}}>정상 운전 온도가 아닌 방출 시나리오 온도입니다 — 혼동하지 마세요.</div>
         </div>
         <div style={{textAlign:"right",flexShrink:0}}>
           <div style={{fontSize:20,fontWeight:900,color:T.navyLight,fontFamily:font.mono,lineHeight:1}}>{displayVal}</div>
@@ -996,6 +1160,17 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
   // 설정압 > MAWP 경고
   const mawpWarning = inputs.P1 > inputs.mawp ? "설정압 > MAWP!" : null;
 
+  // C-4.16-B — §5.12 P1(분출압력) 조건부 자동 제안값. KOSHA D-18-2020 §5.12
+  // 원문 확인 결과 P1은 "설정압력"이 아니라 "인입측 분출압력(MPa abs)"이므로,
+  // 이미 존재하는 P1abs(bara, computeP1absBara — 위 RELIEVING PRESSURE 미리보기와
+  // 동일 산식)를 ×0.1하여 MPa(abs)로만 환산한다. fireScenario===true인
+  // Case에서만 제안하며(그 외에는 사용자가 직접 입력), Engine에 새 계산을
+  // 추가하지 않는다 — 순수 UI 제안값이며 자동 저장하지 않는다(버튼으로만 적용).
+  const fireScenarioActive = inputs.fireScenario === true;
+  const p1AbsBaraPreview = computeP1absBara(inputs);
+  const p1AbsSuggestedMPa = (fireScenarioActive && isFiniteNum(p1AbsBaraPreview))
+    ? +(p1AbsBaraPreview * 0.1).toFixed(4) : undefined;
+
   return (
     <div style={{padding:"0 2px"}}>
 
@@ -1041,6 +1216,7 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
           <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:5,lineHeight:1.5}}>
             출처: KOSHA GUIDE D-18-2020 §7.2(4). 파일럿식은 원문에 수치 기준이 없어 이 앱에서 아직 지원하지 않습니다 — 실제 파일럿식 밸브는 제작사 데이터시트를 별도로 확인하세요.
           </div>
+          <FieldGuide kind="lookup">어디서 확인? 밸브 데이터시트의 형식(Type)란.</FieldGuide>
         </div>
       )}
 
@@ -1069,6 +1245,10 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
           onChange={v=>onChange("W",v)}
           basis="HAZOP 또는 API 521 시나리오 계산서 기반. 화재, 반응 폭주, 냉각 상실 등 최대 방출 시나리오 중 지배 케이스 적용. 설계 여유 없이 계산된 최대값 사용. 아래 Relief Load 시나리오를 선택하면 이 값 대신 시나리오 산정값이 사용됩니다."
         />
+        <FieldGuide kind="external">
+          외부 계산서의 수동 입력값입니다. 아래에서 시나리오별 계산값이 선택되면 이 값은 적용되지
+          않을 수 있습니다(현재 상태는 위 배지로 표시됩니다).
+        </FieldGuide>
       </div>
 
       {/* ── 2b. Relief Load — §5 시나리오 기반 W 산정 (선택) ── */}
@@ -1086,6 +1266,8 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         onExternalFireInsulationLayerAdd={onExternalFireInsulationLayerAdd}
         onExternalFireInsulationLayerRemove={onExternalFireInsulationLayerRemove}
         onExternalFireInsulationLayerFieldChange={onExternalFireInsulationLayerFieldChange}
+        fireScenarioActive={fireScenarioActive}
+        p1AbsSuggestedMPa={p1AbsSuggestedMPa}
       />
 
       {/* ── 2c. §5.11 액체부피팽창 — 독립 부가 계산(참고용, governing과 무관) ── */}
@@ -1137,7 +1319,7 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
           <div style={{marginTop:10,display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
             {[
               {key:"M",label:"분자량 M",unit:"g/mol",min:2,max:200,step:1},
-              {key:"k",label:"비열비 k",unit:"",min:1.05,max:1.7,step:0.01},
+              {key:"k",label:"비열비 k (단열재 열전도율 k와 다른 값)",unit:"",min:1.05,max:1.7,step:0.01},
             ].map(({key,label,unit,min,max,step})=>(
               <div key={key}>
                 <div style={{fontSize:10,color:T.sub,fontFamily:font.mono,marginBottom:3}}>{label}</div>
@@ -1178,7 +1360,7 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         </div>
         {typeof inputs.OP === "number" && !isNaN(inputs.OP) ? (
           <div style={{fontSize:13,fontWeight:900,color:T.navy,fontFamily:font.mono}}>
-            {(inputs.P1 * (1 + inputs.OP/100) + 1.01325).toFixed(3)} bara
+            {computeP1absBara(inputs).toFixed(3)} bara
             <span style={{fontSize:10,fontWeight:600,color:T.sub,marginLeft:8}}>
               = {inputs.P1}×(1+{inputs.OP}%) + 1.01325
             </span>
@@ -1188,6 +1370,11 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
             ⚠ 설비대장에 Overpressure(%) 미설정 — 계산 불가. 설비대장에서 값을 먼저 입력하세요.
           </div>
         )}
+        <FieldGuide kind="lookup">
+          Overpressure(%)는 이 화면에서 임의로 선택하는 값이 아니라 설비대장에 등록된 이 밸브의
+          축적압력 조건입니다. 적용 가능한 상한은 아래 축적압력 허용 정책(밸브 설치 수량·화재
+          보호 목적 여부)에 따라 결정됩니다.
+        </FieldGuide>
       </div>
 
       {/* ── ACCUMULATION-001: 축적압력 허용성 검증 — sizing과 별개 정책 ── */}
@@ -1297,6 +1484,10 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         onChange={v=>onChange("Z",v)}
         basis="실측 P-V-T 데이터 또는 상태방정식(SRK, PR 등)에서 산정. 기본값 1.00은 이상기체 가정 — 고압·저온 조건에서 실제 유체는 1.00과 벗어날 수 있으며, 벗어날수록 소요 면적 산정 오차가 커진다."
       />
+      <FieldGuide kind="expert">
+        확인: 상태방정식(SRK, PR 등) 또는 공정 시뮬레이션 결과. 주의: 모르면 1.00 임의입력 금지 —
+        슬라이더의 현재 표시값이 그대로 계산에 사용됩니다.
+      </FieldGuide>
 
       {/* ── 5. 방출계수 결정 ── */}
       <SectionHeader step="5" title="방출계수 Kd" sub="어떤 근거로 이 계수를 적용하는가"/>

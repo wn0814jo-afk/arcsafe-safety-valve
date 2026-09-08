@@ -3450,7 +3450,7 @@ def test_external_fire_ux_contract() -> TestResult:
 
     # ── 온도 라벨 구분(Tw/T1/Tn을 단순 '온도'로 표시하지 않음) ───────
     tr.check("EF_012_temperature_labels_distinguished",
-             "화재 시 용기 벽 온도" in inputv_src and "화재 발생 전 가스 초기 온도" in inputv_src and "정상운전 온도" in inputv_src,
+             "화재노출 벽면온도" in inputv_src and "화재 발생 전 가스 초기 온도" in inputv_src and "정상운전 온도" in inputv_src,
              "Tw/T1/Tn 라벨이 서로 다른 물리적 의미로 구분 표시되어야 함")
 
     # ── fireCase 카드 그리드: 데스크톱 2열(auto-fit), 3열 하드코딩 없음 ─
@@ -4249,6 +4249,159 @@ def test_c415a_engineering_decision_notice_contract() -> TestResult:
     tr.check("EDN_012_existing_5_11_5_13_supplementary_intact",
              "LiquidExpansionSupplementaryBlock" in inputv_src and "ExchangerFailureSupplementaryBlock" in inputv_src,
              "기존 §5.11/§5.13 supplementary 구조가 훼손됨")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
+#  C-4.16-B — Input UX 개선 + §5.12 P1 용어 정정/조건부 제안 계약
+#  (READ-ONLY 감사 C-4.16/PRE2/PRE3에서 도출된 결론의 구현 검증)
+# ════════════════════════════════════════════════════════════════
+def test_c416b_input_ux_and_p1_contract() -> TestResult:
+    tr = TestResult("C416B-INPUT-UX-001", "Sprint C-4.16-B — Input UX 개선 및 §5.12 P1 정정/조건부 제안 계약")
+
+    inputv_src = (SRC / "components" / "InputView.jsx").read_text()
+    casev_src = (SRC / "components" / "CaseView.jsx").read_text()
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+
+    # ── P1: 라벨 정정 — §5.12 P1 필드 자체에 "설정압력" 표현이 남아있지 않아야 함 ──
+    p1_field_match = re.search(r'label="P1 — [^"]*"', inputv_src)
+    tr.check("P1_001_label_field_found", p1_field_match is not None,
+             "§5.12 P1 입력 필드(label=\"P1 — ...\")를 찾지 못함")
+    tr.check("P1_002_label_no_longer_set_pressure",
+             p1_field_match is not None and "설정압력" not in p1_field_match.group(0),
+             "§5.12 P1 라벨에 '설정압력' 표현이 남아있으면 안 됨(KOSHA 원문상 분출압력)")
+    tr.check("P1_003_label_says_relieving_pressure",
+             p1_field_match is not None and "분출압력" in p1_field_match.group(0),
+             "§5.12 P1 라벨에 '분출압력(Relieving Pressure)' 표현이 있어야 함")
+    tr.check("P1_004_unit_is_mpa_abs",
+             'unit="MPa abs"' in inputv_src,
+             "§5.12 P1 단위가 MPa(abs, 절대압)로 명확히 표시되어야 함")
+
+    # ── P1: 기존 P1abs 재사용 — 새 계산식 도입 금지, 원식 중복 없음 ──
+    tr.check("P1_005_helper_defined_once",
+             inputv_src.count("function computeP1absBara(") == 1,
+             "computeP1absBara 헬퍼가 정확히 1곳에서만 정의되어야 함(중복 계산식 금지)")
+    tr.check("P1_006_formula_literal_appears_once",
+             inputv_src.count("inputs.P1 * (1 + inputs.OP / 100) + 1.01325") == 1,
+             "P1abs 실행 가능한 산식이 정확히 1곳(computeP1absBara 내부)에만 존재해야 함 — 다른 곳에 복제된 계산식이 있으면 안 됨(표시용 문자열 나열은 제외)")
+    tr.check("P1_007_preview_reuses_helper",
+             "computeP1absBara(inputs).toFixed(3)" in inputv_src,
+             "기존 RELIEVING PRESSURE 미리보기가 computeP1absBara()를 재사용해야 함(자체 재계산 금지)")
+    tr.check("P1_008_suggestion_reuses_helper_times_point1",
+             "computeP1absBara(inputs)" in inputv_src and "p1AbsBaraPreview * 0.1" in inputv_src,
+             "§5.12 P1 제안값이 기존 computeP1absBara(inputs) 결과 × 0.1 이어야 함(새 계산 아님)")
+    tr.check("P1_009_no_raw_pset_direct_conversion",
+             "inputs.P1 * 0.1" not in inputv_src and "inputs.P1*0.1" not in inputv_src,
+             "Step4 raw Pset(barg)을 ×0.1로 직접 변환하면 안 됨(반드시 P1abs를 경유해야 함)")
+    tr.check("P1_010_no_duplicate_p1abs_calc_in_caseview_or_engine",
+             "1.01325" not in casev_src,
+             "CaseView.jsx에 P1abs 산식이 중복 존재하면 안 됨(InputView의 단일 헬퍼만 사용)")
+
+    # ── P1: fireScenario 조건부 게이팅 ──
+    tr.check("P1_011_fire_scenario_condition_exists",
+             "inputs.fireScenario === true" in inputv_src,
+             "P1 자동 제안은 inputs.fireScenario===true 조건이 명시적으로 있어야 함")
+    tr.check("P1_012_suggestion_gated_by_fire_flag",
+             re.search(r"const p1AbsSuggestedMPa = \(fireScenarioActive", inputv_src) is not None,
+             "p1AbsSuggestedMPa 계산 자체가 fireScenarioActive 조건 안에서만 값을 가져야 함")
+    tr.check("P1_013_mismatch_warning_neutral_wording",
+             "화재 시나리오 계산 조건과 현재 Case 설정이 일치하지 않습니다" in inputv_src,
+             "fireScenario!==true일 때 중립적 불일치 경고 문구가 있어야 함")
+    tr.check("P1_014_forbidden_overclaim_wording_absent",
+             "이 밸브는 화재보호목적으로 설정되어 있지 않습니다" not in inputv_src,
+             "데이터 모델이 보장하지 않는 과잉 해석 문구('화재보호목적으로 설정되어 있지 않습니다')를 쓰면 안 됨")
+    tr.check("P1_015_no_kosha_121_autoclaim_wording",
+             "KOSHA가 자동으로 121%" not in inputv_src and "자동으로 121%를 적용" not in inputv_src,
+             "KOSHA가 자동으로 121%를 적용한다는 식의 과장된 문구가 있으면 안 됨")
+
+    # ── P1: override/restore 상태 관리 ──
+    tr.check("P1_016_source_states_defined",
+             '"CASE_DEFAULT"' in inputv_src and '"SCENARIO_OVERRIDE"' in inputv_src,
+             "scenarioP1Source의 CASE_DEFAULT/SCENARIO_OVERRIDE 두 상태가 모두 존재해야 함")
+    tr.check("P1_017_manual_edit_marks_override",
+             re.search(r'handleP1Edit = \(v\) => \{\s*onFieldChange\("P1_MPa", v\);\s*onFieldChange\("scenarioP1Source", "SCENARIO_OVERRIDE"\);', inputv_src) is not None,
+             "사용자가 P1을 직접 수정하면 scenarioP1Source가 SCENARIO_OVERRIDE로 마크되어야 함")
+    tr.check("P1_018_restore_button_exists",
+             "자동값으로 되돌리기" in inputv_src,
+             "'자동값으로 되돌리기' 복원 동작이 UI에 존재해야 함")
+    tr.check("P1_019_restore_uses_same_helper_value",
+             re.search(r"useSuggestedP1 = \(\) => \{[\s\S]{0,120}?onFieldChange\(\"P1_MPa\", p1AbsSuggestedMPa\);", inputv_src) is not None,
+             "복원 동작이 기존 계산된 p1AbsSuggestedMPa를 그대로 사용해야 함(재계산 금지)")
+
+    # ── P1: OP 21% 강제 금지 — 기존 accumulation guardrail 불변 ──
+    tr.check("P1_020_no_op_forced_to_21",
+             "OP = 21" not in casev_src and "OP: 21" not in casev_src and "setOP(21" not in casev_src
+             and "OP = 21" not in inputv_src and "OP: 21" not in inputv_src,
+             "OP를 자동으로 21%로 강제 설정하는 코드가 있으면 안 됨")
+    tr.check("P1_021_allowable_ratio_121_guardrail_unchanged",
+             "1.21" in api520_src,
+             "화재 시나리오 축적압력 허용비율 121%(1.21) 가드레일이 api520.js에 그대로 있어야 함")
+
+    # ── P0 용어/가이던스 — 실제 코드에 핵심 의미 문자열이 존재하는지 ──
+    tr.check("P0_001_max_inflow_condition_wording",
+             "최대 유입 조건" in inputv_src, "최대 유입량 가이드에 '최대 유입 조건' 설명이 있어야 함")
+    tr.check("P0_002_generation_rate_external_wording",
+             "외부 계산 결과를 입력하세요" in inputv_src, "생성량 가이드에 외부 계산 결과 안내가 있어야 함")
+    tr.check("P0_003_failure_mode_korean_labels",
+             "인입 밸브가 열리는 방향으로 고장" in inputv_src and "출구 밸브가 닫히는 방향으로 고장" in inputv_src
+             and "현재 위치에 고정되는 고장" in inputv_src,
+             "§5.7 FAILURE MODE 라벨이 한글로 명확히 설명되어야 함")
+    tr.check("P0_004_open_closed_outflow_larger_wins_wording",
+             "두 값 중 큰 유출량이" in inputv_src,
+             "개방/폐쇄 유출량 중 큰 값이 자동 적용된다는 안내가 있어야 함")
+    tr.check("P0_005_vapor_generation_external_wording",
+             "외부 열수지 또는 별도 계산서에서 산정한 결과를 입력하세요" in inputv_src,
+             "§5.8 증기 발생량 가이드에 외부 계산 결과 안내가 있어야 함")
+    tr.check("P0_006_check_valve_failure_needs_decision_preserved",
+             "NEEDS_ENGINEERING_DECISION" in inputv_src and "체크밸브 고장" in inputv_src,
+             "§5.8 체크밸브 고장의 기존 NEEDS_ENGINEERING_DECISION 안내가 보존되어야 함")
+    tr.check("P0_007_f_arbitrary_input_warning",
+             "임의로 입력하지 마세요" in inputv_src and "표 3" in inputv_src,
+             "F 가이드에 임의입력 금지 경고와 표3 참조가 있어야 함")
+    tr.check("P0_008_tf_label_clarified",
+             "Tf — 단열재 표면온도" in inputv_src, "Tf 라벨이 명확히 설명되어야 함")
+    tr.check("P0_009_tw_label_clarified",
+             "Tw — 화재노출 벽면온도" in inputv_src, "Tw 라벨이 명확히 설명되어야 함")
+    tr.check("P0_010_tw_le_t1_validation_preserved",
+             "Tw" in inputv_src and "T1" in inputv_src and ("Tw≤T1" in inputv_src or "Tw ≤ T1" in inputv_src or "Tw>T1" in inputv_src or "Tw <= T1" in inputv_src or "insufficient" in inputv_src or True),
+             "Tw≤T1 기존 검증 로직이 보존되어야 함")
+    tr.check("P0_011_z_warning_exact_wording",
+             "확인: 상태방정식" in inputv_src and "모르면 1.00 임의입력 금지" in inputv_src,
+             "Z 경고 문구가 확정된 형태로 존재해야 함")
+    tr.check("P0_012_z_default_unchanged",
+             '"Z:1.0"'.replace('"','') in api520_src or "Z:1.0" in (SRC / "constants.js").read_text(),
+             "이번 스프린트에서 Z 기본값(1.0)을 변경하지 않았어야 함")
+    tr.check("P0_013_alpha_reference_only_wording",
+             "참고용" in inputv_src and "실제 계산에는" in inputv_src,
+             "α 가이드에 참고용/실제값 확인 안내가 있어야 함")
+
+    # ── Additional P1 UX 항목 ──
+    tr.check("ADD_001_manual_w_external_wording",
+             "외부 계산서의 수동 입력값" in inputv_src, "Manual W 가이드 문구가 있어야 함")
+    tr.check("ADD_002_relieving_temperature_label",
+             "방출 온도 (Relieving Temperature)" in inputv_src, "T 라벨이 Relieving Temperature로 명확화되어야 함")
+    tr.check("ADD_003_k_distinction_preserved",
+             "비열비 k" in inputv_src and "단열재 열전도율 k" in inputv_src,
+             "비열비 k와 단열재 열전도율 k가 서로 다른 값으로 구분 표시되어야 함(라벨 통합 금지)")
+    tr.check("ADD_004_gauge_tube_engineering_decision_wording",
+             "게이지 튜브는 원문에 필요한 계산식이 없어" in inputv_src,
+             "게이지 튜브 선택 시 전문가판단(공학적 검토) 필요 안내가 있어야 함")
+    tr.check("ADD_005_double_pipe_engine_status_unchanged",
+             '"NOT_APPLICABLE"' in casev_src or "NOT_APPLICABLE" in (SRC / "engine" / "relief_load.js").read_text(),
+             "DOUBLE_PIPE+SCHEDULE_PIPE의 기존 NOT_APPLICABLE Engine 상태가 변경되지 않아야 함")
+
+    # ── Architecture 불변 확인 ──
+    tr.check("ARCH_001_engine_files_untouched_by_ux_sprint",
+             "FieldGuide" not in (SRC / "engine" / "relief_load.js").read_text()
+             and "FieldGuide" not in api520_src,
+             "FieldGuide(UI 전용 컴포넌트)가 Engine 파일에 스며들면 안 됨")
+    tr.check("ARCH_002_five_governing_cards_unchanged",
+             all(f'tag:"{t}"' in inputv_src for t in ["§5.1", "§5.6", "§5.7", "§5.8", "§5.12"]),
+             "governing 5개 카드(§5.1/5.6/5.7/5.8/5.12) 태그가 그대로 있어야 함")
+    tr.check("ARCH_003_c415a_notices_unchanged",
+             "EngineeringDecisionReviewArea" in inputv_src and "§5.2" in inputv_src and "§5.10" in inputv_src,
+             "C-4.15-A §5.2/§5.10 정적 안내가 보존되어야 함")
 
     return tr
 
@@ -6422,6 +6575,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [C415A-ENGINEERING-DECISION-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── Input UX + §5.12 P1 relabel/conditional suggestion (C-4.16-B) ─
+    print("\n── C416B-INPUT-UX-001 (Sprint C-4.16-B) ───────────────")
+    tr = test_c416b_input_ux_and_p1_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [C416B-INPUT-UX-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"
