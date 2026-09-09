@@ -300,6 +300,30 @@ function validateInputs(inp) {
 // Engine — 입력만 받고 출력만 반환. 외부 state 접근 금지.
 // reliefLoadAdapter: buildReliefSizingInput()의 반환값(선택). 전달하지
 // 않으면 기존 동작(수동 W)과 100% 동일 — 하위호환.
+// ── PRESSURE-001-SHARED: relieving pressure(절대압) 계산의 단일 책임 ──
+// api520Engine() 내부 sizing과 CaseView의 실시간 미리보기(Step4
+// RELIEVING PRESSURE 패널, §5.12 P1 자동 제안값) 양쪽 모두 이 함수
+// 하나만 사용한다 — 계산식이 두 곳에 존재하면 안 된다(C-4.16-B
+// 아키텍처 재설계). 입력은 sizing 전체가 아니라 P1/OP 두 값만
+// 필요하므로 validateInputs() 전체 게이트를 거치지 않고도 안전하게
+// 호출 가능 — relief_load.js의 §5.1/5.11/5.13 실시간 preview 함수들과
+// 동일한 "INSUFFICIENT_INPUT" 반환 패턴을 그대로 따른다.
+function computeRelievingPressureAbs({ P1, OP }) {
+  function isFiniteNum(v) { return typeof v === "number" && isFinite(v); }
+  if (!isFiniteNum(P1) || P1 <= 0 || !isFiniteNum(OP)) {
+    return {
+      status: "INSUFFICIENT_INPUT", value: null, unit: "bara",
+      inputs: { P1, OP }, formula: null, reason: "invalid_P1_or_OP",
+    };
+  }
+  const value = P1 * (1 + OP / 100) + API_CONST.ATM_PRESSURE_BAR;
+  return {
+    status: "OK", value, unit: "bara",
+    inputs: { P1, OP, Patm: API_CONST.ATM_PRESSURE_BAR },
+    formula: "P1abs = Pset×(1+OP/100) + Patm",
+  };
+}
+
 function api520Engine(inp, deviceType, inletPiping, reliefLoadAdapter) {
   const valid = validateInputs(inp);
   if (!valid.ok) return { valid: false, error: valid };
@@ -342,8 +366,13 @@ function api520Engine(inp, deviceType, inletPiping, reliefLoadAdapter) {
   // P1(입력) = 설정압력(barg, Equipment.setPressure). 이것 자체는
   // relieving pressure가 아니다. API 520 정의대로 overpressure(%)와
   // 대기압을 더해 절대압으로 환산한 뒤에만 sizing 식에 사용한다.
+  // 계산 자체는 computeRelievingPressureAbs()(위, 단일 책임)에 위임 —
+  // validateInputs()가 이미 P1/OP를 유효한 양수로 보장했으므로 여기서는
+  // 항상 status:"OK"다(INSUFFICIENT_INPUT 분기는 CaseView 실시간
+  // 미리보기 쪽에서만 실제로 발생).
   const Pset  = P1;
-  const P1abs = Pset * (1 + OP / 100) + API_CONST.ATM_PRESSURE_BAR; // bara
+  const p1AbsResult = computeRelievingPressureAbs({ P1: Pset, OP });
+  const P1abs = p1AbsResult.value;
   const P1_kPa = P1abs * 100;
 
   const C     = API_CONST.C_BASE * Math.sqrt(k * Math.pow(2/(k+1), (k+1)/(k-1)));

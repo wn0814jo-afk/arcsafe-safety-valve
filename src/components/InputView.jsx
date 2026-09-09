@@ -47,17 +47,6 @@ function ScenarioEnumToggle({ label, options, value, onChange }) {
 
 function isFiniteNum(v) { return typeof v === "number" && isFinite(v); }
 
-// ── C-4.16-B — Relieving Pressure(P1abs, bara) 미리보기 계산 ──
-// api520.js가 sizing 시 실제로 쓰는 것과 동일한 산식(P1abs = Pset×(1+OP/100)
-// +1.01325)을 그대로 재사용한다. 이 파일 안에서 기존에 이미 인라인으로
-// 중복 존재하던 표현식을 여기 하나로 추출한 것뿐이며, 새 계산식을
-// 만든 게 아니다 — Engine의 sizing 결과(Snapshot)와는 별개로 "제출 전
-// 미리보기"용이라는 기존 설계를 그대로 유지한다.
-function computeP1absBara(inputs) {
-  if (!isFiniteNum(inputs.P1) || typeof inputs.OP !== "number" || isNaN(inputs.OP)) return undefined;
-  return inputs.P1 * (1 + inputs.OP / 100) + 1.01325;
-}
-
 // ── C-4.16-B — 입력 가이드 배지 (Pattern A/B/C, 순수 표시 컴포넌트) ──
 // A/B/C/D/E 분류 자체는 화면에 노출하지 않는다(UX Rules 원칙) — 색상과
 // 문구로만 "확인 위치"와 "성격"을 전달한다. 계산/검증 로직 없음, Engine
@@ -254,8 +243,9 @@ function ExternalFireOpenPoolForm({ scenarioInput, areaLabel, onFieldChange, onF
 // C-4.16-B: P1(분출압력) 조건부 자동 제안 — fireScenarioActive(=inputs.fireScenario
 // ===true)이고 아직 사용자가 값을 넣지 않았을 때 "이 값 사용" 버튼으로만 1회
 // 채워준다(M 프리필과 동일 원칙 — 자동 동기화 아님, 조용히 덮어쓰지 않음).
-// p1AbsSuggestedMPa는 InputView 최상단에서 computeP1absBara(inputs)를 재사용해
-// 계산한 값을 그대로 전달받는다 — 이 컴포넌트는 압력 계산을 하지 않는다.
+// p1AbsSuggestedMPa는 InputView 최상단에서 CaseView가 넘겨준 p1AbsPreview
+// (Engine, api520.js:computeRelievingPressureAbs)를 MPa로 환산해 그대로
+// 전달받는다 — 이 컴포넌트도, InputView도 압력을 계산하지 않는다.
 function ExternalFireGasVaporForm({ scenarioInput, onFieldChange, onMChange, onT1MethodChange,
   fireScenarioActive, p1AbsSuggestedMPa }) {
   const t1Method = scenarioInput.t1Method;
@@ -1103,7 +1093,8 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
   onExternalFireCaseChange, onExternalFireMChange, onExternalFireFMethodChange, onExternalFireT1MethodChange,
   onExternalFireInsulationLayerAdd, onExternalFireInsulationLayerRemove, onExternalFireInsulationLayerFieldChange,
   liquidExpansionInput, liquidExpansionResult, onLiquidExpansionFieldChange,
-  exchangerFailureInput, exchangerFailureResult, onExchangerFailureFieldChange }) {
+  exchangerFailureInput, exchangerFailureResult, onExchangerFailureFieldChange,
+  p1AbsPreview }) {
   const [fluidId, setFluidId]   = useState("co2");
   const [kdId,    setKdId]      = useState("sv_std");
   const [showCustomFluid, setShowCustomFluid] = useState(false);
@@ -1162,14 +1153,16 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
 
   // C-4.16-B — §5.12 P1(분출압력) 조건부 자동 제안값. KOSHA D-18-2020 §5.12
   // 원문 확인 결과 P1은 "설정압력"이 아니라 "인입측 분출압력(MPa abs)"이므로,
-  // 이미 존재하는 P1abs(bara, computeP1absBara — 위 RELIEVING PRESSURE 미리보기와
-  // 동일 산식)를 ×0.1하여 MPa(abs)로만 환산한다. fireScenario===true인
-  // Case에서만 제안하며(그 외에는 사용자가 직접 입력), Engine에 새 계산을
-  // 추가하지 않는다 — 순수 UI 제안값이며 자동 저장하지 않는다(버튼으로만 적용).
+  // CaseView가 넘겨준 p1AbsPreview(Engine 결과, bara)를 ×0.1하여 MPa(abs)로만
+  // 환산한다. fireScenario===true인 Case에서만 제안하며(그 외에는 사용자가
+  // 직접 입력), 버튼 클릭 전까지 자동 저장하지 않는다.
+  // C-4.16-B Architecture Fix — p1AbsPreview는 CaseView가
+  // computeRelievingPressureAbs()(Engine, api520.js)를 호출해 넘겨준
+  // 결과다. InputView는 이 값을 표시/가공(MPa 환산·반올림)만 할 뿐
+  // P1abs 자체를 계산하지 않는다.
   const fireScenarioActive = inputs.fireScenario === true;
-  const p1AbsBaraPreview = computeP1absBara(inputs);
-  const p1AbsSuggestedMPa = (fireScenarioActive && isFiniteNum(p1AbsBaraPreview))
-    ? +(p1AbsBaraPreview * 0.1).toFixed(4) : undefined;
+  const p1AbsSuggestedMPa = (fireScenarioActive && p1AbsPreview && p1AbsPreview.status === "OK")
+    ? +(p1AbsPreview.value * 0.1).toFixed(4) : undefined;
 
   return (
     <div style={{padding:"0 2px"}}>
@@ -1358,11 +1351,11 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         <div style={{fontSize:9,color:T.gray,fontFamily:font.mono,marginBottom:3}}>
           RELIEVING PRESSURE (절대압) — 설비대장 Overpressure 기준 시스템 산정값
         </div>
-        {typeof inputs.OP === "number" && !isNaN(inputs.OP) ? (
+        {p1AbsPreview && p1AbsPreview.status === "OK" ? (
           <div style={{fontSize:13,fontWeight:900,color:T.navy,fontFamily:font.mono}}>
-            {computeP1absBara(inputs).toFixed(3)} bara
+            {p1AbsPreview.value.toFixed(3)} bara
             <span style={{fontSize:10,fontWeight:600,color:T.sub,marginLeft:8}}>
-              = {inputs.P1}×(1+{inputs.OP}%) + 1.01325
+              = {inputs.P1}×(1+{inputs.OP}%) + {p1AbsPreview.inputs.Patm}
             </span>
           </div>
         ) : (

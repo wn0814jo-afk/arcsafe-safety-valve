@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:1495bbc37b0a\n\n' +
+    box.textContent = '[ERROR] BUILD:a12abc44dd82\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:1495bbc37b0a\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:a12abc44dd82\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:1495bbc37b0a | 2026-09-08T23:54:05Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:a12abc44dd82 | 2026-09-09T09:09:47Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "1495bbc37b0a";
+const __BUILD_HASH__ = "a12abc44dd82";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -388,6 +388,30 @@ function validateInputs(inp) {
 // Engine — 입력만 받고 출력만 반환. 외부 state 접근 금지.
 // reliefLoadAdapter: buildReliefSizingInput()의 반환값(선택). 전달하지
 // 않으면 기존 동작(수동 W)과 100% 동일 — 하위호환.
+// ── PRESSURE-001-SHARED: relieving pressure(절대압) 계산의 단일 책임 ──
+// api520Engine() 내부 sizing과 CaseView의 실시간 미리보기(Step4
+// RELIEVING PRESSURE 패널, §5.12 P1 자동 제안값) 양쪽 모두 이 함수
+// 하나만 사용한다 — 계산식이 두 곳에 존재하면 안 된다(C-4.16-B
+// 아키텍처 재설계). 입력은 sizing 전체가 아니라 P1/OP 두 값만
+// 필요하므로 validateInputs() 전체 게이트를 거치지 않고도 안전하게
+// 호출 가능 — relief_load.js의 §5.1/5.11/5.13 실시간 preview 함수들과
+// 동일한 "INSUFFICIENT_INPUT" 반환 패턴을 그대로 따른다.
+function computeRelievingPressureAbs({ P1, OP }) {
+  function isFiniteNum(v) { return typeof v === "number" && isFinite(v); }
+  if (!isFiniteNum(P1) || P1 <= 0 || !isFiniteNum(OP)) {
+    return {
+      status: "INSUFFICIENT_INPUT", value: null, unit: "bara",
+      inputs: { P1, OP }, formula: null, reason: "invalid_P1_or_OP",
+    };
+  }
+  const value = P1 * (1 + OP / 100) + API_CONST.ATM_PRESSURE_BAR;
+  return {
+    status: "OK", value, unit: "bara",
+    inputs: { P1, OP, Patm: API_CONST.ATM_PRESSURE_BAR },
+    formula: "P1abs = Pset×(1+OP/100) + Patm",
+  };
+}
+
 function api520Engine(inp, deviceType, inletPiping, reliefLoadAdapter) {
   const valid = validateInputs(inp);
   if (!valid.ok) return { valid: false, error: valid };
@@ -430,8 +454,13 @@ function api520Engine(inp, deviceType, inletPiping, reliefLoadAdapter) {
   // P1(입력) = 설정압력(barg, Equipment.setPressure). 이것 자체는
   // relieving pressure가 아니다. API 520 정의대로 overpressure(%)와
   // 대기압을 더해 절대압으로 환산한 뒤에만 sizing 식에 사용한다.
+  // 계산 자체는 computeRelievingPressureAbs()(위, 단일 책임)에 위임 —
+  // validateInputs()가 이미 P1/OP를 유효한 양수로 보장했으므로 여기서는
+  // 항상 status:"OK"다(INSUFFICIENT_INPUT 분기는 CaseView 실시간
+  // 미리보기 쪽에서만 실제로 발생).
   const Pset  = P1;
-  const P1abs = Pset * (1 + OP / 100) + API_CONST.ATM_PRESSURE_BAR; // bara
+  const p1AbsResult = computeRelievingPressureAbs({ P1: Pset, OP });
+  const P1abs = p1AbsResult.value;
   const P1_kPa = P1abs * 100;
 
   const C     = API_CONST.C_BASE * Math.sqrt(k * Math.pow(2/(k+1), (k+1)/(k-1)));
@@ -3743,17 +3772,6 @@ function ScenarioEnumToggle({ label, options, value, onChange }) {
 
 function isFiniteNum(v) { return typeof v === "number" && isFinite(v); }
 
-// ── C-4.16-B — Relieving Pressure(P1abs, bara) 미리보기 계산 ──
-// api520.js가 sizing 시 실제로 쓰는 것과 동일한 산식(P1abs = Pset×(1+OP/100)
-// +1.01325)을 그대로 재사용한다. 이 파일 안에서 기존에 이미 인라인으로
-// 중복 존재하던 표현식을 여기 하나로 추출한 것뿐이며, 새 계산식을
-// 만든 게 아니다 — Engine의 sizing 결과(Snapshot)와는 별개로 "제출 전
-// 미리보기"용이라는 기존 설계를 그대로 유지한다.
-function computeP1absBara(inputs) {
-  if (!isFiniteNum(inputs.P1) || typeof inputs.OP !== "number" || isNaN(inputs.OP)) return undefined;
-  return inputs.P1 * (1 + inputs.OP / 100) + 1.01325;
-}
-
 // ── C-4.16-B — 입력 가이드 배지 (Pattern A/B/C, 순수 표시 컴포넌트) ──
 // A/B/C/D/E 분류 자체는 화면에 노출하지 않는다(UX Rules 원칙) — 색상과
 // 문구로만 "확인 위치"와 "성격"을 전달한다. 계산/검증 로직 없음, Engine
@@ -3950,8 +3968,9 @@ function ExternalFireOpenPoolForm({ scenarioInput, areaLabel, onFieldChange, onF
 // C-4.16-B: P1(분출압력) 조건부 자동 제안 — fireScenarioActive(=inputs.fireScenario
 // ===true)이고 아직 사용자가 값을 넣지 않았을 때 "이 값 사용" 버튼으로만 1회
 // 채워준다(M 프리필과 동일 원칙 — 자동 동기화 아님, 조용히 덮어쓰지 않음).
-// p1AbsSuggestedMPa는 InputView 최상단에서 computeP1absBara(inputs)를 재사용해
-// 계산한 값을 그대로 전달받는다 — 이 컴포넌트는 압력 계산을 하지 않는다.
+// p1AbsSuggestedMPa는 InputView 최상단에서 CaseView가 넘겨준 p1AbsPreview
+// (Engine, api520.js:computeRelievingPressureAbs)를 MPa로 환산해 그대로
+// 전달받는다 — 이 컴포넌트도, InputView도 압력을 계산하지 않는다.
 function ExternalFireGasVaporForm({ scenarioInput, onFieldChange, onMChange, onT1MethodChange,
   fireScenarioActive, p1AbsSuggestedMPa }) {
   const t1Method = scenarioInput.t1Method;
@@ -4799,7 +4818,8 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
   onExternalFireCaseChange, onExternalFireMChange, onExternalFireFMethodChange, onExternalFireT1MethodChange,
   onExternalFireInsulationLayerAdd, onExternalFireInsulationLayerRemove, onExternalFireInsulationLayerFieldChange,
   liquidExpansionInput, liquidExpansionResult, onLiquidExpansionFieldChange,
-  exchangerFailureInput, exchangerFailureResult, onExchangerFailureFieldChange }) {
+  exchangerFailureInput, exchangerFailureResult, onExchangerFailureFieldChange,
+  p1AbsPreview }) {
   const [fluidId, setFluidId]   = useState("co2");
   const [kdId,    setKdId]      = useState("sv_std");
   const [showCustomFluid, setShowCustomFluid] = useState(false);
@@ -4858,14 +4878,16 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
 
   // C-4.16-B — §5.12 P1(분출압력) 조건부 자동 제안값. KOSHA D-18-2020 §5.12
   // 원문 확인 결과 P1은 "설정압력"이 아니라 "인입측 분출압력(MPa abs)"이므로,
-  // 이미 존재하는 P1abs(bara, computeP1absBara — 위 RELIEVING PRESSURE 미리보기와
-  // 동일 산식)를 ×0.1하여 MPa(abs)로만 환산한다. fireScenario===true인
-  // Case에서만 제안하며(그 외에는 사용자가 직접 입력), Engine에 새 계산을
-  // 추가하지 않는다 — 순수 UI 제안값이며 자동 저장하지 않는다(버튼으로만 적용).
+  // CaseView가 넘겨준 p1AbsPreview(Engine 결과, bara)를 ×0.1하여 MPa(abs)로만
+  // 환산한다. fireScenario===true인 Case에서만 제안하며(그 외에는 사용자가
+  // 직접 입력), 버튼 클릭 전까지 자동 저장하지 않는다.
+  // C-4.16-B Architecture Fix — p1AbsPreview는 CaseView가
+  // computeRelievingPressureAbs()(Engine, api520.js)를 호출해 넘겨준
+  // 결과다. InputView는 이 값을 표시/가공(MPa 환산·반올림)만 할 뿐
+  // P1abs 자체를 계산하지 않는다.
   const fireScenarioActive = inputs.fireScenario === true;
-  const p1AbsBaraPreview = computeP1absBara(inputs);
-  const p1AbsSuggestedMPa = (fireScenarioActive && isFiniteNum(p1AbsBaraPreview))
-    ? +(p1AbsBaraPreview * 0.1).toFixed(4) : undefined;
+  const p1AbsSuggestedMPa = (fireScenarioActive && p1AbsPreview && p1AbsPreview.status === "OK")
+    ? +(p1AbsPreview.value * 0.1).toFixed(4) : undefined;
 
   return (
     <div style={{padding:"0 2px"}}>
@@ -5054,11 +5076,11 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         <div style={{fontSize:9,color:T.gray,fontFamily:font.mono,marginBottom:3}}>
           RELIEVING PRESSURE (절대압) — 설비대장 Overpressure 기준 시스템 산정값
         </div>
-        {typeof inputs.OP === "number" && !isNaN(inputs.OP) ? (
+        {p1AbsPreview && p1AbsPreview.status === "OK" ? (
           <div style={{fontSize:13,fontWeight:900,color:T.navy,fontFamily:font.mono}}>
-            {computeP1absBara(inputs).toFixed(3)} bara
+            {p1AbsPreview.value.toFixed(3)} bara
             <span style={{fontSize:10,fontWeight:600,color:T.sub,marginLeft:8}}>
-              = {inputs.P1}×(1+{inputs.OP}%) + 1.01325
+              = {inputs.P1}×(1+{inputs.OP}%) + {p1AbsPreview.inputs.Patm}
             </span>
           </div>
         ) : (
@@ -7283,6 +7305,16 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   // 분리, Engine 직접 호출) ──
   const exchangerFailureResult = calculateExchangerFailureScenario(exchangerFailureInput);
 
+  // ── C-4.16-B Architecture Fix — P1abs(relieving pressure, 절대압)
+  // 미리보기. api520Engine() 전체(sizing, validateInputs 게이트)를
+  // 매 렌더 다시 돌리는 게 아니라, computeRelievingPressureAbs()라는
+  // 좁은 순수 함수만 §5.11/§5.13과 동일한 방식으로 직접 호출한다.
+  // Step4 RELIEVING PRESSURE 패널과 §5.12 P1 자동 제안값 양쪽 모두
+  // 이 하나의 값(p1AbsPreview)만 사용한다 — Engine이 유일한 계산
+  // 책임을 갖고, InputView는 표시만 한다. Snapshot/handleCalculate와
+  // 무관하며 저장하지 않는다.
+  const p1AbsPreview = computeRelievingPressureAbs({ P1: inputs.P1, OP: inputs.OP });
+
   // ── C-4.12 REV2 — MASS_FLOW 계열 판별 ──
   // classifyReliefLoadQuantity/RELIEF_LOAD_QUANTITY는 relief_load.js
   // (Engine)의 기존 순수 함수/상수를 그대로 참조만 한다. RELIEF_LOAD_
@@ -7716,6 +7748,7 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
           exchangerFailureInput={exchangerFailureInput}
           exchangerFailureResult={exchangerFailureResult}
           onExchangerFailureFieldChange={handleExchangerFailureFieldChange}
+          p1AbsPreview={p1AbsPreview}
         />
       )}
 

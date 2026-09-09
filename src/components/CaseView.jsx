@@ -243,6 +243,16 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   // 분리, Engine 직접 호출) ──
   const exchangerFailureResult = calculateExchangerFailureScenario(exchangerFailureInput);
 
+  // ── C-4.16-B Architecture Fix — P1abs(relieving pressure, 절대압)
+  // 미리보기. api520Engine() 전체(sizing, validateInputs 게이트)를
+  // 매 렌더 다시 돌리는 게 아니라, computeRelievingPressureAbs()라는
+  // 좁은 순수 함수만 §5.11/§5.13과 동일한 방식으로 직접 호출한다.
+  // Step4 RELIEVING PRESSURE 패널과 §5.12 P1 자동 제안값 양쪽 모두
+  // 이 하나의 값(p1AbsPreview)만 사용한다 — Engine이 유일한 계산
+  // 책임을 갖고, InputView는 표시만 한다. Snapshot/handleCalculate와
+  // 무관하며 저장하지 않는다.
+  const p1AbsPreview = computeRelievingPressureAbs({ P1: inputs.P1, OP: inputs.OP });
+
   // ── C-4.12 REV2 — MASS_FLOW 계열 판별 ──
   // classifyReliefLoadQuantity/RELIEF_LOAD_QUANTITY는 relief_load.js
   // (Engine)의 기존 순수 함수/상수를 그대로 참조만 한다. RELIEF_LOAD_
@@ -676,6 +686,7 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
           exchangerFailureInput={exchangerFailureInput}
           exchangerFailureResult={exchangerFailureResult}
           onExchangerFailureFieldChange={handleExchangerFailureFieldChange}
+          p1AbsPreview={p1AbsPreview}
         />
       )}
 

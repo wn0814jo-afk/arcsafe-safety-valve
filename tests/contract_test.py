@@ -4278,25 +4278,50 @@ def test_c416b_input_ux_and_p1_contract() -> TestResult:
              'unit="MPa abs"' in inputv_src,
              "§5.12 P1 단위가 MPa(abs, 절대압)로 명확히 표시되어야 함")
 
-    # ── P1: 기존 P1abs 재사용 — 새 계산식 도입 금지, 원식 중복 없음 ──
-    tr.check("P1_005_helper_defined_once",
-             inputv_src.count("function computeP1absBara(") == 1,
-             "computeP1absBara 헬퍼가 정확히 1곳에서만 정의되어야 함(중복 계산식 금지)")
-    tr.check("P1_006_formula_literal_appears_once",
-             inputv_src.count("inputs.P1 * (1 + inputs.OP / 100) + 1.01325") == 1,
-             "P1abs 실행 가능한 산식이 정확히 1곳(computeP1absBara 내부)에만 존재해야 함 — 다른 곳에 복제된 계산식이 있으면 안 됨(표시용 문자열 나열은 제외)")
-    tr.check("P1_007_preview_reuses_helper",
-             "computeP1absBara(inputs).toFixed(3)" in inputv_src,
-             "기존 RELIEVING PRESSURE 미리보기가 computeP1absBara()를 재사용해야 함(자체 재계산 금지)")
-    tr.check("P1_008_suggestion_reuses_helper_times_point1",
-             "computeP1absBara(inputs)" in inputv_src and "p1AbsBaraPreview * 0.1" in inputv_src,
-             "§5.12 P1 제안값이 기존 computeP1absBara(inputs) 결과 × 0.1 이어야 함(새 계산 아님)")
+    # ── P1abs 계산 책임 단일화(Architecture Fix) — Engine 영역에만 존재 ──
+    reliefload_src = (SRC / "engine" / "relief_load.js").read_text()
+    tr.check("P1_005_engine_function_defined_once",
+             api520_src.count("function computeRelievingPressureAbs(") == 1,
+             "computeRelievingPressureAbs()가 api520.js(Engine)에 정확히 1곳 정의되어야 함")
+    tr.check("P1_005b_engine_function_not_in_ui_files",
+             "function computeRelievingPressureAbs(" not in inputv_src
+             and "function computeRelievingPressureAbs(" not in casev_src,
+             "computeRelievingPressureAbs()가 InputView.jsx/CaseView.jsx에 재정의되어 있으면 안 됨(Engine에만 존재)")
+    tr.check("P1_006_formula_literal_only_in_engine",
+             api520_src.count("P1 * (1 + OP / 100) + API_CONST.ATM_PRESSURE_BAR") == 1
+             and "1.01325" not in inputv_src and "1.01325" not in casev_src,
+             "P1abs 실행 가능한 산식과 대기압 상수(1.01325)가 Engine(api520.js) 바깥(InputView/CaseView)에 존재하면 안 됨")
+    tr.check("P1_006b_no_computeP1absBara_leftover",
+             "computeP1absBara" not in inputv_src and "computeP1absBara" not in casev_src,
+             "구 UI측 계산 함수 computeP1absBara()의 흔적(정의/호출/주석 언급)이 완전히 제거되어야 함")
+    tr.check("P1_007_engine_internal_sizing_uses_shared_function",
+             re.search(r"const p1AbsResult = computeRelievingPressureAbs\(\{\s*P1:\s*Pset,\s*OP\s*\}\);\s*\n\s*const P1abs = p1AbsResult\.value;", api520_src) is not None,
+             "api520Engine() 내부 sizing도 새 공유 함수를 호출해야 함(두 번째 독립 구현이면 안 됨)")
+    tr.check("P1_008_caseview_calls_engine_function_live",
+             re.search(r"const p1AbsPreview = computeRelievingPressureAbs\(\{\s*P1:\s*inputs\.P1,\s*OP:\s*inputs\.OP\s*\}\);", casev_src) is not None,
+             "CaseView가 §5.1/5.11/5.13과 동일한 방식으로 computeRelievingPressureAbs()를 실시간 호출해야 함")
+    tr.check("P1_008b_caseview_does_not_call_full_engine_for_preview",
+             "api520Engine(inputs" not in casev_src.split("const p1AbsPreview")[0][-400:] if "const p1AbsPreview" in casev_src else False,
+             "P1 미리보기를 위해 api520Engine() 전체를 호출하면 안 됨(좁은 함수만 호출)")
     tr.check("P1_009_no_raw_pset_direct_conversion",
              "inputs.P1 * 0.1" not in inputv_src and "inputs.P1*0.1" not in inputv_src,
-             "Step4 raw Pset(barg)을 ×0.1로 직접 변환하면 안 됨(반드시 P1abs를 경유해야 함)")
-    tr.check("P1_010_no_duplicate_p1abs_calc_in_caseview_or_engine",
-             "1.01325" not in casev_src,
-             "CaseView.jsx에 P1abs 산식이 중복 존재하면 안 됨(InputView의 단일 헬퍼만 사용)")
+             "Step4 raw Pset(barg)을 ×0.1로 직접 변환하면 안 됨(반드시 Engine의 p1AbsPreview를 경유해야 함)")
+    tr.check("P1_010_inputview_receives_prop_not_inputs_alone",
+             "p1AbsPreview" in inputv_src and "p1AbsPreview}" in casev_src,
+             "InputView는 CaseView로부터 p1AbsPreview prop을 전달받아야 하고, CaseView는 이를 InputView에 배선해야 함")
+    tr.check("P1_010b_both_paths_use_same_prop",
+             inputv_src.count("p1AbsPreview") >= 2,
+             "기존 RELIEVING PRESSURE 미리보기와 §5.12 제안값이 동일한 p1AbsPreview 값을 사용해야 함(두 개의 값이 아님)")
+    tr.check("P1_010c_insufficient_input_handled_like_precedent",
+             '"INSUFFICIENT_INPUT"' in api520_src,
+             "입력 부족 시 relief_load.js의 §5.1/5.11/5.13과 동일한 INSUFFICIENT_INPUT 패턴을 반환해야 함")
+    tr.check("P1_010d_api520_engine_signature_unchanged",
+             "function api520Engine(inp, deviceType, inletPiping, reliefLoadAdapter)" in api520_src,
+             "api520Engine()의 기존 시그니처가 변경되면 안 됨")
+    tr.check("P1_010e_api520_engine_return_shape_unchanged",
+             "return { valid: true, areaCm2, selected, margin, C, P1abs, backPressureRatio, checklist, dataGaps, verdict, stepData, trace };" in api520_src,
+             "api520Engine()의 기존 반환 구조가 변경되면 안 됨")
+
 
     # ── P1: fireScenario 조건부 게이팅 ──
     tr.check("P1_011_fire_scenario_condition_exists",
