@@ -73,7 +73,16 @@
 //   연결하며 계약이 실질적으로 바뀔 경우)에 버전 상향 여부를 다시
 //   판단한다 — RELIEF-SIZING-ADAPTER-001의 ENGINE_VERSION_DECISION
 //   테스트로 이 판단 자체를 명시 고정.
-const ENGINE_VERSION = "1.6.0";
+// ENGINE_VERSION 2.0.0 — RELIEF-LOAD-NORMATIVE-BASIS-002 (C-4.21)
+//  §5.11의 canonical basis를 D-18-2020 §5.11(2)에서 C-C-13-2026 §6.1로
+//  교체(V[m3/h,SG 필요] → W[kg/h,SG 불필요]). MAJOR bump 사유: 단순
+//  계산식 교체가 아니라 §5.11이 처음으로 governing 후보(selectGoverning
+//  ReliefLoad 유효 대상)에 편입되어, 이 옵션을 쓰는 실제 Case의 sizing
+//  결과가 달라질 수 있는 변경이다(governing 후보군 자체의 변경).
+//  ENGINE-VERSION-LOCK-001에 의해 기존 Snapshot은 이 버전 변경과
+//  무관하게 그대로 보존되며 자동 재계산되지 않는다 — 새 Report는
+//  새 Snapshot(이 버전으로 재계산)부터만 생성 가능하다.
+const ENGINE_VERSION = "2.0.0";
 
 // ── TRACE-SCHEMA-001: Calculation Trace 스키마 고정 ────────────
 // Trace는 단순 로그가 아니라 감사 증거(Report Evidence)다. 각 항목은
@@ -343,7 +352,14 @@ function api520Engine(inp, deviceType, inletPiping, reliefLoadAdapter) {
   const { W: manualW, P1, P2, T, M, k, Kd, Kb, mawp, OP, Z } = Object.fromEntries(
     Object.entries(inp).map(([key, v]) => [key, Number(v)])
   );
-  const wSource = hasReliefLoadAdapter ? "GOVERNING_RELIEF_LOAD" : "MANUAL_INPUT";
+  // C-4.21 — reliefLoadAdapter가 어느 W 소스(governing 5개 시나리오 vs
+  // §5.11 열팽창용 안전밸브)에서 왔는지 CaseView가 adapter에 실어보내는
+  // sourceLabel을 그대로 신뢰한다. 하위호환: sourceLabel이 없는 호출부
+  // (구버전 UI/테스트 fixture)는 기존 그대로 "GOVERNING_RELIEF_LOAD"로
+  // fallback한다 — 3-way 이전 소비처를 깨지 않는다.
+  const wSource = hasReliefLoadAdapter
+    ? (reliefLoadAdapter.sourceLabel || "GOVERNING_RELIEF_LOAD")
+    : "MANUAL_INPUT";
   const W = hasReliefLoadAdapter ? reliefLoadAdapter.W : manualW;
   // VALVE-TYPE-001: valveType은 문자열 Case 입력 — 위 숫자 변환 대상에서 제외.
   const valveType = String(inp.valveType || "SPRING").toUpperCase();
@@ -432,7 +448,9 @@ function api520Engine(inp, deviceType, inletPiping, reliefLoadAdapter) {
     { step: "COMPRESSIBILITY_Z", value: Z, unit: "",
       formula: Z === 1.0 ? "User Input (default 1.00)" : "User Input", inputs: { Z } },
     { step: "RELIEF_LOAD_W_SOURCE", value: W, unit: "kg/h",
-      formula: wSource === "GOVERNING_RELIEF_LOAD"
+      formula: wSource === "LIQUID_THERMAL_EXPANSION"
+        ? "W = buildReliefSizingInput(selector 결과: §5.11 열팽창용 안전밸브, KOSHA C-C-13-2026 §6.1).W — 수동 입력 미사용"
+        : hasReliefLoadAdapter
         ? "W = buildReliefSizingInput(selector 결과: §5 scenarios → governing MASS_FLOW).W — 수동 입력 미사용"
         : "W = User Input (Case.W) — §5 관련 scenario 미연결",
       inputs: {

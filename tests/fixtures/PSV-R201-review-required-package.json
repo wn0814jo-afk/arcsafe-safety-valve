@@ -2,12 +2,12 @@
   "meta": {
     "packageVersion": "1.0.0",
     "generatedAt": "2026-07-10T10:05:00.000Z",
-    "engineVersion": "1.6.0"
+    "engineVersion": "2.0.0"
   },
   "identity": {
     "caseId": "C-2026-001",
-    "snapshotId": "SNAP-C-2026-001-1786573757720",
-    "snapshotHash": "5bb0fb8b"
+    "snapshotId": "SNAP-C-2026-001-1789228302412",
+    "snapshotHash": "4dfb8383"
   },
   "asset": {
     "equipment": {
@@ -35,7 +35,7 @@
     "assetFingerprint": "ceb2da2b"
   },
   "calculation": {
-    "engineVersion": "1.6.0",
+    "engineVersion": "2.0.0",
     "inputs": {
       "W": 2500,
       "P1": 5.5,
@@ -131,6 +131,12 @@
           "pressureLossRatio": 0.004218181818181818,
           "pressureLossOK": true,
           "source": "KOSHA GUIDE D-18-2020 §7.2(1)"
+        },
+        "reliefLoadSource": {
+          "source": "MANUAL_INPUT",
+          "manualW": 2500,
+          "governingW": null,
+          "governingScenarioId": null
         }
       },
       "trace": [
@@ -141,6 +147,18 @@
           "formula": "User Input (default 1.00)",
           "inputs": {
             "Z": 1
+          }
+        },
+        {
+          "step": "RELIEF_LOAD_W_SOURCE",
+          "value": 2500,
+          "unit": "kg/h",
+          "formula": "W = User Input (Case.W) — §5 관련 scenario 미연결",
+          "inputs": {
+            "source": "MANUAL_INPUT",
+            "manualW": 2500,
+            "governingW": null,
+            "governingScenarioId": null
           }
         },
         {
@@ -286,14 +304,14 @@
           "unit": "barg"
         }
       ],
-      "evaluatedAt": "2026-08-12T22:29:17.720Z",
-      "engineVersion": "1.6.0"
+      "evaluatedAt": "2026-09-12T15:51:42.412Z",
+      "engineVersion": "2.0.0"
     }
   },
   "approvals": [],
   "_fixtureMeta": {
-    "engineVersion": "1.6.0",
-    "buildHash": "af2c7099fd39",
+    "engineVersion": "2.0.0",
+    "buildHash": "b30e6eaf397c",
     "generatedAt": "2026-07-10T10:05:00.000Z",
     "fixtureName": "PSV-R201-review-required"
   }

@@ -563,42 +563,37 @@ function LiquidExpansionInputForm({ value, onFieldChange }) {
       <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginBottom:10,lineHeight:1.6,
         background:T.bg,borderRadius:8,padding:"8px 10px",border:`1px solid ${T.border}`}}>
         배관/열교환기 안에 액체가 갇힌 상태에서 외부 열원(태양열, 인접 고온 배관 등)에 의해
-        액체가 팽창하며 압력이 상승하는 상황을 산정합니다. 유입 열량(Q) 산정 방법은
-        열팽창용 안전밸브 기술지침(KOSHA D-31)을 참고하세요.
+        액체가 팽창하며 압력이 상승하는 상황을 산정합니다(소요분출량 W, kg/h). 유입 열량(QF)
+        산정 방법은 열팽창용 안전밸브에 관한 기술지원규정(KOSHA C-C-13-2026)을 참고하세요.
       </div>
-      <ScenarioNumberField label="액체 열팽창계수 α (Volumetric Expansion Coefficient)" unit="1/°C"
+      <ScenarioNumberField label="열팽창 부피계수 β (Volumetric Expansion Coefficient)" unit="1/°C"
         value={value.alpha_per_degC} onChange={v=>onFieldChange("alpha_per_degC",v)}/>
       <FieldGuide kind="expert">
         물성표 또는 적용 기준에서 확인합니다. 참고용 대표값이 있더라도 실제 계산에는 해당
         물질·온도조건의 값을 확인하세요 — 임의 추정값을 넣지 마세요.
       </FieldGuide>
-      <ScenarioNumberField label="유입 열량 Q (Heat Input Rate)" unit="kcal/hr"
+      <ScenarioNumberField label="유입 열량 QF (Heat Input Rate)" unit="kcal/hr"
         value={value.Q_kcal_per_hr} onChange={v=>onFieldChange("Q_kcal_per_hr",v)}/>
       <FieldGuide kind="external">
-        태양복사 또는 인접 설비의 열전달 등을 고려한 별도 계산 결과를 입력하세요(KOSHA D-31 참고).
+        태양복사 또는 인접 설비의 열전달 등을 고려한 별도 계산 결과를 입력하세요(KOSHA C-C-13-2026 §6.2 참고).
       </FieldGuide>
-      <ScenarioNumberField label="비중 SG (Specific Gravity)" unit="-"
-        value={value.SG} onChange={v=>onFieldChange("SG",v)}/>
-      <ScenarioNumberField label="비열 Cp (Specific Heat)" unit="kcal/kg·°C"
+      <ScenarioNumberField label="비열 S (Specific Heat)" unit="kcal/kg·°C"
         value={value.Cp_kcal_per_kgC} onChange={v=>onFieldChange("Cp_kcal_per_kgC",v)}/>
     </div>
   );
 }
 
 // ── C-4.13 — COMPUTABLE quantity별 표시 메타(필드명/라벨/안내문) ──
-// §5.11(m3/h)과 §5.13(m2)은 Engine 결과 필드명 자체가 다르다
-// (result.value vs result.requiredOrificeArea_m2) — 이 테이블이 그
-// 매핑의 단일 진실 소스다. 새 VOLUME_FLOW/AREA 계열 시나리오가 추가될
-// 때는 반드시 여기에 항목을 등록해야 ReliefLoadScenarioResultPanel이
-// 렌더링한다(등록 안 하면 안전하게 아무것도 안 보임 — 암묵적 추정 금지).
+// §5.13(m2)은 Engine 결과 필드명 자체가 다르다(result.requiredOrificeArea_m2)
+// — 이 테이블이 그 매핑의 단일 진실 소스다. 새 VOLUME_FLOW/AREA 계열
+// 시나리오가 추가될 때는 반드시 여기에 항목을 등록해야
+// ReliefLoadScenarioResultPanel이 렌더링한다(등록 안 하면 안전하게
+// 아무것도 안 보임 — 암묵적 추정 금지).
+// [C-4.21] §5.11은 C-C-13-2026 채택으로 kg/h(MASS_FLOW, status:"OK",
+// result.W)가 되어 이 테이블에서 빠졌다 — 다른 MASS_FLOW 시나리오와
+// 동일한 일반 렌더링 경로(ReliefLoadScenarioResultPanel의 status:"OK"
+// 분기)를 그대로 탄다.
 const QUANTITY_DISPLAY_META = {
-  "m3/h": {
-    valueField: "value",
-    displayUnit: "m³/h",
-    resultLabel: "액체부피팽창률",
-    nonGoverningNotice: "⚠ 이 계산값은 최종 PSV sizing에 자동 반영되지 않습니다 — 부피유량(m³/h)은 소요분출량(kg/h) 산정에 " +
-      "직접 합산되지 않으며, 위의 설계 방출량(Manual W)이 그대로 사양 결정에 사용됩니다.",
-  },
   "m2": {
     valueField: "requiredOrificeArea_m2",
     displayUnit: "m²",
@@ -656,9 +651,9 @@ function ReliefLoadScenarioResultPanel({ result, adapter }) {
     );
   }
   // C-4.13 — result.status만 보고 quantity(unit)로 표시 필드/문구를
-  // 분기하는 범용 렌더러. §5.11(m3/h, result.value)과 §5.13(m2,
-  // result.requiredOrificeArea_m2)은 Engine 결과 필드명 자체가 다르므로
-  // "result.value 하나만 있다"고 가정하지 않는다 — QUANTITY_DISPLAY_META
+  // 분기하는 범용 렌더러. §5.13(m2, result.requiredOrificeArea_m2)은
+  // Engine 결과 필드명 자체가 다르므로 "result.W 하나만 있다"고
+  // 가정하지 않는다 — QUANTITY_DISPLAY_META
   // 테이블에 필드/라벨/안내문을 unit별로 명시하고, 인식하지 못하는
   // unit은 안전하게 아무것도 렌더링하지 않는다(암묵적 추정 금지 원칙).
   if (result.status === "COMPUTABLE") {
@@ -1089,6 +1084,7 @@ const RELIEF_LOAD_BASIS_LABEL = {
 
 function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dischargeSystem, equipment,
   reliefLoadScenarioType, reliefLoadScenarioInput, reliefLoadScenarioResult, reliefLoadAdapter, reliefLoadBlocking,
+  wInputSource, onWInputSourceChange, liquidExpansionAdapter, liquidExpansionBlocking,
   effectiveW, effectiveWSource, onReliefLoadScenarioTypeChange, onReliefLoadScenarioInputChange,
   onExternalFireCaseChange, onExternalFireMChange, onExternalFireFMethodChange, onExternalFireT1MethodChange,
   onExternalFireInsulationLayerAdd, onExternalFireInsulationLayerRemove, onExternalFireInsulationLayerFieldChange,
@@ -1216,6 +1212,33 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
 
       {/* ── 2. 방출 시나리오 ── */}
       <SectionHeader step="2" title="방출 시나리오" sub="어떤 상황에서 밸브가 열리는가 — API 521 시나리오"/>
+
+      {/* ── C-4.21 — W 산정 근거 3-way 선택 (RELIEF-LOAD-W-SOURCE-001) ──
+          "6개 시나리오 중 하나"가 아니라 "이 W를 무엇으로 결정할지"를
+          고르는 상위 선택이다. §5.11(열팽창용 안전밸브, C-C-13-2026)은
+          기존 5개 PSV 과압 시나리오(§5.1/5.6/5.7/5.8/5.12, D-18-2020)와
+          같은 밸브의 배타적 대안이 아니라 원문상 별개 종류의 안전밸브를
+          다루므로(C-4.20/C-4.21-A 조사 결론) 아래 5개 라디오 그룹에
+          6번째로 넣지 않는다. */}
+      <div style={{display:"flex",gap:6,marginBottom:10}}>
+        {[
+          ["MANUAL", "수동 입력 W"],
+          ["GOVERNING_SCENARIO", "PSV 과압 시나리오(§5.1~5.12)"],
+          ["LIQUID_THERMAL_EXPANSION", "열팽창용 안전밸브(§5.11, C-C-13-2026)"],
+        ].map(([key,label]) => (
+          <button key={key} type="button" onClick={()=>onWInputSourceChange(key)}
+            style={{flex:1,padding:"8px 6px",borderRadius:8,fontSize:10,fontFamily:font.sans,fontWeight:700,cursor:"pointer",
+              border:`1px solid ${wInputSource===key ? T.navy : T.border}`,
+              background: wInputSource===key ? T.navy : "#FFFFFF",
+              color: wInputSource===key ? T.white : T.sub}}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <FieldGuide kind="lookup">
+        이 Case의 W(배출용량)를 어디서 가져올지 고릅니다. 세 가지는 상호배타이며, 선택을 바꿔도
+        아래 입력값들은 지워지지 않습니다 — 다시 전환하면 이전에 입력한 값이 그대로 남아있습니다.
+      </FieldGuide>
       <div style={{position:"relative"}}>
         {/* C-4.12: 이 배지는 "Manual W가 실제로 sizing에 쓰이는가"를
             그대로 보여준다 — effectiveWSource는 하단 "사양 결정 요약"의
@@ -1227,10 +1250,10 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
             하면 사실과 다르다. */}
         <div style={{position:"absolute",top:-6,right:0,zIndex:1,fontSize:9,padding:"2px 8px",borderRadius:6,
           fontFamily:font.mono,fontWeight:700,
-          background: effectiveWSource==="GOVERNING_RELIEF_LOAD" ? T.orangeBg : T.greenBg,
-          color: effectiveWSource==="GOVERNING_RELIEF_LOAD" ? "#946200" : T.greenDk,
-          border:`1px solid ${effectiveWSource==="GOVERNING_RELIEF_LOAD" ? T.orange : T.green}`}}>
-          {effectiveWSource==="GOVERNING_RELIEF_LOAD" ? "참고용 — 미사용" : "MANUAL INPUT 사용 중"}
+          background: effectiveWSource!=="MANUAL_INPUT" ? T.orangeBg : T.greenBg,
+          color: effectiveWSource!=="MANUAL_INPUT" ? "#946200" : T.greenDk,
+          border:`1px solid ${effectiveWSource!=="MANUAL_INPUT" ? T.orange : T.green}`}}>
+          {effectiveWSource!=="MANUAL_INPUT" ? "참고용 — 미사용" : "MANUAL INPUT 사용 중"}
         </div>
         <DecisionSlider
           param="W" label="설계 방출량 (Manual)" unit="kg/h"
@@ -1263,12 +1286,25 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         p1AbsSuggestedMPa={p1AbsSuggestedMPa}
       />
 
-      {/* ── 2c. §5.11 액체부피팽창 — 독립 부가 계산(참고용, governing과 무관) ── */}
-      <LiquidExpansionSupplementaryBlock
-        value={liquidExpansionInput}
-        onFieldChange={onLiquidExpansionFieldChange}
-        result={liquidExpansionResult}
-      />
+      {/* ── 2c. §5.11 열팽창용 안전밸브(C-C-13-2026) — 독립 입력, wInputSource가
+          LIQUID_THERMAL_EXPANSION일 때만 실제 sizing에 반영됨(그 외에는
+          §5.13과 동일하게 참고용으로만 표시) ── */}
+      <div style={{position:"relative"}}>
+        {wInputSource==="LIQUID_THERMAL_EXPANSION" && (
+          <div style={{position:"absolute",top:-6,right:0,zIndex:1,fontSize:9,padding:"2px 8px",borderRadius:6,
+            fontFamily:font.mono,fontWeight:700,
+            background: liquidExpansionAdapter?.valid ? T.greenBg : T.orangeBg,
+            color: liquidExpansionAdapter?.valid ? T.greenDk : "#946200",
+            border:`1px solid ${liquidExpansionAdapter?.valid ? T.green : T.orange}`}}>
+            {liquidExpansionAdapter?.valid ? "SIZING에 사용 중" : "입력 미완료"}
+          </div>
+        )}
+        <LiquidExpansionSupplementaryBlock
+          value={liquidExpansionInput}
+          onFieldChange={onLiquidExpansionFieldChange}
+          result={liquidExpansionResult}
+        />
+      </div>
 
       {/* ── 2d. §5.13 열교환기 고장 — 독립 부가 계산(참고용, governing과 무관) ── */}
       <ExchangerFailureSupplementaryBlock
@@ -1572,9 +1608,11 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
             <span style={{fontSize:9,color:"#7B9EC0",fontFamily:font.mono,letterSpacing:0.5}}>GOVERNING RELIEF LOAD</span>
             <span style={{fontSize:9,padding:"2px 7px",borderRadius:5,fontFamily:font.mono,fontWeight:700,
-              background: effectiveWSource==="GOVERNING_RELIEF_LOAD" ? T.green : "#FFFFFF22",
-              color: effectiveWSource==="GOVERNING_RELIEF_LOAD" ? T.navy : "#B8CBE0"}}>
-              {effectiveWSource==="GOVERNING_RELIEF_LOAD" ? "SCENARIO 기반" : "MANUAL 기반"}
+              background: effectiveWSource==="MANUAL_INPUT" ? "#FFFFFF22" : T.green,
+              color: effectiveWSource==="MANUAL_INPUT" ? "#B8CBE0" : T.navy}}>
+              {effectiveWSource==="GOVERNING_RELIEF_LOAD" ? "SCENARIO 기반"
+                : effectiveWSource==="LIQUID_THERMAL_EXPANSION" ? "§5.11 기반(C-C-13-2026)"
+                : "MANUAL 기반"}
             </span>
           </div>
           <div style={{fontSize:20,fontWeight:900,color:T.white,fontFamily:font.mono}}>
@@ -1583,6 +1621,11 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
           {effectiveWSource==="GOVERNING_RELIEF_LOAD" && (
             <div style={{fontSize:9,color:"#7B9EC0",fontFamily:font.mono,marginTop:2}}>
               Basis: {RELIEF_LOAD_BASIS_LABEL[reliefLoadScenarioType]} — Manual W({inputs.W} kg/h)는 사용되지 않음
+            </div>
+          )}
+          {effectiveWSource==="LIQUID_THERMAL_EXPANSION" && (
+            <div style={{fontSize:9,color:"#7B9EC0",fontFamily:font.mono,marginTop:2}}>
+              Basis: 열팽창용 안전밸브(§5.11, KOSHA C-C-13-2026 §6.1) — Manual W({inputs.W} kg/h)는 사용되지 않음
             </div>
           )}
         </div>
@@ -1614,13 +1657,15 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         // adapter.valid 조건, §5.11(VOLUME_FLOW) 등은 "이 시나리오 자체
         // 계산 성공 여부"로 판정한 값이 그대로 넘어온다. 여기서 새로
         // 판정 로직을 만들지 않고 그 값을 그대로 쓴다(판정 중복/불일치 방지).
-        const reliefLoadIncomplete = !!reliefLoadBlocking;
+        // C-4.21: liquidExpansionBlocking도 같은 원칙(단일 진실
+        // 소스, 여기서 새 판정 로직을 만들지 않음)으로 함께 확인한다.
+        const reliefLoadIncomplete = !!reliefLoadBlocking || !!liquidExpansionBlocking;
         const blockReason = mawpWarning
           ? "⚠ 설정압 오류 — 수정 후 진행 가능"
           : (kbOverride && !kbOverrideReason.trim())
           ? "⚠ Kb override 근거를 입력해야 진행 가능"
           : reliefLoadIncomplete
-          ? "⚠ Relief Load 시나리오 입력을 완료해야 진행 가능"
+          ? "⚠ W 산정 근거 입력을 완료해야 진행 가능"
           : null;
         return (
           <button onClick={onSubmit} disabled={!!blockReason}

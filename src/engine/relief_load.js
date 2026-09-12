@@ -58,9 +58,10 @@ const RELIEF_LOAD_SCENARIO_TAXONOMY = Object.freeze([
   { id:"RUNAWAY_REACTION",    section:"§5.10", title:"화학반응(폭주반응)",
     status: RELIEF_LOAD_STATUS.NEEDS_ENGINEERING_DECISION,
     note:"벤치시험 데이터 필요 — 원문 자체가 정형식 미제시" },
-  { id:"LIQUID_EXPANSION",    section:"§5.11", title:"액체부피팽창",
+  { id:"LIQUID_EXPANSION",    section:"§5.11", title:"액체부피팽창(열팽창)",
     status: RELIEF_LOAD_STATUS.COMPUTABLE,
-    note:"식(1): V=αQ/(500·SG·Cp) 형태 — D-13 열팽창밸브 지침과 중복여부 C-4.5에서 확인" },
+    note:"C-4.21: canonical basis를 C-C-13-2026 §6.1로 교체 — W=QF·β/S[kg/h], " +
+      "SG 제거, MASS_FLOW 편입(舊 D-18-2020 §5.11(2) V=αQ/(500·SG·Cp)[m³/h] 경로는 폐기)" },
   { id:"EXTERNAL_FIRE",       section:"§5.12", title:"외부화재",
     status: RELIEF_LOAD_STATUS.COMPUTABLE,
     note:"식(2)~(7), 환경인자 F(표3), Aw 계산 포함 — 가장 복잡, C-4.7에서 마지막 구현" },
@@ -86,14 +87,20 @@ function getComputableScenarioIds() {
 
 // ════════════════════════════════════════════════════════════════
 //  C-4.8A — Unit/Selector Contract
-//  §5.11(m³/h)·§5.13(m²)이 §5.1/5.6/5.7/5.8/5.12(kg/h)와 같은
-//  숫자축(max 비교)에 섞이면 안 된다는 원칙(원칙 3)을 selector
-//  레벨에서 명시적으로 강제한다. 물성 변환(밀도 등)으로 단위를
-//  맞추는 시도는 하지 않는다 — 그런 변환 자체가 여기 있으면 안 됨.
+//  §5.13(m²)이 §5.1/5.6/5.7/5.8/5.12(kg/h)와 같은 숫자축(max 비교)에
+//  섞이면 안 된다는 원칙(원칙 3)을 selector 레벨에서 명시적으로
+//  강제한다. 물성 변환(밀도 등)으로 단위를 맞추는 시도는 하지 않는다
+//  — 그런 변환 자체가 여기 있으면 안 됨.
+//  [C-4.21 갱신] §5.11은 C-C-13-2026 §6.1 채택으로 kg/h(MASS_FLOW)가
+//  되어 이 배제 대상에서 빠졌다 — SG가 물리적으로 소거되는 질량유량
+//  식이라 밀도 변환을 새로 들여온 것이 아니다(원문 자체가 kg/h를
+//  직접 정의). VOLUME_FLOW 분류 자체는 향후 다른 절에서 필요할 수
+//  있어 유지하되, 현재 taxonomy에는 VOLUME_FLOW로 분류되는 시나리오가
+//  없다.
 // ════════════════════════════════════════════════════════════════
 const RELIEF_LOAD_QUANTITY = Object.freeze({
   MASS_FLOW:   "MASS_FLOW",    // kg/h — governing load 후보
-  VOLUME_FLOW: "VOLUME_FLOW",  // m3/h — §5.11, governing 후보 아님(보존만)
+  VOLUME_FLOW: "VOLUME_FLOW",  // m3/h — 현재 taxonomy에 해당 시나리오 없음(예약)
   AREA:        "AREA",         // m2   — §5.13, governing 후보 아님(보존만)
 });
 
@@ -113,10 +120,10 @@ function classifyReliefLoadQuantity(unit) {
 // 값으로 한다. 이 함수는 순수 함수이며 시나리오 계산 로직과 섞이지
 // 않는다(calculateReliefLoadScenario는 C-4.1~C-4.7에서 개별 구현).
 //
-// scenarioResults 배열의 각 원소는 §5.1/5.6/5.7/5.8/5.12 계약
-// (status:"OK", W, unit:"kg/h") 또는 §5.11/5.13 계약(status:
+// scenarioResults 배열의 각 원소는 §5.1/5.6/5.7/5.8/5.11/5.12 계약
+// (status:"OK", W, unit:"kg/h") 또는 §5.13 계약(status:
 // "COMPUTABLE"/"NEEDS_ENGINEERING_DECISION"/"NOT_APPLICABLE",
-// value 또는 requiredOrificeArea_m2, unit:"m3/h"|"m2")을 섞어서
+// requiredOrificeArea_m2, unit:"m2")을 섞어서
 // 받을 수 있다 — quantity가 MASS_FLOW가 아닌 결과는 governing 후보
 // 에서 제외하되 allScenarios에는 원본 그대로 보존한다(감사 가능성
 // 원칙). 제외 사실 자체도 quantityAudit 배열로 남긴다.
@@ -531,17 +538,42 @@ function calculateAbnormalHeatVaporScenario(input) {
 //  끌어오지 않는다 — Q는 이미 산정되어 들어오는 입력으로만 받는다
 //  (§5.8의 vaporGeneration_kgh와 동일한 패턴).
 //
-//  분모(500·SG·Cp)가 0이 되는 경우(SG=0 또는 Cp=0)는 계산하지 않고
-//  fail-fast — SG/Cp는 물리적으로도 0일 수 없는 값이라 이 자체가
-//  유효하지 않은 입력이다. 상수 500은 원문 그대로 유지, 재유도하지
-//  않는다. 순수 함수. §5.1/§5.6/§5.7/§5.8 코드는 수정하지 않았다.
+//  C-4.21 — RELIEF-LOAD-NORMATIVE-BASIS-002
+//  Canonical basis를 KOSHA GUIDE D-18-2020 §5.11(2)에서 C-C-13-2026
+//  §6.1(열팽창용 안전밸브 전용 규정)로 교체한다. D-18 §5.11(1) 자체가
+//  "세부내용은 열팽창 안전밸브의 기술지침(D-31, 현 C-C-13-2026) 참조"
+//  라고 명시하며, C-4.19/C-4.19a/C-4.20 조사 결과 두 문서가 같은
+//  설계 시나리오(2개 밸브로 격리된 배관 내 액체의 열팽창)를 다루고
+//  있음이 확인되었다(동일 트리거 조건·동일 기본 오리피스 크기).
+//
+//  변경 내용:
+//    - 산정량: V[m³/h](부피) → W[kg/h](질량) — SG(비중) 입력이
+//      물리적으로 소거되어(질량유량 유도식에서 ρ가 상쇄) 더 이상
+//      필요하지 않다. SG 입력을 제거한다.
+//    - 공식: W = QF·β / S (C-C-13-2026 §6.1)
+//      β(열팽창 부피계수, 1/℃) ↔ 기존 alpha_per_degC — 정의·단위 동일
+//      QF(유입열량, kcal/h)     ↔ 기존 Q_kcal_per_hr    — 정의·단위 동일
+//      S(비열, kcal/kg·℃)       ↔ 기존 Cp_kcal_per_kgC  — 정의·단위 동일
+//      (세 기호 모두 원문 대조로 확인, C-4.20 참고) — 입력 필드명은
+//      하위호환을 위해 그대로 유지한다.
+//    - status/필드명: unit이 kg/h가 되므로 §5.1/5.6/5.7/5.8/5.12와
+//      동일한 MASS_FLOW 계약 형태(status:"OK", 필드명 W)로 맞춘다 —
+//      selectGoverningReliefLoad()가 governing 후보로 인식하려면
+//      이 형태가 필수다(§6:governing 함수의 유효성 조건 참고). 이
+//      전환 자체가 "§5.11이 governing 후보군에 최초로 편입된다"는
+//      의도된 breaking behavior다(C-4.21 설계 승인 사항).
+//    - D-18-2020 §5.11(2)의 "3.6" 상수의 원 유도과정은 조사했으나
+//      확정하지 못했다(1997/2002년 원 심의자료 미확보) — 이 자체는
+//      "미해결 조사사항"으로만 기록하고, canonical basis를
+//      C-C-13-2026으로 교체하는 이번 결정과는 무관하다(C-4.20 결론).
+//    - 기존 "500" 상수/SG 입력/m³/h 산정 경로는 완전히 제거한다 —
+//      과거 값과의 임시 호환을 위한 병행 계산 경로를 두지 않는다.
 function calculateLiquidThermalExpansionScenario(input) {
   const SCENARIO_ID = "LIQUID_EXPANSION";
   const SECTION = "§5.11";
-  const SOURCE = "KOSHA GUIDE D-18-2020 §5.11(2), 식(1)";
-  const UPSTREAM_REFERENCE_NOTE = "유입열량(Q) 산정 세부내용은 원문상 \"열팽창 안전밸브의 기술지침(D-13)\" 참조 — " +
-    "KOSHA 현행 목록상 열팽창용 안전밸브 지침은 D-31-2012(D-13-2012는 별개로 염소저장 설비 지침); " +
-    "원문의 교차참조 번호 불일치이며 Q는 이미 산정된 입력으로만 사용, V 산정식 자체와는 무관";
+  const SOURCE = "KOSHA GUIDE C-C-13-2026 §6.1, 식(1) — 舊 D-31-2012, D-18-2020 §5.11(1)이 세부내용 참조처로 지목";
+  const UPSTREAM_REFERENCE_NOTE = "유입열량(QF) 산정 세부내용은 C-C-13-2026 §6.2(가열로/열교환기, 태양복사, 대기온도, 전기가열 4가지 방법) 참조 — " +
+    "QF는 이미 산정된 입력으로만 사용, W 산정식(§6.1) 자체와는 무관";
   const inputs = (input && typeof input === "object") ? { ...input } : {};
 
   function isValidNonNegativeFiniteNumber(v) {
@@ -554,33 +586,31 @@ function calculateLiquidThermalExpansionScenario(input) {
   function insufficient(reason) {
     return {
       scenarioId: SCENARIO_ID, section: SECTION, phase: null,
-      status: "INSUFFICIENT_INPUT", value: null, unit: "m3/h",
+      status: "INSUFFICIENT_INPUT", W: null, unit: "kg/h",
       inputs, components: null, formula: null, reason,
       source: SOURCE, upstreamReference: UPSTREAM_REFERENCE_NOTE,
     };
   }
 
-  // α(부피팽창계수)와 Q(총 열전달 속도)는 0이 물리적으로 유효하다
+  // β(열팽창 부피계수)와 QF(유입열량)는 0이 물리적으로 유효하다
   // (팽창이 없거나 열유입이 없는 경우) — 0을 거부하지 않는다.
   if (!isValidNonNegativeFiniteNumber(inputs.alpha_per_degC)) return insufficient("invalid_alpha_per_degC");
   if (!isValidNonNegativeFiniteNumber(inputs.Q_kcal_per_hr)) return insufficient("invalid_Q_kcal_per_hr");
-  // SG(비중)와 Cp(비열)는 분모이며 물리적으로도 0이나 음수가 될 수
-  // 없는 값이다 — 0을 포함해 명시적으로 거부한다(fail-fast, 나눗셈
-  // 전에 차단).
-  if (!isValidPositiveFiniteNumber(inputs.SG)) return insufficient("invalid_SG_must_be_positive");
+  // S(비열)는 분모이며 물리적으로도 0이나 음수가 될 수 없는 값이다 —
+  // 0을 포함해 명시적으로 거부한다(fail-fast, 나눗셈 전에 차단).
+  // SG(비중)는 C-C-13-2026 §6.1 식에 존재하지 않으므로 입력에서 제거됨.
   if (!isValidPositiveFiniteNumber(inputs.Cp_kcal_per_kgC)) return insufficient("invalid_Cp_must_be_positive");
 
-  const alpha = inputs.alpha_per_degC;
-  const Q = inputs.Q_kcal_per_hr;
-  const SG = inputs.SG;
-  const Cp = inputs.Cp_kcal_per_kgC;
-  const value = (alpha * Q) / (500 * SG * Cp);
+  const beta = inputs.alpha_per_degC;
+  const QF = inputs.Q_kcal_per_hr;
+  const S = inputs.Cp_kcal_per_kgC;
+  const W = (QF * beta) / S;
 
   return {
-    scenarioId: SCENARIO_ID, section: SECTION, phase: null, status: "COMPUTABLE",
-    value, unit: "m3/h", inputs,
-    components: { alpha_per_degC: alpha, Q_kcal_per_hr: Q, SG, Cp_kcal_per_kgC: Cp, denominatorConstant: 500 },
-    formula: "V = α·Q / (500·SG·Cp) — KOSHA D-18-2020 §5.11(2) 식(1)",
+    scenarioId: SCENARIO_ID, section: SECTION, phase: null, status: "OK",
+    W, unit: "kg/h", inputs,
+    components: { alpha_per_degC: beta, Q_kcal_per_hr: QF, Cp_kcal_per_kgC: S },
+    formula: "W = QF·β / S — KOSHA C-C-13-2026 §6.1 식(1)",
     source: SOURCE, upstreamReference: UPSTREAM_REFERENCE_NOTE,
   };
 }

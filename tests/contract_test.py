@@ -39,7 +39,10 @@ RD_KD_FACTOR       = 0.9
 KD_MIN             = 0.9
 MARGIN_MIN         = 1.0
 
-ENGINE_VERSION     = "1.6.0"   # engine/api520.js와 반드시 일치해야 함
+ENGINE_VERSION     = "2.0.0"   # engine/api520.js와 반드시 일치해야 함 (C-4.21 major bump)
+# v2.0.0: RELIEF-LOAD-NORMATIVE-BASIS-002(C-4.21) — §5.11 canonical basis를
+# D-18-2020 §5.11(2)에서 C-C-13-2026 §6.1로 교체(V[m3/h,SG] → W[kg/h]).
+# §5.11이 처음으로 governing 후보에 편입되는 breaking change라 major bump.
 # v1.6.0: INLET-LOSS-001 — 인입배관 압력손실(KOSHA D-18-2020 §7.2(1),
 # 설정압력의 3% 이하) 판정 신설. Physical Calculation(computeFrictionLoss
 # 공용 재사용)과 Safety Policy(INLET_PRESSURE_LOSS_POLICY.MAX_RATIO)를
@@ -1421,11 +1424,11 @@ console.log(JSON.stringify(out));
              else False,
              "evaluateInletPressureLossPolicy가 Date.now() 등 비결정적 값을 사용함 — pure function 원칙 위반")
     tr.check("INLET_014_no_engine_version_duplicate",
-             api520_src.count('const ENGINE_VERSION = "1.6.0"') == 1,
-             "ENGINE_VERSION 1.6.0 선언이 정확히 1곳이 아님")
+             api520_src.count('const ENGINE_VERSION = "2.0.0"') == 1,
+             "ENGINE_VERSION 2.0.0 선언이 정확히 1곳이 아님")
     tr.check("INLET_014_snapshot_engine_version_matches",
-             'const SNAPSHOT_ENGINE_VERSION = "1.6.0"' in snap_src,
-             "SNAPSHOT_ENGINE_VERSION이 1.6.0으로 갱신되지 않음 — engine_version == report_version 계약 위반")
+             'const SNAPSHOT_ENGINE_VERSION = "2.0.0"' in snap_src,
+             "SNAPSHOT_ENGINE_VERSION이 2.0.0으로 갱신되지 않음 — engine_version == report_version 계약 위반")
 
     return tr
 
@@ -2323,44 +2326,37 @@ console.log(JSON.stringify(out));
 #  아직 api520Engine/selectGoverningReliefLoad에 미연결.
 # ════════════════════════════════════════════════════════════════
 def test_liquid_thermal_expansion_scenario_contract() -> TestResult:
-    tr = TestResult("LIQUID-EXPANSION-001", "Sprint C-4.5 — §5.11 액체부피 팽창 시나리오")
+    tr = TestResult("LIQUID-EXPANSION-002", "Sprint C-4.21 — §5.11 열팽창용 안전밸브, KOSHA C-C-13-2026 §6.1 채택")
 
     rl_src = (SRC / "engine" / "relief_load.js").read_text()
-    api520_src = (SRC / "engine" / "api520.js").read_text()
 
     tr.check("LE_001_function_exists",
              "function calculateLiquidThermalExpansionScenario" in rl_src,
              "calculateLiquidThermalExpansionScenario() 함수가 없음")
     tr.check("LE_001_source_cited",
-             "KOSHA GUIDE D-18-2020 §5.11" in rl_src,
-             "§5.11 계산 함수에 KOSHA D-18-2020 §5.11 출처 인용이 없음")
-    tr.check("LE_001_not_yet_wired_into_engine",
-             "calculateLiquidThermalExpansionScenario" not in api520_src,
-             "C-4.5 단계에서 아직 api520Engine에 연결되면 안 됨")
+             "C-C-13-2026" in rl_src,
+             "§5.11 계산 함수에 KOSHA C-C-13-2026 출처 인용이 없음")
     tr.check("LE_001_prior_scenarios_untouched",
              "function calculateAbnormalHeatVaporScenario" in rl_src
              and "function calculateControlValveFailureScenario" in rl_src
              and "W = 유입량 − 유출량 (부주의한 밸브 개방" in rl_src,
-             "C-4.1~C-4.4 구현이 C-4.5 작업 중 변경됨 — 불필요한 수정 금지")
+             "다른 시나리오 구현이 이번 작업 중 변경됨 — 불필요한 수정 금지")
     fn_body = rl_src.split("function calculateLiquidThermalExpansionScenario")[1].split("function calculate")[0] if "function calculateLiquidThermalExpansionScenario" in rl_src else ""
-    tr.check("LE_002_constant_500_present_unmodified",
-             "500" in fn_body and "* 500" not in fn_body.replace("(500", "").replace(" 500", " __500__", 1),
-             "원문 상수 500이 없거나 변형됨")
-    tr.check("LE_002_no_kg_h_conversion_present",
-             "kg" not in fn_body.lower() or "kg_" not in fn_body.lower(),
-             "V(m3/h)를 kg/h로 변환하는 코드가 존재함 — 원문에 없는 계산 추가 금지")
-    tr.check("LE_002_unit_is_m3_h_not_kg_h",
-             '"m3/h"' in fn_body,
-             "결과 unit이 m3/h로 고정되어 있지 않음")
-    tr.check("LE_002_no_W_field_used",
-             "W," not in fn_body.split("return {")[-1].split("};")[0] if "return {" in fn_body else True,
-             "결과 객체에 W 필드가 존재함 — value/unit(m3/h) 계약을 써야 하며 W(kg/h) 필드를 두면 안 됨")
-    tr.check("LE_002_status_computable_not_ok",
-             '"COMPUTABLE"' in fn_body,
-             "성공 결과의 status가 COMPUTABLE로 명시되지 않음(§6 편입 가능 의미로 오인되지 않도록 OK와 구분해야 함)")
-    tr.check("LE_002_upstream_reference_documented_not_used_in_formula",
-             "D-13" in rl_src and "D-31" in rl_src,
-             "D-13/D-31 교차참조 불일치가 provenance로 기록되지 않음")
+    tr.check("LE_002_SG_removed",
+             "inputs.SG" not in fn_body and "SG:" not in fn_body.split("return")[0],
+             "C-C-13-2026 §6.1 채택 후에도 SG 입력 참조/검증이 남아있음 — 질량유량식에서 SG는 물리적으로 소거되어야 함")
+    tr.check("LE_002_constant_500_removed",
+             "500" not in fn_body,
+             "舊 D-18-2020 §5.11(2) 상수 500이 아직 남아있음 — C-C-13-2026 §6.1은 상수가 필요 없는 식")
+    tr.check("LE_002_unit_is_kg_h_not_m3_h",
+             '"kg/h"' in fn_body and '"m3/h"' not in fn_body,
+             "결과 unit이 kg/h로 바뀌지 않았거나 舊 m3/h가 남아있음")
+    tr.check("LE_002_W_field_present",
+             "W," in fn_body.split("return {")[-1].split("};")[0] if "return {" in fn_body else False,
+             "결과 객체에 W 필드가 없음 — §5.1/5.6/5.7/5.8/5.12와 동일한 MASS_FLOW 계약(W)을 써야 함")
+    tr.check("LE_002_status_ok_not_computable",
+             '"OK"' in fn_body,
+             "성공 결과의 status가 OK로 바뀌지 않음 — selectGoverningReliefLoad 재사용을 위해 다른 MASS_FLOW 시나리오와 동일해야 함")
 
     node = shutil.which("node")
     if not node:
@@ -2374,68 +2370,83 @@ eval(files);
 
 const out = {{}};
 
-// ── LE-003: 정상 계산값 — 식 그대로 검증 ──
-// alpha=0.0007, Q=50000, SG=0.85, Cp=0.5 -> V = 0.0007*50000/(500*0.85*0.5) = 35/212.5 = 0.16470588...
-const normal = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:0.5 }});
+// ── LE-003: 정상 계산값 — C-C-13-2026 §6.1 식(1) W=QF·β/S 그대로 검증 ──
+// beta=0.0007, QF=50000, S=0.5 -> W = 0.0007*50000/0.5 = 35/0.5 = 70
+const normal = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, Cp_kcal_per_kgC:0.5 }});
 out.normalStatus = normal.status;
-out.normalValue = normal.value;
+out.normalW = normal.W;
 out.normalUnit = normal.unit;
 out.normalScenarioId = normal.scenarioId;
 out.normalSection = normal.section;
-out.expectedValue = (0.0007 * 50000) / (500 * 0.85 * 0.5);
+out.expectedW = (0.0007 * 50000) / 0.5;
 
-// ── LE-004: alpha=0, Q=0 (물리적으로 유효한 0) -> value=0 ──
-const zeroAlpha = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0, Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:0.5 }});
+// ── LE-004: beta=0, QF=0 (물리적으로 유효한 0) -> W=0 ──
+const zeroAlpha = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0, Q_kcal_per_hr:50000, Cp_kcal_per_kgC:0.5 }});
 out.zeroAlphaStatus = zeroAlpha.status;
-out.zeroAlphaValue = zeroAlpha.value;
-const zeroQ = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:0, SG:0.85, Cp_kcal_per_kgC:0.5 }});
+out.zeroAlphaW = zeroAlpha.W;
+const zeroQ = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:0, Cp_kcal_per_kgC:0.5 }});
 out.zeroQStatus = zeroQ.status;
-out.zeroQValue = zeroQ.value;
+out.zeroQW = zeroQ.W;
 
-// ── LE-005: SG=0, Cp=0 -> 분모 0, fail-fast(계산하지 않음) ──
-out.zeroSGStatus = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:0, Cp_kcal_per_kgC:0.5 }}).status;
-out.zeroCpStatus = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:0 }}).status;
+// ── LE-005: S(Cp)=0 -> 분모 0, fail-fast(계산하지 않음). SG는 더 이상 입력이 아님 ──
+out.zeroCpStatus = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, Cp_kcal_per_kgC:0 }}).status;
+
+// ── LE-005b: SG를 넣어도(舊 입력, 하위호환 확인) 계산은 그걸 무시하고 정상 진행되어야 함 ──
+const withStaleSG = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:0.5 }});
+out.withStaleSGStatus = withStaleSG.status;
+out.withStaleSGW = withStaleSG.W;
 
 // ── LE-006: 각 변수 누락 ──
-out.missingAlpha = calculateLiquidThermalExpansionScenario({{ Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:0.5 }}).status;
-out.missingQ = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, SG:0.85, Cp_kcal_per_kgC:0.5 }}).status;
-out.missingSG = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, Cp_kcal_per_kgC:0.5 }}).status;
-out.missingCp = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:0.85 }}).status;
+out.missingAlpha = calculateLiquidThermalExpansionScenario({{ Q_kcal_per_hr:50000, Cp_kcal_per_kgC:0.5 }}).status;
+out.missingQ = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Cp_kcal_per_kgC:0.5 }}).status;
+out.missingCp = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000 }}).status;
 out.nullInput = calculateLiquidThermalExpansionScenario(null).status;
 
-// ── LE-007: 음수/NaN/Infinity (각 변수별) ──
-out.negAlpha = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:-0.0007, Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:0.5 }}).status;
-out.negQ = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:-50000, SG:0.85, Cp_kcal_per_kgC:0.5 }}).status;
-out.negSG = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:-0.85, Cp_kcal_per_kgC:0.5 }}).status;
-out.negCp = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:-0.5 }}).status;
-out.nanAlpha = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:NaN, Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:0.5 }}).status;
-out.infQ = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:Infinity, SG:0.85, Cp_kcal_per_kgC:0.5 }}).status;
-out.nanSG = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:NaN, Cp_kcal_per_kgC:0.5 }}).status;
-out.infCp = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:Infinity }}).status;
+// ── LE-007: 음수/NaN/Infinity ──
+out.negAlpha = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:-0.0007, Q_kcal_per_hr:50000, Cp_kcal_per_kgC:0.5 }}).status;
+out.negQ = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:-50000, Cp_kcal_per_kgC:0.5 }}).status;
+out.negCp = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, Cp_kcal_per_kgC:-0.5 }}).status;
+out.nanAlpha = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:NaN, Q_kcal_per_hr:50000, Cp_kcal_per_kgC:0.5 }}).status;
+out.infQ = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:Infinity, Cp_kcal_per_kgC:0.5 }}).status;
+out.infCp = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, Cp_kcal_per_kgC:Infinity }}).status;
 
 // ── LE-008: 배열/문자열 암묵변환 차단 ──
-out.arrayAlpha = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:[5], Q_kcal_per_hr:50000, SG:0.85, Cp_kcal_per_kgC:0.5 }}).status;
-out.stringQ = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:"50000", SG:0.85, Cp_kcal_per_kgC:0.5 }}).status;
-out.emptyArraySG = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:50000, SG:[], Cp_kcal_per_kgC:0.5 }}).status;
+out.arrayAlpha = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:[5], Q_kcal_per_hr:50000, Cp_kcal_per_kgC:0.5 }}).status;
+out.stringQ = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0007, Q_kcal_per_hr:"50000", Cp_kcal_per_kgC:0.5 }}).status;
 
 // ── LE-009: 입력 mutation 금지 ──
-const originalInput = {{ alpha_per_degC:0.0007, Q_kcal_per_hr:40000, SG:0.9, Cp_kcal_per_kgC:0.6 }};
+const originalInput = {{ alpha_per_degC:0.0007, Q_kcal_per_hr:40000, Cp_kcal_per_kgC:0.6 }};
 const originalCopy = JSON.parse(JSON.stringify(originalInput));
 calculateLiquidThermalExpansionScenario(originalInput);
 out.inputUnmutated = JSON.stringify(originalInput) === JSON.stringify(originalCopy);
 
 // ── LE-010: 결정론 ──
-const detInput = {{ alpha_per_degC:0.0008, Q_kcal_per_hr:30000, SG:0.8, Cp_kcal_per_kgC:0.45 }};
+const detInput = {{ alpha_per_degC:0.0008, Q_kcal_per_hr:30000, Cp_kcal_per_kgC:0.45 }};
 const r1 = calculateLiquidThermalExpansionScenario(detInput);
 const r2 = calculateLiquidThermalExpansionScenario(detInput);
 out.deterministic = JSON.stringify(r1) === JSON.stringify(r2);
 
-// ── LE-011: taxonomy와 상태 정합성(간접 참조) ──
+// ── LE-011: taxonomy 정합성 ──
 out.taxonomyIncludes = getComputableScenarioIds().includes("LIQUID_EXPANSION");
+out.quantityIsMassFlow = classifyReliefLoadQuantity(normal.unit) === 'MASS_FLOW';
 
-// ── LE-012: selectGoverningReliefLoad에 넣어도(우발적 상황 대비) W가 없어 자동 무효 처리됨 ──
+// ── LE-012: (C-4.21 핵심) 이제 selectGoverningReliefLoad/buildReliefSizingInput에
+// 그대로 태워도 유효한 governing 후보로 인식되어야 한다 — §5.11이 처음으로
+// governing 후보에 편입되는 것이 이번 변경의 의도된 동작이다. ──
 const gov = selectGoverningReliefLoad([normal]);
 out.govVerdictWhenOnlyLiquidExpansion = gov.verdict;
+out.govGoverningScenarioId = gov.governingScenarioId;
+const adapter = buildReliefSizingInput(gov);
+out.adapterValid = adapter.valid;
+out.adapterW = adapter.W;
+
+// ── LE-013: §5.11 vs 다른 MASS_FLOW 시나리오 — 실제로 더 큰 쪽이 governing으로 선택되는가 ──
+const outletBlocked = calculateOutletBlockedScenario({{ phase:"LIQUID", inflow_kgh: 50 }});
+const govBothSmallLE = selectGoverningReliefLoad([normal, outletBlocked]); // normal.W=70 < 50? 70>50 이므로 LIQUID_EXPANSION이 governing이어야 함
+out.govWhenLE_bigger = govBothSmallLE.governingScenarioId;
+const tinyLE = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0001, Q_kcal_per_hr:100, Cp_kcal_per_kgC:1.0 }}); // W=0.01, 매우 작음
+const govWhenLE_smaller = selectGoverningReliefLoad([tinyLE, outletBlocked]);
+out.govWhenLE_smaller = govWhenLE_smaller.governingScenarioId;
 
 console.log(JSON.stringify(out));
 """
@@ -2447,55 +2458,61 @@ console.log(JSON.stringify(out));
         return tr
 
     tr.check("LE_003_formula_matches_exactly",
-             out.get("normalStatus") == "COMPUTABLE"
-             and out.get("normalValue") is not None
-             and abs(out.get("normalValue", -999) - out.get("expectedValue", -1)) < 1e-9,
-             f"V = α·Q/(500·SG·Cp) 식 계산값이 기대값과 다름: got {out.get('normalValue')} expected {out.get('expectedValue')}")
-    tr.check("LE_003_unit_is_m3_h",
-             out.get("normalUnit") == "m3/h", f"got {out.get('normalUnit')}")
+             out.get("normalStatus") == "OK"
+             and out.get("normalW") is not None
+             and abs(out.get("normalW", -999) - out.get("expectedW", -1)) < 1e-9,
+             f"W = QF·β/S 식 계산값이 기대값과 다름: got {out.get('normalW')} expected {out.get('expectedW')}")
+    tr.check("LE_003_unit_is_kg_h",
+             out.get("normalUnit") == "kg/h", f"got {out.get('normalUnit')}")
     tr.check("LE_003_scenarioId_is_LIQUID_EXPANSION",
              out.get("normalScenarioId") == "LIQUID_EXPANSION", f"got {out.get('normalScenarioId')}")
     tr.check("LE_003_section_is_5_11",
              out.get("normalSection") == "§5.11", f"got {out.get('normalSection')}")
     tr.check("LE_004_zero_alpha_valid_zero_value",
-             out.get("zeroAlphaStatus") == "COMPUTABLE" and out.get("zeroAlphaValue") == 0,
-             f"α=0이 유효한 값(무팽창)이어야 함: {out.get('zeroAlphaStatus')}/{out.get('zeroAlphaValue')}")
+             out.get("zeroAlphaStatus") == "OK" and out.get("zeroAlphaW") == 0,
+             f"β=0이 유효한 값(무팽창)이어야 함: {out.get('zeroAlphaStatus')}/{out.get('zeroAlphaW')}")
     tr.check("LE_004_zero_Q_valid_zero_value",
-             out.get("zeroQStatus") == "COMPUTABLE" and out.get("zeroQValue") == 0,
-             f"Q=0이 유효한 값(무열유입)이어야 함: {out.get('zeroQStatus')}/{out.get('zeroQValue')}")
-    tr.check("LE_005_zero_SG_rejected_denominator",
-             out.get("zeroSGStatus") == "INSUFFICIENT_INPUT", f"got {out.get('zeroSGStatus')}")
+             out.get("zeroQStatus") == "OK" and out.get("zeroQW") == 0,
+             f"QF=0이 유효한 값(무열유입)이어야 함: {out.get('zeroQStatus')}/{out.get('zeroQW')}")
     tr.check("LE_005_zero_Cp_rejected_denominator",
              out.get("zeroCpStatus") == "INSUFFICIENT_INPUT", f"got {out.get('zeroCpStatus')}")
+    tr.check("LE_005b_stale_SG_input_ignored_not_rejected",
+             out.get("withStaleSGStatus") == "OK" and abs(out.get("withStaleSGW",-999) - 70.0) < 1e-9,
+             f"舊 SG 필드가 남아있는 입력을 줘도 무시하고 정상 계산해야 함(하위호환): {out.get('withStaleSGStatus')}/{out.get('withStaleSGW')}")
     tr.check("LE_006_missing_alpha_rejected",
              out.get("missingAlpha") == "INSUFFICIENT_INPUT", f"got {out.get('missingAlpha')}")
     tr.check("LE_006_missing_Q_rejected",
              out.get("missingQ") == "INSUFFICIENT_INPUT", f"got {out.get('missingQ')}")
-    tr.check("LE_006_missing_SG_rejected",
-             out.get("missingSG") == "INSUFFICIENT_INPUT", f"got {out.get('missingSG')}")
     tr.check("LE_006_missing_Cp_rejected",
              out.get("missingCp") == "INSUFFICIENT_INPUT", f"got {out.get('missingCp')}")
     tr.check("LE_006_null_input_rejected",
              out.get("nullInput") == "INSUFFICIENT_INPUT", f"got {out.get('nullInput')}")
     tr.check("LE_007_negative_values_rejected",
-             all(out.get(k) == "INSUFFICIENT_INPUT" for k in ["negAlpha", "negQ", "negSG", "negCp"]),
+             all(out.get(k) == "INSUFFICIENT_INPUT" for k in ["negAlpha", "negQ", "negCp"]),
              f"음수 값 중 일부가 거부되지 않음: {out}")
     tr.check("LE_007_nan_infinity_rejected",
-             all(out.get(k) == "INSUFFICIENT_INPUT" for k in ["nanAlpha", "infQ", "nanSG", "infCp"]),
+             all(out.get(k) == "INSUFFICIENT_INPUT" for k in ["nanAlpha", "infQ", "infCp"]),
              f"NaN/Infinity 값 중 일부가 거부되지 않음: {out}")
     tr.check("LE_008_array_string_coercion_rejected",
-             out.get("arrayAlpha") == "INSUFFICIENT_INPUT" and out.get("stringQ") == "INSUFFICIENT_INPUT"
-             and out.get("emptyArraySG") == "INSUFFICIENT_INPUT",
-             f"배열/문자열 암묵변환이 차단되지 않음: {out.get('arrayAlpha')}/{out.get('stringQ')}/{out.get('emptyArraySG')}")
+             out.get("arrayAlpha") == "INSUFFICIENT_INPUT" and out.get("stringQ") == "INSUFFICIENT_INPUT",
+             f"배열/문자열 암묵변환이 차단되지 않음: {out.get('arrayAlpha')}/{out.get('stringQ')}")
     tr.check("LE_009_input_not_mutated",
              out.get("inputUnmutated") is True, "입력 객체가 변형됨 — 순수함수 원칙 위반")
     tr.check("LE_010_deterministic",
              out.get("deterministic") is True, "동일 입력 2회 실행 결과가 다름")
     tr.check("LE_011_taxonomy_includes_liquid_expansion",
              out.get("taxonomyIncludes") is True, "LIQUID_EXPANSION이 getComputableScenarioIds()에 없음")
-    tr.check("LE_012_no_W_field_means_excluded_from_governing_selection",
-             out.get("govVerdictWhenOnlyLiquidExpansion") == "INSUFFICIENT_INPUT",
-             f"W 필드가 없는 §5.11 결과가 selectGoverningReliefLoad에서 자동으로 무효 처리되지 않음(우발적 kg/h 취급 방지 설계 확인 실패): {out.get('govVerdictWhenOnlyLiquidExpansion')}")
+    tr.check("LE_011_quantity_is_mass_flow",
+             out.get("quantityIsMassFlow") is True, "§5.11 결과 unit이 MASS_FLOW로 분류되지 않음")
+    tr.check("LE_012_included_in_governing_selection",
+             out.get("govVerdictWhenOnlyLiquidExpansion") == "OK"
+             and out.get("govGoverningScenarioId") == "LIQUID_EXPANSION"
+             and out.get("adapterValid") is True
+             and abs(out.get("adapterW", -999) - 70.0) < 1e-9,
+             f"§5.11이 governing 후보로 정상 편입되지 않음(C-4.21 핵심 변경 실패): {out}")
+    tr.check("LE_013_governing_selection_by_magnitude",
+             out.get("govWhenLE_bigger") == "LIQUID_EXPANSION" and out.get("govWhenLE_smaller") == "OUTLET_BLOCKED",
+             f"§5.11과 다른 MASS_FLOW 시나리오 간 실제 크기 비교로 governing이 정해지지 않음: {out.get('govWhenLE_bigger')}/{out.get('govWhenLE_smaller')}")
 
     return tr
 
@@ -2524,7 +2541,7 @@ def test_exchanger_failure_scenario_contract() -> TestResult:
     tr.check("EF_001_prior_scenarios_untouched",
              "function calculateLiquidThermalExpansionScenario" in rl_src
              and "function calculateAbnormalHeatVaporScenario" in rl_src
-             and "V = α·Q / (500·SG·Cp)" in rl_src,
+             and "W = QF·β / S" in rl_src,
              "C-4.1~C-4.5 구현이 C-4.6 작업 중 변경됨 — 불필요한 수정 금지")
     fn_body = rl_src.split("function calculateExchangerFailureScenario")[1].split("function calculate")[0] if "function calculateExchangerFailureScenario" in rl_src else ""
     tr.check("EF_002_result_field_is_area_not_W_or_value",
@@ -2701,7 +2718,7 @@ def test_external_fire_scenario_contract() -> TestResult:
     tr.check("XF_001_prior_scenarios_untouched",
              "function calculateExchangerFailureScenario" in rl_src
              and "function calculateLiquidThermalExpansionScenario" in rl_src
-             and "V = α·Q / (500·SG·Cp)" in rl_src,
+             and "W = QF·β / S" in rl_src,
              "C-4.1~C-4.6 구현이 C-4.7 작업 중 변경됨 — 불필요한 수정 금지")
 
     fn_body = rl_src.split("function calculateExternalFireScenario")[1].split("function calculate")[0] if "function calculateExternalFireScenario" in rl_src else ""
@@ -2970,7 +2987,7 @@ const out = {{}};
 {{
   const results = [
     {{ scenarioId:"OUTLET_BLOCKED",   status:"OK",         W:100,  unit:"kg/h" }},
-    {{ scenarioId:"LIQUID_EXPANSION", status:"COMPUTABLE", value:5.5, unit:"m3/h" }},
+    {{ scenarioId:"FAKE_VOLUME_FLOW_EXAMPLE", status:"COMPUTABLE", value:5.5, unit:"m3/h" }},
     {{ scenarioId:"EXCHANGER_FAIL",   status:"COMPUTABLE", requiredOrificeArea_m2:0.02, unit:"m2" }},
   ];
   const gov = selectGoverningReliefLoad(results);
@@ -2978,11 +2995,11 @@ const out = {{}};
   out.mixedGoverningId = gov.governingScenarioId;
   out.mixedAllScenariosLen = gov.allScenarios.length;
   out.mixedAllScenariosPreserved = gov.allScenarios.length === 3
-    && gov.allScenarios.some(r => r.scenarioId === "LIQUID_EXPANSION" && r.value === 5.5)
+    && gov.allScenarios.some(r => r.scenarioId === "FAKE_VOLUME_FLOW_EXAMPLE" && r.value === 5.5)
     && gov.allScenarios.some(r => r.scenarioId === "EXCHANGER_FAIL" && r.requiredOrificeArea_m2 === 0.02);
   const audit = gov.quantityAudit;
   out.auditLen = audit.length;
-  const leAudit = audit.find(a => a.scenarioId === "LIQUID_EXPANSION");
+  const leAudit = audit.find(a => a.scenarioId === "FAKE_VOLUME_FLOW_EXAMPLE");
   const efAudit = audit.find(a => a.scenarioId === "EXCHANGER_FAIL");
   const obAudit = audit.find(a => a.scenarioId === "OUTLET_BLOCKED");
   out.leExcluded = leAudit && leAudit.includedInGoverningSelection === false && leAudit.exclusionReason === "INCOMPATIBLE_QUANTITY" && leAudit.quantity === "VOLUME_FLOW";
@@ -2993,7 +3010,7 @@ const out = {{}};
 // US-005: 후보 0개(전부 m3/h·m2)면 INSUFFICIENT_INPUT
 {{
   const results = [
-    {{ scenarioId:"LIQUID_EXPANSION", status:"COMPUTABLE", value:5.5, unit:"m3/h" }},
+    {{ scenarioId:"FAKE_VOLUME_FLOW_EXAMPLE", status:"COMPUTABLE", value:5.5, unit:"m3/h" }},
     {{ scenarioId:"EXCHANGER_FAIL",   status:"COMPUTABLE", requiredOrificeArea_m2:0.02, unit:"m2" }},
   ];
   const gov = selectGoverningReliefLoad(results);
@@ -3156,10 +3173,30 @@ const baseInp = {{ W:9999, P1:10, P2:1, T:320, M:44, k:1.28, Kd:0.975, Kb:1.0, m
   out.massFlowManualWPreserved = eng.stepData?.reliefLoadSource?.manualW === 9999;
 }}
 
+// RS-001b (C-4.21) — sourceLabel 3-way 정합성: CaseView가 adapter에
+// sourceLabel을 실어보내면 Engine이 그걸 그대로 stepData.reliefLoadSource.source
+// 에 반영해야 한다(舊 이진 GOVERNING_RELIEF_LOAD 고정 라벨 금지).
+{{
+  const le = calculateLiquidThermalExpansionScenario({{ alpha_per_degC:0.0009, Q_kcal_per_hr:8000, Cp_kcal_per_kgC:1.0 }});
+  const leSel = selectGoverningReliefLoad([le]);
+  const leAdapterRaw = buildReliefSizingInput(leSel);
+  const leAdapter = {{ ...leAdapterRaw, sourceLabel: "LIQUID_THERMAL_EXPANSION" }};
+  const eng = api520Engine(baseInp, "safetyValve", null, leAdapter);
+  out.leSourceLabelReflected = eng.stepData?.reliefLoadSource?.source === "LIQUID_THERMAL_EXPANSION";
+  out.leEngineUsedCorrectW = eng.stepData?.orifice?.W === leAdapterRaw.W;
+  out.leGoverningScenarioIdPreserved = eng.stepData?.reliefLoadSource?.governingScenarioId === "LIQUID_EXPANSION";
+
+  // sourceLabel 없이(舊 호출부/adapter) 호출해도 하위호환 fallback이 살아있어야 함
+  const govSel = selectGoverningReliefLoad([{{ scenarioId:"OUTLET_BLOCKED", status:"OK", W:500, unit:"kg/h" }}]);
+  const govAdapterNoLabel = buildReliefSizingInput(govSel); // sourceLabel 없음(舊 방식)
+  const eng2 = api520Engine(baseInp, "safetyValve", null, govAdapterNoLabel);
+  out.backwardCompatFallback = eng2.stepData?.reliefLoadSource?.source === "GOVERNING_RELIEF_LOAD";
+}}
+
 // RS-002: VOLUME_FLOW(m3/h) 단독 → selector가 INSUFFICIENT_INPUT → adapter invalid → engine 에러(거부)
 {{
   const sel = selectGoverningReliefLoad([
-    {{ scenarioId:"LIQUID_EXPANSION", status:"COMPUTABLE", value:5.5, unit:"m3/h" }},
+    {{ scenarioId:"FAKE_VOLUME_FLOW_EXAMPLE", status:"COMPUTABLE", value:5.5, unit:"m3/h" }},
   ]);
   const adapter = buildReliefSizingInput(sel);
   out.volumeFlowAdapterValid = adapter.valid;
@@ -3337,9 +3374,17 @@ console.log(JSON.stringify(out));
     tr.check("RS_013_c3_inlet_loss_regression",
              out.get("inletLossStillIndependentOfSizing") is True,
              f"governing W 경로에서 C-3 inlet loss 독립성이 깨짐: {out}")
+    tr.check("RS_014_sourceLabel_reflects_liquid_thermal_expansion",
+             out.get("leSourceLabelReflected") is True
+             and out.get("leEngineUsedCorrectW") is True
+             and out.get("leGoverningScenarioIdPreserved") is True,
+             f"C-4.21: §5.11이 W 소스일 때 stepData.reliefLoadSource.source가 LIQUID_THERMAL_EXPANSION으로 반영되지 않음: {out}")
+    tr.check("RS_015_sourceLabel_backward_compat_fallback",
+             out.get("backwardCompatFallback") is True,
+             f"sourceLabel 없는 舊 adapter 호출부의 하위호환 fallback(GOVERNING_RELIEF_LOAD)이 깨짐: {out}")
     tr.check("RS_018_engine_version_lock",
-             ENGINE_VERSION == "1.6.0",
-             f"ENGINE_VERSION이 예상과 다름(1.6.0 유지 결정): {ENGINE_VERSION}")
+             ENGINE_VERSION == "2.0.0",
+             f"ENGINE_VERSION이 예상과 다름(C-4.21에서 2.0.0으로 major bump 결정): {ENGINE_VERSION}")
     tr.check("RS_019_engine_version_decision_documented",
              "버전 결정: ENGINE_VERSION은 이번 단계에서 올리지 않는다" in api_src,
              "ENGINE_VERSION 변경 필요 여부에 대한 명시적 판단 근거가 소스에 문서화되지 않음")
@@ -3373,11 +3418,11 @@ def test_external_fire_ux_contract() -> TestResult:
              "function calculateExternalFireScenario(input) {" in rl_src,
              "calculateExternalFireScenario() 시그니처가 변경됨 — 계산 엔진 수정 금지 위반")
     tr.check("EF_000b_engine_version_unchanged",
-             'const ENGINE_VERSION = "1.6.0";' in api_src,
-             "ENGINE_VERSION이 1.6.0에서 변경됨")
+             'const ENGINE_VERSION = "2.0.0";' in api_src,
+             "ENGINE_VERSION이 2.0.0에서 변경됨(C-4.21 이후 기준)")
     tr.check("EF_000c_snapshot_engine_version_unchanged",
-             'const SNAPSHOT_ENGINE_VERSION = "1.6.0";' in snap_src,
-             "SNAPSHOT_ENGINE_VERSION이 1.6.0에서 변경됨")
+             'const SNAPSHOT_ENGINE_VERSION = "2.0.0";' in snap_src,
+             "SNAPSHOT_ENGINE_VERSION이 2.0.0에서 변경됨(C-4.21 이후 기준)")
 
     # ── UI는 계산하지 않는다(§5.12도 동일 원칙) ─────────────────────
     tr.check("EF_001_inputview_never_calls_selector_adapter_or_engine",
@@ -4018,9 +4063,9 @@ function buildReliefLoadSnapshot(reliefLoadAdapter, reliefLoadSelectorResult,
         }} : undefined)
       : undefined;
 
-  const liquidExpansionSupplementary = (liquidExpansionResult.status === "COMPUTABLE") ? {{
+  const liquidExpansionSupplementary = (liquidExpansionResult.status === "OK") ? {{
     scenario: "LIQUID_THERMAL_EXPANSION", section: "§5.11", status: liquidExpansionResult.status,
-    value: liquidExpansionResult.value, unit: liquidExpansionResult.unit,
+    W: liquidExpansionResult.W, unit: liquidExpansionResult.unit,
   }} : null;
   const exchangerFailureSupplementary = (exchangerFailureResult.status === "COMPUTABLE") ? {{
     scenario: "EXCHANGER_FAILURE", section: "§5.13", status: exchangerFailureResult.status,
@@ -4044,7 +4089,8 @@ function buildReliefLoadSnapshot(reliefLoadAdapter, reliefLoadSelectorResult,
   const snap = buildReliefLoadSnapshot(adapter, selector, le, ex, true, true);
   out.bothGoverningPreserved = snap.governing === "OUTLET_BLOCKED";
   out.bothSupplementaryLen = snap.supplementary.length;
-  out.bothHasLE = snap.supplementary.some(s => s.scenario === "LIQUID_THERMAL_EXPANSION" && s.value === 0.025);
+  // C-4.21: 舊 식 값(0.025)이 아니라 새 식 W=QF·β/S = 5000*0.001/0.5 = 10
+  out.bothHasLE = snap.supplementary.some(s => s.scenario === "LIQUID_THERMAL_EXPANSION" && s.W === 10);
   out.bothHasEX = snap.supplementary.some(s => s.scenario === "EXCHANGER_FAILURE" && s.requiredOrificeArea_m2 === 0.02);
   out.governingNeverBecomesSupplementary = snap.governing !== "EXCHANGER_FAILURE" && snap.governing !== "LIQUID_THERMAL_EXPANSION";
   const ex2 = calculateExchangerFailureScenario({{ exchangerType:"SHELL_AND_TUBE", tubeCrossSectionArea_m2:0.01 }});
