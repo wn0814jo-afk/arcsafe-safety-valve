@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:b30e6eaf397c\n\n' +
+    box.textContent = '[ERROR] BUILD:c2aab161852e\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:b30e6eaf397c\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:c2aab161852e\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:b30e6eaf397c | 2026-09-12T15:51:38Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:c2aab161852e | 2026-09-13T07:35:57Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "b30e6eaf397c";
+const __BUILD_HASH__ = "c2aab161852e";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -4542,17 +4542,19 @@ function ReliefLoadScenarioSection({
 // 값을 그대로 props로 받는다 — 이 컴포넌트는 read-only 표시 계층
 // 원칙을 지켜 여기서 calculateLiquidThermalExpansionScenario를 직접
 // 호출하거나 계산식을 재구현하지 않는다.
-function LiquidExpansionSupplementaryBlock({ value, onFieldChange, result }) {
+function LiquidExpansionSupplementaryBlock({ value, onFieldChange, result, isActiveWSource }) {
   const [open, setOpen] = useState(false);
   return (
     <div style={{background:T.cardBg,borderRadius:14,padding:14,marginBottom:10,border:`1.5px solid ${T.border}`}}>
       <div style={{fontSize:12,fontWeight:900,color:T.navy,fontFamily:font.sans,marginBottom:3}}>
-        부가 계산 — 액체부피팽창 (§5.11, 참고용)
+        {isActiveWSource ? "열팽창용 안전밸브 (§5.11, C-C-13-2026 — 현재 W 산정 근거)" : "부가 계산 — 액체부피팽창 (§5.11, 참고용)"}
       </div>
       <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginBottom:10,lineHeight:1.5}}>
-        위의 방출 시나리오 선택(Manual W 포함)과는 완전히 독립적으로 계산할 수 있는 참고용 항목입니다.
-        어떤 시나리오가 선택되어 있든 상관없이 열어서 계산할 수 있으며, 결과는 소요분출량(W, kg/h) 산정에
-        자동으로 반영되지 않습니다.
+        {isActiveWSource
+          ? "위 \"2 방출 시나리오\"에서 열팽창용 안전밸브를 W 산정 근거로 선택하셨습니다 — 아래 계산 결과가 소요분출량(W, kg/h)에 그대로 반영되어 실제 sizing에 쓰입니다."
+          : "위의 방출 시나리오 선택(Manual W 포함)과는 완전히 독립적으로 계산할 수 있는 참고용 항목입니다. " +
+            "어떤 시나리오가 선택되어 있든 상관없이 열어서 계산할 수 있으며, 결과는 소요분출량(W, kg/h) 산정에 " +
+            "자동으로 반영되지 않습니다 — 반영하려면 위에서 \"열팽창용 안전밸브\"를 선택하세요."}
       </div>
       <button onClick={()=>setOpen(o=>!o)}
         style={{fontSize:10,color:T.sub,background:"none",border:`1px dashed ${T.border}`,
@@ -5076,6 +5078,7 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
           value={liquidExpansionInput}
           onFieldChange={onLiquidExpansionFieldChange}
           result={liquidExpansionResult}
+          isActiveWSource={wInputSource==="LIQUID_THERMAL_EXPANSION"}
         />
       </div>
 

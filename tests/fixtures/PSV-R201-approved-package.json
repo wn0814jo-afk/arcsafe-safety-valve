@@ -6,8 +6,8 @@
   },
   "identity": {
     "caseId": "C-2026-001",
-    "snapshotId": "SNAP-C-2026-001-1789228302413",
-    "snapshotHash": "3f0ed501"
+    "snapshotId": "SNAP-C-2026-001-1789284961181",
+    "snapshotHash": "f3156f76"
   },
   "asset": {
     "equipment": {
@@ -297,25 +297,25 @@
     "state": "APPROVED",
     "decision": {
       "reasons": [],
-      "evaluatedAt": "2026-09-12T15:51:42.413Z",
+      "evaluatedAt": "2026-09-13T07:36:01.181Z",
       "engineVersion": "2.0.0"
     }
   },
   "approvals": [
     {
-      "approvalId": "APPR-SNAP-C-2026-001-1789228302413-1789228302418",
+      "approvalId": "APPR-SNAP-C-2026-001-1789284961181-1789284961185",
       "signer": "홍길동",
       "role": "senior_engineer",
-      "approvedAt": "2026-09-12T15:51:42.413Z",
+      "approvedAt": "2026-09-13T07:36:01.181Z",
       "decision": "approve",
       "comment": "배관 개정(MOC-2026-017) 검토 완료, 이상 없음",
-      "signature": "189dcb21df0561c7c7264687c8b3eb160229b4b737a82a27010a7a7c92c3046f",
+      "signature": "1577f7702f43b6c93b62334873f80b14ad18cce43b1e82ae00404d80cb10501d",
       "verified": true
     }
   ],
   "_fixtureMeta": {
     "engineVersion": "2.0.0",
-    "buildHash": "b30e6eaf397c",
+    "buildHash": "c2aab161852e",
     "generatedAt": "2026-07-10T10:10:00.000Z",
     "fixtureName": "PSV-R201-approved"
   }
