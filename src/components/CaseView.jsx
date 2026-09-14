@@ -133,6 +133,59 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   const handleExchangerFailureFieldChange = (key, val) =>
     setExchangerFailureInput(p => ({ ...p, [key]: val }));
 
+  // ── C-4.22-B — Draft persistence (device-local, caseId 단위) ──
+  // 사용자 승인 설계 그대로: ArcSafe.jsx의 Case 객체는 건드리지 않고,
+  // CaseView가 caseData.id를 키로 직접 CaseRepository의 caseDrafts
+  // store에 읽고 쓴다. Engine/Snapshot/Report는 이 블록의 존재를 모른다
+  // (PERSISTENCE-001) — 아래 두 useEffect는 순수하게 이 컴포넌트의
+  // 로컬 입력 state를 기기에 미러링할 뿐, 계산에는 관여하지 않는다.
+  const caseId = caseData.id;
+  const [draftHydrated, setDraftHydrated] = useState(false);
+
+  // 1) 최초 마운트 시 저장된 Draft를 복원한다. 저장된 Draft가 없으면
+  //    (res.draft === null) 아무것도 하지 않고 지금 있는 초기값(Equipment
+  //    기반 기본값 등, initialInputs 참고)을 그대로 쓴다.
+  useEffect(() => {
+    if (!CaseRepository.isAvailable()) { setDraftHydrated(true); return; }
+    let cancelled = false;
+    CaseRepository.loadDraft(caseId).then(res => {
+      if (cancelled) return;
+      const d = (res.ok && res.draft) ? res.draft : null;
+      if (d) {
+        if (d.screen !== undefined) setScreen(d.screen);
+        if (d.inputs !== undefined) setInputs(d.inputs);
+        if (d.deviceType !== undefined) setDeviceType(d.deviceType);
+        if (d.reliefLoadScenarioType !== undefined) setReliefLoadScenarioType(d.reliefLoadScenarioType);
+        if (d.reliefLoadScenarioInput !== undefined) setReliefLoadScenarioInput(d.reliefLoadScenarioInput);
+        if (d.wInputSource !== undefined) setWInputSource(d.wInputSource);
+        if (d.liquidExpansionInput !== undefined) setLiquidExpansionInput(d.liquidExpansionInput);
+        if (d.exchangerFailureInput !== undefined) setExchangerFailureInput(d.exchangerFailureInput);
+      }
+      setDraftHydrated(true);
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [caseId]);
+
+  // 2) hydrate 완료 후부터만 저장을 시작한다 — hydrate 전에 저장이
+  //    먼저 발동하면 방금 불러오려던 draft를 빈 초기값으로 덮어쓸 수
+  //    있는 race condition을 막기 위한 게이트. 이후에는 감시 대상
+  //    state가 바뀔 때마다 600ms debounce로 저장한다(키 입력마다
+  //    쓰지 않음).
+  useEffect(() => {
+    if (!draftHydrated || !CaseRepository.isAvailable()) return;
+    const timer = setTimeout(() => {
+      CaseRepository.saveDraft(caseId, {
+        screen, inputs, deviceType,
+        reliefLoadScenarioType, reliefLoadScenarioInput,
+        wInputSource, liquidExpansionInput, exchangerFailureInput,
+      });
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [draftHydrated, caseId, screen, inputs, deviceType,
+      reliefLoadScenarioType, reliefLoadScenarioInput,
+      wInputSource, liquidExpansionInput, exchangerFailureInput]);
+
   const handleInputChange = (key, val) => setInputs(p => ({ ...p, [key]: val }));
 
   // 시나리오 전환 — 반드시 입력을 리셋한다(동일 타입 재클릭은 리셋하지

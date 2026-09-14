@@ -56,6 +56,7 @@ BUILD_ORDER = [
     SRC / 'asset' / 'diff.js',
     SRC / 'asset' / 'impact.js',
     SRC / 'case' / 'history.js',
+    SRC / 'persistence' / 'CaseRepository.js',
     SRC / 'approval' / 'validator.js',
     SRC / 'report' / 'schema.js',
     SRC / 'report' / 'createPackage.js',
@@ -104,6 +105,7 @@ FORBIDDEN_IMPORTS = {
         ("WF_TRANSITIONS",     "engine -> workflow 역참조 금지"),
         ("WorkflowTransition", "engine -> UI component 역참조 금지"),
         ("Dashboard",          "engine -> UI component 역참조 금지"),
+        ("CaseRepository",     "PERSISTENCE-001: engine -> persistence 역참조 금지"),
     ],
     "snapshot/": [
         ("useState",           "snapshot -> React hook 금지"),
@@ -111,6 +113,7 @@ FORBIDDEN_IMPORTS = {
         ("React",              "snapshot -> React 참조 금지"),
         ("window.",            "snapshot -> browser API 금지"),
         ("document.",          "snapshot -> browser API 금지"),
+        ("CaseRepository",     "PERSISTENCE-001: snapshot -> persistence 역참조 금지"),
     ],
     "workflow/": [
         ("useState",           "workflow -> React hook 금지"),
@@ -151,6 +154,7 @@ FORBIDDEN_IMPORTS = {
         ("document.",          "case -> browser API 금지"),
         ("api520Engine",       "case -> engine 직접 호출 금지"),
         ("createSnapshot",     "case -> snapshot 생성 금지 (조회/보관만 담당)"),
+        ("indexedDB",          "PERSISTENCE-001: case(history.js) -> persistence 참조 금지 (순수 조회 함수 유지)"),
     ],
     "approval/": [
         ("useState",           "approval -> React hook 금지"),
@@ -185,6 +189,7 @@ FORBIDDEN_IMPORTS = {
         ("calculateKb(",          "REPORT-PKG-005: engine 계산 금지"),
         ("detectMOC(",            "REPORT-PKG-005: MOC 재계산 금지"),
         ("verifySignature(",      "REPORT-PKG-005: 서명 재계산 금지 — 외부 결과만 반영"),
+        ("CaseRepository",        "PERSISTENCE-001: report -> persistence 역참조 금지"),
     ],
     "report/renderer/pdf/template.js": [
         ("computeBackpressure(",  "PDF-001: renderer -> engine 계산 금지"),
@@ -298,6 +303,10 @@ REQUIRED_SYMBOLS = [
     # case
     ('case/history.js',           ['appendSnapshot', 'resolveSnapshot',
                                    'getLatestSnapshot', 'hasDuplicateHash']),
+    ('persistence/CaseRepository.js', ['CaseRepository', 'isAvailable', 'load(',
+                                   'saveCase', 'saveApproval', 'saveDraft', 'loadDraft',
+                                   'saveEquipmentRevision', 'saveDischargeRevision', 'wipeAll',
+                                   'PERSISTENCE-001', 'PERSISTENCE-002', 'PERSISTENCE-003']),
     # renderers
     ('renderers/index.jsx',       ['PipeFlowRenderer', 'PressChartRenderer',
                                    'EvidenceCard', 'ChecklistRenderer']),

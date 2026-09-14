@@ -111,7 +111,7 @@ function AboutBanner() {
   );
 }
 
-function Dashboard({ cases, onOpenCase, onNewCase, onOpenAssetMaster }) {
+function Dashboard({ cases, onOpenCase, onNewCase, onOpenAssetMaster, onWipeAllData }) {
   const [reviewType, setReviewType] = useState("정기 PSM 검토");
   const REVIEW_OPTIONS = ["정기 PSM 검토","최초 설치 검토","변경 검토 (MOC)","사고 후 검토"];
 
@@ -149,6 +149,21 @@ function Dashboard({ cases, onOpenCase, onNewCase, onOpenAssetMaster }) {
           <div style={{fontSize:11,color:T.gray,marginTop:4}}>위 버튼으로 설비를 선택해 검토를 시작하세요</div>
         </div>
       )}
+
+      {/* C-4.22-B PERSISTENCE-005: 과도한 경고 UI 없이 짧은 고지 한 줄 +
+          접근하기 어려운 위치에 최소한의 초기화 링크만 둔다. */}
+      <div style={{marginTop:28,paddingTop:14,borderTop:`1px solid ${T.border}`,textAlign:"center"}}>
+        <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginBottom:6}}>
+          이 자료는 현재 기기·브라우저에만 저장됩니다. 다른 기기에서는 확인할 수 없습니다.
+        </div>
+        {onWipeAllData && (
+          <button onClick={onWipeAllData}
+            style={{background:"none",border:"none",color:T.gray,fontSize:9,
+              fontFamily:font.sans,textDecoration:"underline",cursor:"pointer",padding:4}}>
+            이 기기의 저장 데이터 초기화
+          </button>
+        )}
+      </div>
     </div>
   );
 }

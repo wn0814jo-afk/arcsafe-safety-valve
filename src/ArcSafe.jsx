@@ -5,12 +5,14 @@ function ArcSafe() {
   // "현재 상태" 목록(equipments/dischargeSystems)은 항상 파생값이다.
   // 저장하는 것: equipmentHistory / dischargeHistory
   // 계산하는 것: equipments / dischargeSystems (아래 useMemo)
-  const [equipmentHistory, setEquipmentHistory] = useState(() =>
-    Object.freeze(SAMPLE_EQUIPMENT.map(e => createEquipment(e)))
-  );
-  const [dischargeHistory, setDischargeHistory] = useState(() =>
-    Object.freeze(SAMPLE_DISCHARGE_SYSTEMS.map(d => createDischargeSystem(d)))
-  );
+  //
+  // C-4.22-B(PERSISTENCE-001): 초기값을 더 이상 SAMPLE_*로 즉시 채우지
+  // 않는다 — 아래 hydrate useEffect가 IndexedDB에 저장된 데이터가
+  // 있으면 그걸로, 완전히 비어있을 때만(최초 실행) 샘플로 채운다.
+  // "복귀 사용자에게 샘플 데이터가 잠깐 보였다가 실제 데이터로 바뀌는"
+  // 깜빡임을 피하기 위해 초기 useState는 빈 배열로 시작한다.
+  const [equipmentHistory, setEquipmentHistory] = useState(() => Object.freeze([]));
+  const [dischargeHistory, setDischargeHistory] = useState(() => Object.freeze([]));
   const equipments = useMemo(
     () => getAllLatestRevisions(equipmentHistory), [equipmentHistory]
   );
@@ -20,6 +22,40 @@ function ArcSafe() {
   const [cases,      setCases]      = useState([]);
   const [activeCase, setActiveCase] = useState(null);
   const [screen,     setScreen]     = useState("dashboard");
+
+  // ── C-4.22-B — Device-local persistence hydrate (최초 1회) ──
+  // PERSISTENCE-002: 이 로드가 실패해도(IndexedDB 미지원/차단 등) 앱은
+  // 그냥 빈 상태(기존 구조 그대로, 메모리 전용)로 정상 동작한다 —
+  // 계산/화면 렌더링을 절대 막지 않는다.
+  const [persistenceStatus, setPersistenceStatus] = useState(
+    CaseRepository.isAvailable() ? "loading" : "unavailable"
+  );
+  useEffect(() => {
+    if (!CaseRepository.isAvailable()) return;
+    let cancelled = false;
+    CaseRepository.load().then(res => {
+      if (cancelled) return;
+      if (!res.ok) { setPersistenceStatus("error"); return; }
+      const hasAnyStoredData =
+        res.equipmentHistory.length > 0 || res.dischargeHistory.length > 0 || res.cases.length > 0;
+      if (hasAnyStoredData) {
+        if (res.equipmentHistory.length > 0) setEquipmentHistory(Object.freeze(res.equipmentHistory));
+        if (res.dischargeHistory.length > 0) setDischargeHistory(Object.freeze(res.dischargeHistory));
+        setCases(res.cases);
+      } else {
+        // 완전히 빈 DB = 최초 실행. 지금 쓰는 샘플로 채우고, 그 샘플을
+        // 그대로 저장해둔다 — 다음 방문부터는 이 분기를 다시 안 탄다.
+        const seedEquip = Object.freeze(SAMPLE_EQUIPMENT.map(e => createEquipment(e)));
+        const seedDischarge = Object.freeze(SAMPLE_DISCHARGE_SYSTEMS.map(d => createDischargeSystem(d)));
+        setEquipmentHistory(seedEquip);
+        setDischargeHistory(seedDischarge);
+        seedEquip.forEach(e => CaseRepository.saveEquipmentRevision(e));
+        seedDischarge.forEach(d => CaseRepository.saveDischargeRevision(d));
+      }
+      setPersistenceStatus("ok");
+    });
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // AUTH — auth.archsafe.co.kr SDK 연동 (AUTH_INTEGRATION_STANDARD.md 표준)
   // 절대 규칙: /auth/me 등을 직접 fetch하지 않고 AuthClient SDK만 통해 접근.
@@ -106,46 +142,88 @@ function ArcSafe() {
     setCases(prev => [...prev, newCase]);
     setActiveCase(newCase);
     setScreen("dashboard");
+    // C-4.22-B: Case 생성 즉시 저장 — 이 레코드가 있어야 새로고침 후
+    // CaseView가 같은 caseId로 재진입해서 caseDrafts를 찾을 수 있다.
+    CaseRepository.saveCase(newCase);
   };
 
   // ASSET-HISTORY-001: append만 허용, 기존 revision을 교체·삭제하지 않는다.
-  const handleAddEquipment = (eq) =>
+  const handleAddEquipment = (eq) => {
     setEquipmentHistory(prev => appendRevision(prev, eq));
+    CaseRepository.saveEquipmentRevision(eq);
+  };
 
   // EQUIPMENT-MOC + ASSET-HISTORY-001: id는 유지, revision은 append.
   // 이전 revision은 overwrite되지 않고 history에 그대로 남는다 —
   // 한 번도 Case에서 참조되지 않은 revision도 소실되지 않음.
-  const handleReviseEquipment = (revisedEq) =>
+  const handleReviseEquipment = (revisedEq) => {
     setEquipmentHistory(prev => appendRevision(prev, revisedEq));
+    CaseRepository.saveEquipmentRevision(revisedEq);
+  };
 
-  const handleAddDischargeSystem = (ds) =>
+  const handleAddDischargeSystem = (ds) => {
     setDischargeHistory(prev => appendRevision(prev, ds));
+    CaseRepository.saveDischargeRevision(ds);
+  };
 
   // GEOMETRY-002 + ASSET-HISTORY-001: id는 그대로, revision은 append.
   // Asset도 Snapshot과 동일하게 append-only history로 관리하고,
   // "현재 상태"는 저장하지 않고 history로부터 파생시킨다(equipments/dischargeSystems useMemo).
   // MOC 감지는 이 append 이후 케이스 재진입 시 assetFingerprint 비교로 자동 발동.
-  const handleReviseDischargeSystem = (revisedDs) =>
+  const handleReviseDischargeSystem = (revisedDs) => {
     setDischargeHistory(prev => appendRevision(prev, revisedDs));
+    CaseRepository.saveDischargeRevision(revisedDs);
+  };
 
   // HISTORY-001과 동일 원칙: overwrite 금지, service.js가 만든 새 배열만 반영
   const handleApprovalUpdate = (caseId, approvals) => {
-    setCases(prev => prev.map(c =>
-      c.id !== caseId ? c : { ...c, approvals }
-    ));
+    let updatedCase = null;
+    setCases(prev => prev.map(c => {
+      if (c.id !== caseId) return c;
+      updatedCase = { ...c, approvals };
+      return updatedCase;
+    }));
     setActiveCase(prev =>
       prev && prev.id === caseId ? { ...prev, approvals } : prev
     );
+    // C-4.22-B: PERSISTENCE-002 — 저장 실패가 승인 처리 자체를 막지
+    // 않는다(이미 setCases/setActiveCase로 UI는 갱신 완료). fire-and-forget.
+    if (updatedCase) CaseRepository.saveApproval(updatedCase);
   };
 
   // HISTORY-001: overwrite 금지 — 항상 appendSnapshot()으로 history에 추가
   const handleSnapshotCreate = (caseId, snap) => {
-    setCases(prev => prev.map(c =>
-      c.id !== caseId ? c : appendSnapshot(c, snap)
-    ));
+    let updatedCase = null;
+    setCases(prev => prev.map(c => {
+      if (c.id !== caseId) return c;
+      updatedCase = appendSnapshot(c, snap);
+      return updatedCase;
+    }));
     setActiveCase(prev =>
       prev && prev.id === caseId ? appendSnapshot(prev, snap) : prev
     );
+    // C-4.22-B: Engine 계산 → Snapshot 생성 → 화면 표시는 이미 위에서
+    // 완료됐다. persistence는 그 뒤에 별도로 시도한다 — 여기서 실패해도
+    // 이미 만들어진 Snapshot/화면 표시는 그대로 유지된다(PERSISTENCE-002).
+    if (updatedCase) CaseRepository.saveCase(updatedCase);
+  };
+
+  // C-4.22-B — "이 기기의 저장 데이터 초기화". 서버 백업이 없으므로
+  // 되돌릴 수 없다는 걸 명확히 경고한 뒤에만 실행한다. 초기화 후에는
+  // React state 전체를 IndexedDB 결과와 다시 맞추는 것보다 페이지를
+  // 새로고침하는 편이 훨씬 안전하다(state 잔여물이 남을 위험이 없음).
+  const handleWipeAllData = async () => {
+    const confirmed = window.confirm(
+      "이 기기의 모든 archsafe 저장 자료(설비대장, 검토 중인 Case, Snapshot)가 " +
+      "삭제되며, 서버 백업이 없어 복구할 수 없습니다.\n정말 초기화하시겠습니까?"
+    );
+    if (!confirmed) return;
+    const res = await CaseRepository.wipeAll();
+    if (!res.ok) {
+      alert(`초기화에 실패했습니다: ${res.error}`);
+      return;
+    }
+    window.location.reload();
   };
 
   const curScreen = activeCase ? "case"
@@ -250,6 +328,7 @@ function ArcSafe() {
             onOpenCase={handleOpenCase}
             onNewCase={()=>setScreen("assets")}
             onOpenAssetMaster={()=>setScreen("assets")}
+            onWipeAllData={CaseRepository.isAvailable() ? handleWipeAllData : null}
           />
         )}
       </div>

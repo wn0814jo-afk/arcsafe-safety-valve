@@ -6352,6 +6352,109 @@ def test_ui_engine_wiring() -> TestResult:
 # ════════════════════════════════════════════════════════════════
 #  MAIN
 # ════════════════════════════════════════════════════════════════
+def test_case_repository_contract() -> TestResult:
+    tr = TestResult("PERSISTENCE-001", "Sprint C-4.22-B — Device-local Case Persistence (IndexedDB)")
+
+    repo_src = (SRC / "persistence" / "CaseRepository.js").read_text()
+
+    # ── 구조 검증 (소스 텍스트) ──
+    tr.check("PR_001_no_server_calls",
+             "fetch(" not in repo_src and "XMLHttpRequest" not in repo_src,
+             "PERSISTENCE-003 위반 — 서버 호출 코드가 존재함(이번 스프린트는 기기 저장만 허용)")
+    tr.check("PR_002_frozen_export",
+             "Object.freeze({" in repo_src and "const CaseRepository = Object.freeze(" in repo_src,
+             "CaseRepository가 freeze되지 않음")
+    for method in ["isAvailable", "load", "saveCase", "saveApproval", "saveDraft",
+                   "loadDraft", "saveEquipmentRevision", "saveDischargeRevision", "wipeAll"]:
+        tr.check(f"PR_003_method_{method}_exists",
+                 f"function {method}" in repo_src or f"{method} =" in repo_src,
+                 f"{method} 메서드가 없음")
+    tr.check("PR_004_never_throws_principle_documented",
+             "PERSISTENCE-002" in repo_src and "절대 throw하지 않고" in repo_src,
+             "저장 실패가 throw하지 않는다는 계약이 문서화되어 있지 않음")
+
+    # ── Engine/Snapshot/Report/case 레이어가 이 파일을 참조하지 않는지
+    #    (build.py의 FORBIDDEN_IMPORTS와 별개로 여기서도 직접 재확인 —
+    #    이중 가드, 하나가 우회되어도 다른 하나가 잡도록) ──
+    for layer_file in ["engine/api520.js", "engine/relief_load.js", "engine/backpressure.js",
+                        "snapshot/create.js", "report/createPackage.js", "case/history.js"]:
+        layer_src = (SRC / layer_file).read_text()
+        tr.check(f"PR_005_{layer_file.replace('/','_')}_no_persistence_reference",
+                 "CaseRepository" not in layer_src and "indexedDB" not in layer_src,
+                 f"{layer_file}가 CaseRepository/indexedDB를 참조함 — PERSISTENCE-001(Engine/Snapshot/Report는 저장을 모른다) 위반")
+
+    # ── 런타임 검증: indexedDB가 아예 없는 환경(순수 node)에서 모든
+    #    메서드가 throw 없이 {ok:false} 로 조용히 실패하는지 — 이게
+    #    PERSISTENCE-002의 핵심이며, 별도 npm 의존성 없이(fake-indexeddb
+    #    미사용) 검증 가능한 가장 중요한 런타임 계약이다. ──
+    node = shutil.which("node")
+    if not node:
+        tr.check("PR_node_available", False, "node를 찾을 수 없어 실행 검증을 건너뜀")
+        return tr
+
+    test_body_js = """
+(async () => {
+  const out = {};
+  out.isAvailableFalse = CaseRepository.isAvailable() === false; // node에는 indexedDB가 없음
+
+  const load = await CaseRepository.load();
+  out.loadNoThrow = load.ok === false && typeof load.error === "string";
+  out.loadReturnsEmptyArrays = Array.isArray(load.equipmentHistory) && Array.isArray(load.cases);
+
+  const saveCase = await CaseRepository.saveCase({ id: "C-TEST" });
+  out.saveCaseNoThrow = saveCase.ok === false && typeof saveCase.error === "string";
+
+  const saveDraft = await CaseRepository.saveDraft("C-TEST", { inputs: {} });
+  out.saveDraftNoThrow = saveDraft.ok === false;
+
+  const loadDraft = await CaseRepository.loadDraft("C-TEST");
+  out.loadDraftNoThrow = loadDraft.ok === false && loadDraft.draft === null;
+
+  const saveEq = await CaseRepository.saveEquipmentRevision({ id:"EQ-1", revision:1 });
+  out.saveEqNoThrow = saveEq.ok === false;
+
+  const saveDs = await CaseRepository.saveDischargeRevision({ id:"DS-1", revision:1 });
+  out.saveDsNoThrow = saveDs.ok === false;
+
+  const wipe = await CaseRepository.wipeAll();
+  out.wipeNoThrow = wipe.ok === false;
+
+  console.log(JSON.stringify(out));
+})().catch(e => { console.log(JSON.stringify({ uncaughtThrow: true, message: String(e) })); });
+"""
+    # LE 테스트에서와 동일한 이유로 소스와 테스트 코드를 한 eval()로 묶는다 —
+    # direct eval의 const/함수 선언은 별도 eval() 호출 밖으로 새지 않는다.
+    check_script = (
+        "const fs = require('fs');\n"
+        f"const src = fs.readFileSync('{SRC}/persistence/CaseRepository.js', 'utf8');\n"
+        "const testBody = " + json.dumps(test_body_js) + ";\n"
+        "eval(src + testBody);\n"
+    )
+    try:
+        result = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=15)
+        out = json.loads(result.stdout.strip().splitlines()[-1]) if result.stdout.strip() else {}
+    except Exception as e:
+        tr.check("PR_node_execution", False, f"node 실행 실패: {e}\nstderr: {getattr(result,'stderr','')}")
+        return tr
+
+    tr.check("PR_006_no_uncaught_throw_when_indexeddb_missing",
+             out.get("uncaughtThrow") is not True,
+             f"indexedDB가 없는 환경에서 처리되지 않은 예외 발생(PERSISTENCE-002 위반): {out}")
+    tr.check("PR_006_isAvailable_false_without_indexeddb",
+             out.get("isAvailableFalse") is True, f"got {out}")
+    tr.check("PR_007_load_fails_gracefully",
+             out.get("loadNoThrow") is True and out.get("loadReturnsEmptyArrays") is True,
+             f"load()가 조용히 실패하지 않음: {out}")
+    tr.check("PR_007_all_write_methods_fail_gracefully",
+             all(out.get(k) is True for k in
+                 ["saveCaseNoThrow","saveDraftNoThrow","saveEqNoThrow","saveDsNoThrow","wipeNoThrow"]),
+             f"쓰기 메서드 중 일부가 throw하거나 조용히 실패하지 않음: {out}")
+    tr.check("PR_007_loadDraft_returns_null_not_throw",
+             out.get("loadDraftNoThrow") is True, f"got {out}")
+
+    return tr
+
+
 def main():
     ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     print(f"\n{'═'*60}")
@@ -6557,7 +6660,18 @@ def main():
     tr = test_liquid_thermal_expansion_scenario_contract()
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
-    print(f"\n  [LIQUID-EXPANSION-001] {tr.label}")
+    print(f"\n  [LIQUID-EXPANSION-002] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── Device-local Case Persistence contract (Sprint C-4.22-B) ──
+    print("\n── CASE PERSISTENCE / IndexedDB (Sprint C-4.22-B) ───")
+    tr = test_case_repository_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [PERSISTENCE-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"
