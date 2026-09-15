@@ -109,13 +109,13 @@ function _pdfVerdictSection(checklist, backpress, accumulation, inletLoss, dataG
   const dataGapNote = (dataGaps && dataGaps.length > 0)
     ? `<div class="pdf-row" style="align-items:flex-start;background:#fff7e6;">
          <span class="k" style="font-family:'Pretendard','Malgun Gothic',sans-serif;color:#92400e;">
-           <span style="font-weight:700;">! 판정 보류 — 입력 부족 (INSUFFICIENT INPUT)</span><br/>
-           <span style="font-weight:400;color:#92400e;font-size:9px;">${dataGaps.join(", ")} 데이터가 없어 전체 판정을 확정할 수 없습니다 — 이 상태는 적정(GO)으로 취급하지 않습니다.</span>
+           <span style="font-weight:700;">! 일부 세부 판정 보류 — 선택 입력 항목 (OPTIONAL)</span><br/>
+           <span style="font-weight:400;color:#92400e;font-size:9px;">${dataGaps.join(", ")} 데이터가 없어 해당 세부 판정만 보류됩니다 — 오리피스 sizing·여유율 등 나머지 계산 결과에는 영향이 없습니다. 이 상태는 적정(GO)으로 임의 취급하지 않습니다.</span>
          </span>
        </div>`
     : "";
   const verdictLabel = insufficientInput
-    ? "판정 보류 — 입력 부족으로 적정성을 확정할 수 없습니다"
+    ? "일부 세부 판정 보류 — 선택 항목 데이터 부족으로 해당 항목만 확정할 수 없습니다(sizing 결과에는 영향 없음)"
     : allOK ? "적정 — API 520/521 기준을 모두 충족합니다" : "부적정 — 기준 미충족 항목이 있어 조치가 필요합니다";
   const verdictColor = insufficientInput ? "#92400e" : allOK ? "#2e7d32" : "#c0392b";
   return `<div class="pdf-section">
@@ -172,7 +172,7 @@ function buildPDFHtml(reportPackage) {
     _pdfRow("판정", (() => {
       const il = pkg.calculation.result?.stepData?.inletLoss;
       if (!il) return "—";
-      if (!il.pressureLossAvailable) return "판정 보류 (INSUFFICIENT INPUT)";
+      if (!il.pressureLossAvailable) return "판정 보류 (선택 항목, 미등록)";
       return il.pressureLossOK ? `GO (${(il.pressureLossRatio*100).toFixed(2)}%)` : `NO-GO (${(il.pressureLossRatio*100).toFixed(2)}%)`;
     })());
 

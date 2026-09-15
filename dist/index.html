@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:5b926c2e3cd3\n\n' +
+    box.textContent = '[ERROR] BUILD:b7dde87c6f20\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:5b926c2e3cd3\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:b7dde87c6f20\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:5b926c2e3cd3 | 2026-09-14T22:56:50Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:b7dde87c6f20 | 2026-09-15T10:34:30Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "5b926c2e3cd3";
+const __BUILD_HASH__ = "b7dde87c6f20";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -3631,13 +3631,13 @@ function _pdfVerdictSection(checklist, backpress, accumulation, inletLoss, dataG
   const dataGapNote = (dataGaps && dataGaps.length > 0)
     ? `<div class="pdf-row" style="align-items:flex-start;background:#fff7e6;">
          <span class="k" style="font-family:'Pretendard','Malgun Gothic',sans-serif;color:#92400e;">
-           <span style="font-weight:700;">! 판정 보류 — 입력 부족 (INSUFFICIENT INPUT)</span><br/>
-           <span style="font-weight:400;color:#92400e;font-size:9px;">${dataGaps.join(", ")} 데이터가 없어 전체 판정을 확정할 수 없습니다 — 이 상태는 적정(GO)으로 취급하지 않습니다.</span>
+           <span style="font-weight:700;">! 일부 세부 판정 보류 — 선택 입력 항목 (OPTIONAL)</span><br/>
+           <span style="font-weight:400;color:#92400e;font-size:9px;">${dataGaps.join(", ")} 데이터가 없어 해당 세부 판정만 보류됩니다 — 오리피스 sizing·여유율 등 나머지 계산 결과에는 영향이 없습니다. 이 상태는 적정(GO)으로 임의 취급하지 않습니다.</span>
          </span>
        </div>`
     : "";
   const verdictLabel = insufficientInput
-    ? "판정 보류 — 입력 부족으로 적정성을 확정할 수 없습니다"
+    ? "일부 세부 판정 보류 — 선택 항목 데이터 부족으로 해당 항목만 확정할 수 없습니다(sizing 결과에는 영향 없음)"
     : allOK ? "적정 — API 520/521 기준을 모두 충족합니다" : "부적정 — 기준 미충족 항목이 있어 조치가 필요합니다";
   const verdictColor = insufficientInput ? "#92400e" : allOK ? "#2e7d32" : "#c0392b";
   return `<div class="pdf-section">
@@ -3694,7 +3694,7 @@ function buildPDFHtml(reportPackage) {
     _pdfRow("판정", (() => {
       const il = pkg.calculation.result?.stepData?.inletLoss;
       if (!il) return "—";
-      if (!il.pressureLossAvailable) return "판정 보류 (INSUFFICIENT INPUT)";
+      if (!il.pressureLossAvailable) return "판정 보류 (선택 항목, 미등록)";
       return il.pressureLossOK ? `GO (${(il.pressureLossRatio*100).toFixed(2)}%)` : `NO-GO (${(il.pressureLossRatio*100).toFixed(2)}%)`;
     })());
 
@@ -3986,10 +3986,10 @@ function ChecklistRenderer({ checklist, backpress, accumulation, inletLoss, data
     { key:"marginOK",       label:"여유율 충분 (≥ 1.0)",     detail:"필요량보다 여유있게 설계됐는지 — 선정 오리피스 면적의 여유 정도" },
     { key:"accumulationOK", label:"축적압력 허용 범위 이내 (Overpressure Guardrail)",
       detail:`1+OP/100 ≤ ${accAllowPct}% (${accScenarioLabel} 기준, KOSHA D-18 §4.4) — 초과 시 자동 보정 없이 NO-GO` },
-    { key:"inletLossOK",    label:"인입배관 압력손실 허용 범위 이내",
+    { key:"inletLossOK",    label:"인입배관 압력손실 허용 범위 이내 (선택 항목)",
       detail: inletLoss?.pressureLossAvailable
         ? `ΔP/Pset ≤ ${(inletLoss.allowableRatio*100).toFixed(0)}% (KOSHA D-18 §7.2(1)) — 인입배관 내 압력손실이 설정압력의 ${(inletLoss.allowableRatio*100).toFixed(0)}%를 넘지 않는지 확인`
-        : "인입배관 형상(길이/내경/fittings) 데이터가 없어 판정 보류 — 입력 부족을 적정(GO)으로 취급하지 않음" },
+        : "인입배관 형상(길이/내경/fittings) 데이터가 없어 이 항목만 판정 보류 — sizing 결과에는 영향 없음, 임의로 적정(GO) 처리하지 않음" },
   ];
   return (
     <div>
@@ -3997,8 +3997,9 @@ function ChecklistRenderer({ checklist, backpress, accumulation, inletLoss, data
         <div style={{display:"flex",gap:10,alignItems:"flex-start",padding:"10px 13px",borderRadius:10,marginBottom:8,background:T.amberBg||"#fff7e6",border:`1.5px solid ${T.amber||"#d97706"}`}}>
           <div style={{width:24,height:24,borderRadius:"50%",background:T.amber||"#d97706",display:"flex",alignItems:"center",justifyContent:"center",color:T.white,fontWeight:900,fontSize:12,flexShrink:0}}>!</div>
           <div>
-            <div style={{fontSize:12,fontWeight:700,color:T.text,fontFamily:font.mono}}>판정 보류 — 입력 부족 (INSUFFICIENT INPUT)</div>
-            <div style={{fontSize:10,color:T.sub,marginTop:2}}>{dataGaps.join(", ")} 데이터가 없어 전체 판정을 확정할 수 없음 — 개별 항목이 전부 충족이어도 "적정(GO)"으로 표시하지 않음</div>
+            <div style={{fontSize:12,fontWeight:700,color:T.text,fontFamily:font.mono}}>일부 세부 판정 보류 — 선택 입력 항목 (OPTIONAL)</div>
+            <div style={{fontSize:10,color:T.sub,marginTop:2}}>{dataGaps.join(", ")} 데이터가 없어 해당 세부 판정만 보류됩니다 — 개별 항목이 전부 충족이어도 "적정(GO)"으로 표시하지 않습니다.
+              <b> 오리피스 sizing·여유율 등 나머지 계산 결과에는 영향이 없습니다.</b></div>
           </div>
         </div>
       )}
@@ -5498,9 +5499,10 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
           if (!ip) {
             return (
               <div style={{fontSize:11,fontWeight:700,color:T.gray,fontFamily:font.mono}}>
-                — 판정 보류 (INSUFFICIENT INPUT) — 설비대장에 인입배관(L/D/ΣK)이 등록되어 있지 않습니다.
+                — 선택 항목 (OPTIONAL) — 설비대장에 인입배관(L/D/ΣK)이 등록되어 있지 않아 이 세부 판정만 보류됩니다.
                 <div style={{fontSize:9,color:T.sub,fontWeight:400,marginTop:3,fontFamily:font.sans}}>
-                  임의로 추정하지 않습니다 — 실제 판정이 필요하면 설비대장에서 등록하세요.
+                  오리피스 sizing·여유율 등 나머지 계산에는 영향이 없습니다. 임의로 추정하지 않습니다 — 이 항목까지
+                  판정하려면 설비대장에서 인입배관을 등록하세요.
                 </div>
               </div>
             );
@@ -5511,7 +5513,10 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
           if (!result.pressureLossAvailable) {
             return (
               <div style={{fontSize:11,fontWeight:700,color:T.gray,fontFamily:font.mono}}>
-                — 판정 보류 (INSUFFICIENT INPUT) — {result.reason}
+                — 선택 항목 (OPTIONAL) — {result.reason}
+                <div style={{fontSize:9,color:T.sub,fontWeight:400,marginTop:3,fontFamily:font.sans}}>
+                  오리피스 sizing·여유율 등 나머지 계산에는 영향이 없습니다.
+                </div>
               </div>
             );
           }
@@ -7316,13 +7321,15 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
             <div style={{fontSize:14,fontWeight:900,
               color:insufficientInput?(T.amber||"#d97706"):(allOK?T.greenDk:T.redDk),fontFamily:font.sans}}>
               {insufficientInput
-                ? `판정 보류 — 입력 부족(${(r.dataGaps||[]).join(", ")})으로 전체 적정성을 확정할 수 없습니다`
+                ? `일부 세부 판정 보류 — 선택 항목(${(r.dataGaps||[]).join(", ")}) 데이터가 없어 해당 항목만 확정할 수 없습니다`
                 : allOK
                 ? "적정 — 이 사양은 API 520/521 기준을 모두 충족합니다"
                 : `부적정 — 기준 미충족 항목이 있어 조치가 필요합니다 (${failCount}건)`}
             </div>
             <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginTop:3}}>
-              아래 "✅ PSM 체크" 탭에서 항목별 근거를 확인하세요
+              {insufficientInput
+                ? "오리피스 sizing·여유율 등 나머지 계산 결과에는 영향이 없습니다 — 아래 \"✅ PSM 체크\" 탭에서 항목별 근거를 확인하세요"
+                : "아래 \"✅ PSM 체크\" 탭에서 항목별 근거를 확인하세요"}
             </div>
           </div>
         </div>

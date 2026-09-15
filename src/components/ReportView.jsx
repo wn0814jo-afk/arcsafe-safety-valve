@@ -167,13 +167,15 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
             <div style={{fontSize:14,fontWeight:900,
               color:insufficientInput?(T.amber||"#d97706"):(allOK?T.greenDk:T.redDk),fontFamily:font.sans}}>
               {insufficientInput
-                ? `판정 보류 — 입력 부족(${(r.dataGaps||[]).join(", ")})으로 전체 적정성을 확정할 수 없습니다`
+                ? `일부 세부 판정 보류 — 선택 항목(${(r.dataGaps||[]).join(", ")}) 데이터가 없어 해당 항목만 확정할 수 없습니다`
                 : allOK
                 ? "적정 — 이 사양은 API 520/521 기준을 모두 충족합니다"
                 : `부적정 — 기준 미충족 항목이 있어 조치가 필요합니다 (${failCount}건)`}
             </div>
             <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,marginTop:3}}>
-              아래 "✅ PSM 체크" 탭에서 항목별 근거를 확인하세요
+              {insufficientInput
+                ? "오리피스 sizing·여유율 등 나머지 계산 결과에는 영향이 없습니다 — 아래 \"✅ PSM 체크\" 탭에서 항목별 근거를 확인하세요"
+                : "아래 \"✅ PSM 체크\" 탭에서 항목별 근거를 확인하세요"}
             </div>
           </div>
         </div>

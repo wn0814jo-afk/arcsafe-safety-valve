@@ -197,10 +197,10 @@ function ChecklistRenderer({ checklist, backpress, accumulation, inletLoss, data
     { key:"marginOK",       label:"여유율 충분 (≥ 1.0)",     detail:"필요량보다 여유있게 설계됐는지 — 선정 오리피스 면적의 여유 정도" },
     { key:"accumulationOK", label:"축적압력 허용 범위 이내 (Overpressure Guardrail)",
       detail:`1+OP/100 ≤ ${accAllowPct}% (${accScenarioLabel} 기준, KOSHA D-18 §4.4) — 초과 시 자동 보정 없이 NO-GO` },
-    { key:"inletLossOK",    label:"인입배관 압력손실 허용 범위 이내",
+    { key:"inletLossOK",    label:"인입배관 압력손실 허용 범위 이내 (선택 항목)",
       detail: inletLoss?.pressureLossAvailable
         ? `ΔP/Pset ≤ ${(inletLoss.allowableRatio*100).toFixed(0)}% (KOSHA D-18 §7.2(1)) — 인입배관 내 압력손실이 설정압력의 ${(inletLoss.allowableRatio*100).toFixed(0)}%를 넘지 않는지 확인`
-        : "인입배관 형상(길이/내경/fittings) 데이터가 없어 판정 보류 — 입력 부족을 적정(GO)으로 취급하지 않음" },
+        : "인입배관 형상(길이/내경/fittings) 데이터가 없어 이 항목만 판정 보류 — sizing 결과에는 영향 없음, 임의로 적정(GO) 처리하지 않음" },
   ];
   return (
     <div>
@@ -208,8 +208,9 @@ function ChecklistRenderer({ checklist, backpress, accumulation, inletLoss, data
         <div style={{display:"flex",gap:10,alignItems:"flex-start",padding:"10px 13px",borderRadius:10,marginBottom:8,background:T.amberBg||"#fff7e6",border:`1.5px solid ${T.amber||"#d97706"}`}}>
           <div style={{width:24,height:24,borderRadius:"50%",background:T.amber||"#d97706",display:"flex",alignItems:"center",justifyContent:"center",color:T.white,fontWeight:900,fontSize:12,flexShrink:0}}>!</div>
           <div>
-            <div style={{fontSize:12,fontWeight:700,color:T.text,fontFamily:font.mono}}>판정 보류 — 입력 부족 (INSUFFICIENT INPUT)</div>
-            <div style={{fontSize:10,color:T.sub,marginTop:2}}>{dataGaps.join(", ")} 데이터가 없어 전체 판정을 확정할 수 없음 — 개별 항목이 전부 충족이어도 "적정(GO)"으로 표시하지 않음</div>
+            <div style={{fontSize:12,fontWeight:700,color:T.text,fontFamily:font.mono}}>일부 세부 판정 보류 — 선택 입력 항목 (OPTIONAL)</div>
+            <div style={{fontSize:10,color:T.sub,marginTop:2}}>{dataGaps.join(", ")} 데이터가 없어 해당 세부 판정만 보류됩니다 — 개별 항목이 전부 충족이어도 "적정(GO)"으로 표시하지 않습니다.
+              <b> 오리피스 sizing·여유율 등 나머지 계산 결과에는 영향이 없습니다.</b></div>
           </div>
         </div>
       )}

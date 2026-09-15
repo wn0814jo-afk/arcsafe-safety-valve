@@ -1464,9 +1464,10 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
           if (!ip) {
             return (
               <div style={{fontSize:11,fontWeight:700,color:T.gray,fontFamily:font.mono}}>
-                — 판정 보류 (INSUFFICIENT INPUT) — 설비대장에 인입배관(L/D/ΣK)이 등록되어 있지 않습니다.
+                — 선택 항목 (OPTIONAL) — 설비대장에 인입배관(L/D/ΣK)이 등록되어 있지 않아 이 세부 판정만 보류됩니다.
                 <div style={{fontSize:9,color:T.sub,fontWeight:400,marginTop:3,fontFamily:font.sans}}>
-                  임의로 추정하지 않습니다 — 실제 판정이 필요하면 설비대장에서 등록하세요.
+                  오리피스 sizing·여유율 등 나머지 계산에는 영향이 없습니다. 임의로 추정하지 않습니다 — 이 항목까지
+                  판정하려면 설비대장에서 인입배관을 등록하세요.
                 </div>
               </div>
             );
@@ -1477,7 +1478,10 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
           if (!result.pressureLossAvailable) {
             return (
               <div style={{fontSize:11,fontWeight:700,color:T.gray,fontFamily:font.mono}}>
-                — 판정 보류 (INSUFFICIENT INPUT) — {result.reason}
+                — 선택 항목 (OPTIONAL) — {result.reason}
+                <div style={{fontSize:9,color:T.sub,fontWeight:400,marginTop:3,fontFamily:font.sans}}>
+                  오리피스 sizing·여유율 등 나머지 계산에는 영향이 없습니다.
+                </div>
               </div>
             );
           }
