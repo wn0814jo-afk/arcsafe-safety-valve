@@ -4478,6 +4478,173 @@ def test_c416b_input_ux_and_p1_contract() -> TestResult:
 
 
 # ════════════════════════════════════════════════════════════════
+#  C-4.25 — Case.fluid 데이터 무결성 + verdict fallback dataGaps 보강
+#  FLUID-001~004: Case.fluid 하드코딩 제거, Snapshot이 authoritative source
+#  VERDICT-FALLBACK-001~002: 구버전 verdict-less Snapshot fallback이
+#  dataGaps를 무시하고 근거 없는 GO를 만들지 않는지 검증
+# ════════════════════════════════════════════════════════════════
+def test_c425_fluid_and_verdict_fallback_contract() -> TestResult:
+    tr = TestResult("C425-001", "Case.fluid 무결성 + verdict fallback dataGaps 보강")
+    node = shutil.which("node")
+
+    arcsafe_src = (SRC / "ArcSafe.jsx").read_text()
+    dash_src    = (SRC / "components" / "Dashboard.jsx").read_text()
+    inputv_src  = (SRC / "components" / "InputView.jsx").read_text()
+    wf_ev_src   = (SRC / "components" / "report" / "WorkflowEvidence.jsx").read_text()
+
+    # ── handleEquipmentSelect 함수 블록만 추출 (fluid 하드코딩 부재 확인용) ──
+    hes_start = arcsafe_src.index("const handleEquipmentSelect = (equipment) => {")
+    hes_end   = arcsafe_src.index("\n  };", hes_start)
+    hes_block = arcsafe_src[hes_start:hes_end]
+
+    # ── FLUID-001: Case 생성 시 fluid 하드코딩 제거 ──────────────
+    tr.check("FLUID_001_no_hardcoded_co2_in_new_case",
+             'fluid:' not in hes_block,
+             "handleEquipmentSelect의 새 Case 객체에 fluid 필드가 여전히 하드코딩되어 있음")
+    tr.check("FLUID_001_no_co2_literal_in_handler",
+             "CO₂ (고압)" not in hes_block,
+             "handleEquipmentSelect 안에 CO₂ 하드코딩 문자열이 남아있음")
+
+    # ── FLUID-004: Dashboard가 더 이상 c.fluid(구버전 persisted 값)를 읽지 않음 ──
+    tr.check("FLUID_004_dashboard_never_reads_case_fluid",
+             "c.fluid" not in dash_src,
+             "Dashboard.jsx가 여전히 c.fluid(구버전 하드코딩 값)를 읽고 있음 — "
+             "구버전 persisted Case의 오표시 가능성이 남아있음")
+
+    # ── FLUID-002/003: Dashboard가 Snapshot에서 fluid 라벨을 도출하는지 ──
+    tr.check("FLUID_002_dashboard_derives_from_snapshot",
+             "_findFluidLabel(c.latestSnap.inputs)" in dash_src,
+             "Dashboard.jsx가 snapshot.inputs 기반으로 fluid를 도출하지 않음")
+    tr.check("FLUID_002_reuses_existing_label_fn_no_new_table",
+             "FLUID_CHOICES" not in dash_src,
+             "Dashboard.jsx에 새로운 fluid 매핑 테이블(FLUID_CHOICES 재정의)이 생겼음 — "
+             "기존 _findFluidLabel()을 재사용해야 함(중복 금지)")
+    tr.check("FLUID_neutral_state_is_미정",
+             '"미정"' in dash_src,
+             "Snapshot 없는 Case의 중립 상태 표시(\"미정\")가 없음")
+
+    # ── FLUID-002/003 functional: 실제 _findFluidLabel 로직으로 유체별 라벨 검증 ──
+    if node:
+        fc_start = inputv_src.index("const FLUID_CHOICES = [")
+        fc_end   = inputv_src.index("];", fc_start) + 2
+        fluid_choices_block = inputv_src[fc_start:fc_end]
+
+        fl_start = wf_ev_src.index("function _findFluidLabel")
+        fl_end   = wf_ev_src.index("\n}\n", fl_start) + 2
+        find_label_block = wf_ev_src[fl_start:fl_end]
+
+        check_script = f"""
+{fluid_choices_block}
+{find_label_block}
+const cases = {{
+  co2:    _findFluidLabel({{M:44, k:1.30}}),
+  n2:     _findFluidLabel({{M:28, k:1.40}}),
+  steam:  _findFluidLabel({{M:18, k:1.33}}),
+  air:    _findFluidLabel({{M:29, k:1.40}}),
+  custom: _findFluidLabel({{M:31.4, k:1.21}}),
+  none:   _findFluidLabel(null),
+}};
+console.log(JSON.stringify(cases));
+"""
+        r = subprocess.run([node, "-e", check_script], capture_output=True, text=True, timeout=15)
+        try:
+            out = json.loads(r.stdout.strip()) if r.returncode == 0 else {}
+        except Exception:
+            out = {}
+        tr.check("FLUID_003_n2_label_correct",
+                 out.get("n2", "").startswith("N₂"),
+                 f"N₂(M=28,k=1.4) 라벨이 잘못됨: {out.get('n2')!r} stderr={r.stderr[:200]}")
+        tr.check("FLUID_003_steam_label_correct",
+                 out.get("steam", "").startswith("Steam"),
+                 f"Steam(M=18,k=1.33) 라벨이 잘못됨: {out.get('steam')!r}")
+        tr.check("FLUID_003_air_label_correct",
+                 out.get("air", "").startswith("Air"),
+                 f"Air(M=29,k=1.4) 라벨이 잘못됨: {out.get('air')!r}")
+        tr.check("FLUID_003_co2_label_correct",
+                 out.get("co2", "").startswith("CO₂"),
+                 f"CO₂(M=44,k=1.3) 라벨이 잘못됨: {out.get('co2')!r}")
+        tr.check("FLUID_custom_and_none_fallback",
+                 out.get("custom") == "커스텀 유체 (직접 입력값)" and out.get("none") == "커스텀",
+                 f"매칭 실패/입력없음 폴백이 잘못됨: custom={out.get('custom')!r} none={out.get('none')!r}")
+    else:
+        tr.check("FLUID_003_node_available", False, "node 실행 파일을 찾을 수 없어 functional 검증 스킵")
+
+    # ── VERDICT-FALLBACK-001/002 ─────────────────────────────────
+    tr.check("VERDICT_FALLBACK_dataGaps_checked",
+             "hasDataGaps" in dash_src and "c.latestSnap?.result?.dataGaps" in dash_src,
+             "verdict fallback이 dataGaps를 확인하지 않음")
+    tr.check("VERDICT_FALLBACK_insufficient_input_on_gap",
+             '"INSUFFICIENT_INPUT"' in dash_src,
+             "dataGaps 존재 시 INSUFFICIENT_INPUT으로 폴백하는 분기가 없음")
+
+    if node:
+        vf_start = dash_src.index("const hasDataGaps = ")
+        vf_end   = dash_src.index(": null;", vf_start) + len(": null;")
+        verdict_block = dash_src[vf_start:vf_end]
+
+        def run_verdict(result_obj_js, has_snap_js="true"):
+            script = f"""
+const hasSnap = {has_snap_js};
+const c = {{ latestSnap: hasSnap ? {{ result: {result_obj_js} }} : null }};
+{verdict_block}
+console.log(JSON.stringify(verdict));
+"""
+            r = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=15)
+            return (r.stdout.strip().strip('"'), r.stderr)
+
+        # VERDICT-FALLBACK-001: verdict 없음 + dataGaps 있음 + checklist 전부 true
+        #                        → GO로 재구성되면 안 됨(INSUFFICIENT_INPUT이어야 함)
+        v1, err1 = run_verdict(
+            '{ checklist: { capacityOK:true, marginOK:true }, dataGaps: ["inletPiping"] }')
+        tr.check("VERDICT_FALLBACK_001_no_false_go_with_datagaps",
+                 v1 == "INSUFFICIENT_INPUT",
+                 f"dataGaps 존재 시 verdict={v1!r} (기대: INSUFFICIENT_INPUT) stderr={err1[:200]}")
+
+        # VERDICT-FALLBACK-002: verdict 없음 + dataGaps 없음 + checklist 전부 true
+        #                        → 기존과 동일하게 GO 유지
+        v2, err2 = run_verdict(
+            '{ checklist: { capacityOK:true, marginOK:true }, dataGaps: [] }')
+        tr.check("VERDICT_FALLBACK_002_existing_go_behavior_preserved",
+                 v2 == "GO",
+                 f"dataGaps 없을 때 verdict={v2!r} (기대: GO, 기존 동작 유지되어야 함) stderr={err2[:200]}")
+
+        # 추가: dataGaps 없음 + checklist 일부 false → NO_GO (기존 동작 유지)
+        v3, err3 = run_verdict(
+            '{ checklist: { capacityOK:true, marginOK:false }, dataGaps: [] }')
+        tr.check("VERDICT_FALLBACK_003_no_go_when_checklist_fails",
+                 v3 == "NO_GO",
+                 f"checklist 실패 시 verdict={v3!r} (기대: NO_GO) stderr={err3[:200]}")
+
+        # 추가: 명시적 verdict 필드가 있으면(신버전 Snapshot) dataGaps/checklist와 무관하게 최우선
+        v4, err4 = run_verdict(
+            '{ verdict: "GO", checklist: { capacityOK:false }, dataGaps: ["inletPiping"] }')
+        tr.check("VERDICT_FALLBACK_004_explicit_verdict_takes_priority",
+                 v4 == "GO",
+                 f"명시적 verdict 필드가 있는데도 무시됨: {v4!r} stderr={err4[:200]}")
+
+        # Snapshot 자체가 없는 Case → verdict는 null(뱃지 미표시)
+        v5, err5 = run_verdict('{}', has_snap_js="false")
+        tr.check("VERDICT_FALLBACK_005_no_snapshot_is_null",
+                 v5 == "null" or v5 == "",
+                 f"Snapshot 없는 Case의 verdict가 null이 아님: {v5!r} stderr={err5[:200]}")
+    else:
+        tr.check("VERDICT_FALLBACK_node_available", False, "node 실행 파일을 찾을 수 없어 functional 검증 스킵")
+
+    # ── Engine/Snapshot/Report 경계 보호 확인 (C-4.25 §7) ──────────
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+    relief_src = (SRC / "engine" / "relief_load.js").read_text()
+    snap_src   = (SRC / "snapshot" / "create.js").read_text()
+    tr.check("SCOPE_001_engine_untouched",
+             "C-4.25" not in api520_src and "C-4.25" not in relief_src,
+             "C-4.25가 Engine 계산 로직(api520.js/relief_load.js)을 건드림 — 범위 위반")
+    tr.check("SCOPE_002_snapshot_creation_untouched",
+             "C-4.25" not in snap_src,
+             "C-4.25가 Snapshot creation logic을 건드림 — 범위 위반")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
 #  BASELINE LOCK CONTRACT (Sprint A.1) — Engine 1.3.0 기준선 보호 장치
 #  1) ENGINE-VERSION-LOCK-001: Snapshot/ReportPackage/Fixture 엔진버전 일치
 #  2) GOLDEN-FIXTURE-MUTATION-GUARD-001: fixture를 손으로 고치면 감지
@@ -6782,6 +6949,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [RELIEF-LOAD-UI-002] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── Case.fluid 무결성 + verdict fallback dataGaps 보강 (C-4.25) ─
+    print("\n── C425-FLUID-VERDICT-001 (Sprint C-4.25) ─────────────")
+    tr = test_c425_fluid_and_verdict_fallback_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [C425-FLUID-VERDICT-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"

@@ -132,7 +132,9 @@ function ArcSafe() {
       valveTag:         equipment.tag,
       equipment:        equipment,
       dischargeSystemId:ds?.id || null,
-      fluid:            "CO₂ (고압)",
+      // C-4.25 FLUID-001: fluid 필드를 여기서 복제하지 않는다 — 실제 계산에
+      // 쓰인 유체의 authoritative source는 Snapshot(snapshot.inputs.M/k)
+      // 뿐이다. Dashboard가 latestSnap에서 직접 조회해 표시한다.
       reviewType:       "정기 PSM 검토",
       workflow:         "DRAFT",
       latestSnap:       null,   // pointer only — 검증에 사용 금지

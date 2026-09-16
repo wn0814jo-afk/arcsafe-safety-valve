@@ -7,12 +7,28 @@ function CaseCard({ c, onOpen }) {
   // INLET-LOSS-001: verdict가 단일 출처 — checklist.every(Boolean)를
   // 여기서 다시 계산하지 않는다(dataGaps가 있으면 GO가 아니어야 함).
   // 구버전 Snapshot(verdict 필드 없음) 호환 폴백만 유지.
+  // C-4.25 VERDICT-FALLBACK-001: 이 폴백도 dataGaps를 반드시 먼저 본다 —
+  // "verdict 없음 + dataGaps 있음 + checklist.every(Boolean)이 우연히
+  // true"인 구버전 Snapshot을 GO로 오판하지 않기 위함(inletLossOK처럼
+  // 데이터 부족 시 checklist에서 키 자체가 생략되는 필드가 있어 every()가
+  // 이를 놓칠 수 있다 — computeAdequacyVerdict()와 동일한 우선순위를
+  // 여기서도 재현한다). dataGaps가 없을 때의 기존 checklist 폴백 동작은
+  // 그대로 유지(VERDICT-FALLBACK-002).
+  const hasDataGaps = (c.latestSnap?.result?.dataGaps?.length ?? 0) > 0;
   const verdict = hasSnap
     ? (c.latestSnap.result?.verdict
-        || (c.latestSnap.result?.checklist && Object.values(c.latestSnap.result.checklist).every(Boolean) ? "GO" : "NO_GO"))
+        || (hasDataGaps
+             ? "INSUFFICIENT_INPUT"
+             : (c.latestSnap.result?.checklist && Object.values(c.latestSnap.result.checklist).every(Boolean) ? "GO" : "NO_GO")))
     : null;
   const allOK = verdict === "GO";
   const insufficientInput = verdict === "INSUFFICIENT_INPUT";
+  // C-4.25 FLUID-001~003: 유체 표시의 authoritative source는 Snapshot뿐이다
+  // (Case.fluid 같은 복제 상태를 두지 않는다). WorkflowEvidence.jsx의
+  // _findFluidLabel()을 그대로 재사용 — 신규 매핑 테이블을 만들지 않는다.
+  // FLUID-004: 구버전 persisted Case 객체의 fluid 필드는 여기서 절대
+  // 읽지 않는다 — Snapshot이 있으면 Snapshot이, 없으면 "미정"이 항상 이긴다.
+  const fluidLabel = hasSnap ? _findFluidLabel(c.latestSnap.inputs) : "미정";
   return (
     <button onClick={()=>onOpen(c)}
       style={{display:"block",width:"100%",textAlign:"left",background:T.cardBg,
@@ -49,7 +65,7 @@ function CaseCard({ c, onOpen }) {
         </div>
       </div>
       <div style={{display:"flex",gap:12,fontSize:11,color:T.sub,fontFamily:font.mono}}>
-        <span>{c.fluid}</span><span>·</span><span>{c.reviewType}</span>
+        <span>{fluidLabel}</span><span>·</span><span>{c.reviewType}</span>
       </div>
       {hasSnap && (
         <div style={{marginTop:8,display:"flex",gap:8}}>
