@@ -124,10 +124,22 @@ function EquipmentForm({ onSave, onCancel, editing }) {
       <Section title="기본 정보">
         <Row2
           a={<Field label="Tag No." req><input value={f.tag}
-            onChange={e=>upd("tag",e.target.value)}
-            onInput={e=>upd("tag",e.target.value)}
+            onChange={e=>{ if(!isRevision) upd("tag",e.target.value); }}
+            onInput={e=>{ if(!isRevision) upd("tag",e.target.value); }}
             placeholder="PSV-R201" autoComplete="off"
-            style={iS({border:`1.5px solid ${f.tag.trim()?T.navyLight:T.border}`})}/></Field>}
+            disabled={isRevision}
+            style={iS({
+              border:`1.5px solid ${f.tag.trim()?T.navyLight:T.border}`,
+              background:isRevision?T.bg:T.white,
+              color:isRevision?T.sub:T.text,
+              cursor:isRevision?"not-allowed":"text",
+            })}/>
+            {isRevision && (
+              <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:3}}>
+                Tag No.는 배출계통 연결의 식별자로 사용되므로 개정 시 변경할 수 없습니다.
+              </div>
+            )}
+          </Field>}
           b={<Field label="설치 위치"><input value={f.location}
             onChange={e=>upd("location",e.target.value)}
             placeholder="반응기 R-201 상부"
@@ -268,7 +280,7 @@ function EquipmentForm({ onSave, onCancel, editing }) {
 
 // ── DischargeSystemForm ───────────────────────────────────────
 // editing이 있으면 "개정" 모드: mocId 필수, revision은 자동 증가(읽기 전용 표시)
-function DischargeSystemForm({ onSave, onCancel, editing }) {
+function DischargeSystemForm({ onSave, onCancel, editing, equipments, dischargeSystems }) {
   const isRevision = !!editing;
   const [f, setF] = useState(editing ? {
     name: editing.name, destination: editing.destination,
@@ -282,7 +294,35 @@ function DischargeSystemForm({ onSave, onCancel, editing }) {
     mocId:"",
   });
   const upd = (k,v) => setF(p=>({...p,[k]:v}));
-  const valid = f.name.trim() && f.D > 0 && f.L >= 0 &&
+
+  // C-4.27 문제C/D: connectedTags 저장 전 검증. 기존 Tag 식별 semantics
+  // (trim 후 완전일치 — AssetMaster.jsx:findDs, ArcSafe.jsx:handleEquipmentSelect와
+  // 동일)를 그대로 쓴다 — 대소문자 무시/하이픈 변환 등 새 normalization 도입 안 함.
+  const rawTags = f.connectedTags.split(",").map(t=>t.trim()).filter(Boolean);
+
+  // D-3: 동일 DS 내부 중복 입력
+  const seenTags = new Set();
+  const internalDupTags = [];
+  for (const t of rawTags) {
+    if (seenTags.has(t)) internalDupTags.push(t);
+    seenTags.add(t);
+  }
+
+  // C-1: 등록된 Equipment 목록에 없는 Tag
+  const knownTagSet = new Set((equipments||[]).map(e=>e.tag));
+  const unknownTags = [...new Set(rawTags.filter(t => !knownTagSet.has(t)))];
+
+  // D-1/D-2: 다른 DischargeSystem이 이미 claim한 Tag — Revision 중인 자기
+  // 자신(id로 식별, mocId는 revision마다 바뀌므로 제외 기준으로 쓰지 않음)은 제외
+  const otherDs = (dischargeSystems||[]).filter(ds => !isRevision || ds.id !== editing.id);
+  const conflicts = [];
+  for (const t of new Set(rawTags)) {
+    const owner = otherDs.find(ds => (ds.connectedTags||[]).includes(t));
+    if (owner) conflicts.push({ tag:t, ownerName: owner.name });
+  }
+
+  const tagsValid = internalDupTags.length===0 && unknownTags.length===0 && conflicts.length===0;
+  const valid = f.name.trim() && f.D > 0 && f.L >= 0 && tagsValid &&
     (!isRevision || f.mocId.trim().length > 0);
 
   const handleSave = () => {
@@ -378,10 +418,26 @@ function DischargeSystemForm({ onSave, onCancel, editing }) {
         <Field label="연결 PSV Tag (쉼표 구분)">
           <input value={f.connectedTags}
             onChange={e=>upd("connectedTags",e.target.value)}
-            placeholder="PSV-R201, PSV-R202" style={iS()}/>
+            placeholder="PSV-R201, PSV-R202"
+            style={iS({border:`1.5px solid ${tagsValid?T.border:T.red}`})}/>
           <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:3}}>
             이 계통을 공유하는 PSV tag를 쉼표로 구분해 입력
           </div>
+          {unknownTags.length > 0 && (
+            <div style={{fontSize:10,color:T.red,fontFamily:font.sans,marginTop:4}}>
+              등록된 설비에서 찾을 수 없는 Tag가 있습니다: {unknownTags.join(", ")}
+            </div>
+          )}
+          {conflicts.length > 0 && (
+            <div style={{fontSize:10,color:T.red,fontFamily:font.sans,marginTop:4}}>
+              이미 다른 배출계통에 연결되어 있습니다: {conflicts.map(c=>`${c.tag} (${c.ownerName})`).join(", ")}
+            </div>
+          )}
+          {internalDupTags.length > 0 && (
+            <div style={{fontSize:10,color:T.red,fontFamily:font.sans,marginTop:4}}>
+              중복 입력된 Tag가 있습니다: {[...new Set(internalDupTags)].join(", ")}
+            </div>
+          )}
         </Field>
       </Section>
 
@@ -660,7 +716,7 @@ function EquipmentCard({ eq, dischargeSystem, onSelect, onEdit, onViewHistory })
         </div>
       </div>
 
-      <div style={{display:"flex",gap:6,marginBottom:ds?6:0}}>
+      <div style={{display:"flex",gap:6,marginBottom:6}}>
         {[
           ["SET",  `${eq.setPressure}b`],
           ["OP",   `${eq.overpressure}%`],
@@ -676,12 +732,21 @@ function EquipmentCard({ eq, dischargeSystem, onSelect, onEdit, onViewHistory })
         ))}
       </div>
 
-      {ds && (
+      {ds ? (
         <div style={{background:T.blueBg,borderRadius:8,padding:"5px 10px",
           fontSize:10,color:T.navyLight,fontFamily:font.mono,display:"flex",
           alignItems:"center",justifyContent:"space-between"}}>
           <span>⟶ {ds.name}</span>
           <span>{ds.destination==="flare"?"플레어":ds.destination==="atm"?"대기":"밀폐"} · L={ds.L}m · Ø{Math.round(ds.D*1000)}mm</span>
+        </div>
+      ) : (
+        // C-4.27 문제A(C-4.26 P2): 미연결 상태를 침묵시키지 않는다 — 장식용
+        // 아이콘이 아니라 실제 계산에 영향(Kb=1.0 보수적 가정)을 준다는
+        // 사실을 텍스트로 명시한다. GO로 바꾸거나 자동 연결하지 않음 —
+        // 표시만 추가, Kb 계산 로직은 변경하지 않는다.
+        <div style={{background:"#FEF3C7",borderRadius:8,padding:"5px 10px",
+          fontSize:10,color:"#92400E",fontFamily:font.mono,border:"1px solid #FDE68A"}}>
+          ⚠ 배출계통 미연결 · Kb 보수적 가정 적용
         </div>
       )}
 
@@ -836,6 +901,7 @@ function AssetMaster({ equipments, dischargeSystems,
           {showDsForm && (
             <div style={{marginBottom:12}}>
               <DischargeSystemForm
+                equipments={equipments} dischargeSystems={dischargeSystems}
                 onSave={ds=>{ onAddDischargeSystem(ds); setShowDsForm(false); }}
                 onCancel={()=>setShowDsForm(false)}/>
             </div>
@@ -844,6 +910,7 @@ function AssetMaster({ equipments, dischargeSystems,
             <div style={{marginBottom:12}}>
               <DischargeSystemForm
                 editing={editingDs}
+                equipments={equipments} dischargeSystems={dischargeSystems}
                 onSave={ds=>{ onReviseDischargeSystem(ds); setEditingDs(null); }}
                 onCancel={()=>setEditingDs(null)}/>
             </div>

@@ -4645,6 +4645,153 @@ console.log(JSON.stringify(verdict));
 
 
 # ════════════════════════════════════════════════════════════════
+#  C-4.27 — Equipment ↔ DischargeSystem 연결 안전장치
+#  CONNECT-001~011: 미연결 경고, Tag Revision 잠금, 존재하지 않는/중복
+#  Tag 저장 차단, 기존 Case dischargeSystemId 불변, C-4.23-A/C-4.25 회귀 없음
+# ════════════════════════════════════════════════════════════════
+def test_c427_connection_integrity_contract() -> TestResult:
+    tr = TestResult("C427-001", "Equipment↔DischargeSystem 연결 안전장치")
+    node = shutil.which("node")
+
+    am_src   = (SRC / "components" / "AssetMaster.jsx").read_text()
+    arc_src  = (SRC / "ArcSafe.jsx").read_text()
+    cv_src   = (SRC / "components" / "CaseView.jsx").read_text()
+    dash_src = (SRC / "components" / "Dashboard.jsx").read_text()
+
+    # ── CONNECT-006: Equipment Revision에서 Tag 입력 불가 (source) ──
+    tr.check("CONNECT_006_tag_disabled_on_revision",
+             "disabled={isRevision}" in am_src,
+             "EquipmentForm의 Tag No. 입력란에 disabled={isRevision}이 없음")
+    tr.check("CONNECT_006_tag_onchange_guarded",
+             'onChange={e=>{ if(!isRevision) upd("tag",e.target.value); }}' in am_src,
+             "Tag onChange가 isRevision일 때도 값을 바꿀 수 있게 열려있음")
+    tr.check("CONNECT_006_explains_why",
+             "배출계통 연결의 식별자로 사용되므로 개정 시 변경할 수 없습니다" in am_src,
+             "Tag 잠금 사유를 사용자에게 설명하는 문구가 없음")
+
+    # ── CONNECT-007: 미연결 Equipment 경고 배지 (source) ─────────
+    tr.check("CONNECT_007_unconnected_warning_present",
+             "배출계통 미연결 · Kb 보수적 가정 적용" in am_src,
+             "EquipmentCard에 미연결 경고 배지 문구가 없음")
+    tr.check("CONNECT_007_not_decoration_only",
+             # 장식용 아이콘만 추가한 게 아니라 실제 조건부 렌더(ds 유무로 분기)인지 확인
+             "{ds ? (" in am_src and "배출계통 미연결" in am_src,
+             "경고가 ds 유무에 따른 조건부 렌더가 아닌 것으로 보임")
+
+    # ── CONNECT-001/002/003/004/005: 검증 로직 functional 재현 ────
+    if node:
+        rt_start = am_src.index('const rawTags = f.connectedTags.split(",")')
+        hs_start = am_src.index("const handleSave = () => {", rt_start)
+        validation_block = am_src[rt_start:hs_start]
+
+        def run_validation(f_connected_tags, equipments_js, ds_js, editing_js="null"):
+            script = f"""
+const f = {{ connectedTags: {json.dumps(f_connected_tags)}, name:"TEST-DS", D:0.1, L:1, mocId:"MOC-TEST-01" }};
+const editing = {editing_js};
+const isRevision = !!editing;
+const equipments = {equipments_js};
+const dischargeSystems = {ds_js};
+{validation_block}
+console.log(JSON.stringify({{
+  tagsValid, unknownTags, internalDupTags,
+  conflicts: conflicts.map(c=>({{tag:c.tag, ownerName:c.ownerName}})),
+}}));
+"""
+            r = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=15)
+            try:
+                return json.loads(r.stdout.strip()), r.stderr
+            except Exception:
+                return {}, r.stderr
+
+        EQUIPMENTS = '[{tag:"PSV-R201"},{tag:"PSV-R302"},{tag:"PSV-S12"}]'
+        DS_A = '[{id:"DS-A",name:"LP-FLARE-01",connectedTags:["PSV-R201"]}]'
+
+        # CONNECT-001: 정상 Tag, 충돌/미등록 없음 → 정상 저장 가능
+        out1, err1 = run_validation("PSV-R302", EQUIPMENTS, "[]")
+        tr.check("CONNECT_001_normal_tag_passes",
+                 out1.get("tagsValid") is True,
+                 f"정상 Tag인데 저장 차단됨: {out1} stderr={err1[:200]}")
+
+        # CONNECT-002: 존재하지 않는 Tag → 저장 차단
+        out2, err2 = run_validation("PSV-FAKE-99", EQUIPMENTS, "[]")
+        tr.check("CONNECT_002_unknown_tag_blocked",
+                 out2.get("tagsValid") is False and "PSV-FAKE-99" in out2.get("unknownTags", []),
+                 f"존재하지 않는 Tag가 차단되지 않음: {out2} stderr={err2[:200]}")
+
+        # CONNECT-003: 다른 DS가 이미 claim한 Tag(신규 DS 등록) → 저장 차단
+        out3, err3 = run_validation("PSV-R201", EQUIPMENTS, DS_A)
+        tr.check("CONNECT_003_conflicting_tag_blocked",
+                 out3.get("tagsValid") is False and any(c["tag"]=="PSV-R201" for c in out3.get("conflicts", [])),
+                 f"다른 DS가 claim한 Tag가 차단되지 않음: {out3} stderr={err3[:200]}")
+        tr.check("CONNECT_003_conflict_names_owner",
+                 any(c.get("ownerName")=="LP-FLARE-01" for c in out3.get("conflicts", [])),
+                 f"충돌 대상 DS 이름이 보고되지 않음: {out3}")
+
+        # CONNECT-004: 자기 자신(같은 id) revision에서 기존 Tag 유지 → 정상 저장
+        out4, err4 = run_validation("PSV-R201", EQUIPMENTS, DS_A, editing_js='{id:"DS-A",name:"LP-FLARE-01"}')
+        tr.check("CONNECT_004_self_revision_not_conflict",
+                 out4.get("tagsValid") is True,
+                 f"자기 자신 revision인데 충돌로 차단됨: {out4} stderr={err4[:200]}")
+
+        # CONNECT-005: 동일 DS 내부 중복 Tag → 저장 차단
+        out5, err5 = run_validation("PSV-R201, PSV-R201", EQUIPMENTS, "[]")
+        tr.check("CONNECT_005_internal_duplicate_blocked",
+                 out5.get("tagsValid") is False and "PSV-R201" in out5.get("internalDupTags", []),
+                 f"내부 중복 Tag가 차단되지 않음: {out5} stderr={err5[:200]}")
+
+        # 정상화 정책 미도입 확인: 대소문자만 다른 Tag는 별개로 취급(새 normalization 없음)
+        out6, err6 = run_validation("psv-r201", EQUIPMENTS, "[]")
+        tr.check("CONNECT_no_new_normalization_case_sensitive",
+                 out6.get("tagsValid") is False and "psv-r201" in out6.get("unknownTags", []),
+                 f"대소문자 무시 등 새 normalization이 도입된 것으로 보임(금지 사항): {out6} stderr={err6[:200]}")
+    else:
+        tr.check("CONNECT_node_available", False, "node 실행 파일을 찾을 수 없어 functional 검증 스킵")
+
+    # ── CONNECT-008/009: dischargeSystemId 고정 메커니즘 불변 확인 ──
+    tr.check("CONNECT_008_case_dischargeSystemId_lookup_unchanged",
+             "caseData.dischargeSystemId\n    ? (dischargeSystems || []).find(ds => ds.id === caseData.dischargeSystemId)" in cv_src,
+             "CaseView의 dischargeSystemId 고정 조회 로직이 변경됨 — 기존 Case 보호 위반 가능성")
+    tr.check("CONNECT_009_new_case_matching_unchanged",
+             "const ds = dischargeSystems.find(\n      d => d.connectedTags.includes(equipment.tag)" in arc_src,
+             "ArcSafe.jsx의 새 Case 생성 시 ds 매칭 로직이 변경됨")
+
+    # ── CONNECT-010: C-4.23-A inletPiping 문구 회귀 없음 ───────────
+    iv_src = (SRC / "components" / "InputView.jsx").read_text()
+    tr.check("CONNECT_010_inletpiping_optional_wording_intact",
+             "선택 항목" in iv_src and "OPTIONAL" in iv_src,
+             "C-4.23-A의 인입배관 '선택 항목(OPTIONAL)' 문구가 회귀됨")
+
+    # ── CONNECT-011: C-4.25 Case.fluid 회귀 없음 ──────────────────
+    tr.check("CONNECT_011_fluid_hardcode_still_absent",
+             'fluid:            "CO₂' not in arc_src and "c.fluid" not in dash_src,
+             "C-4.25의 Case.fluid 하드코딩 제거가 회귀됨")
+    tr.check("CONNECT_011_fluid_label_derivation_intact",
+             "_findFluidLabel(c.latestSnap.inputs)" in dash_src,
+             "C-4.25의 Snapshot 기반 fluid 라벨 도출 로직이 회귀됨")
+
+    # ── §11 범위 감사: Engine/Snapshot/Report/Case schema/connectedTags
+    #     데이터 모델/SAMPLE 데이터 미변경 확인 ──────────────────
+    api520_src  = (SRC / "engine" / "api520.js").read_text()
+    relief_src  = (SRC / "engine" / "relief_load.js").read_text()
+    bp_src      = (SRC / "engine" / "backpressure.js").read_text()
+    snap_src    = (SRC / "snapshot" / "create.js").read_text()
+    schema_src  = (SRC / "asset" / "schema.js").read_text()
+    for name, src in [("api520.js", api520_src), ("relief_load.js", relief_src),
+                       ("backpressure.js", bp_src), ("snapshot/create.js", snap_src)]:
+        tr.check(f"SCOPE_C427_engine_snapshot_untouched_{name.replace('/','_').replace('.','_')}",
+                 "C-4.27" not in src,
+                 f"C-4.27이 {name}(Engine/Snapshot 계산 로직)을 건드림 — 범위 위반")
+    tr.check("SCOPE_C427_schema_data_model_untouched",
+             "connectedTags" in schema_src and "C-4.27" not in schema_src,
+             "C-4.27이 asset/schema.js의 connectedTags 데이터 모델을 건드림 — 범위 위반(UI 검증만 허용)")
+    tr.check("SCOPE_C427_sample_data_untouched",
+             "C-4.27" not in schema_src,
+             "C-4.27이 SAMPLE_EQUIPMENT/SAMPLE_DISCHARGE_SYSTEMS를 건드림 — 범위 위반")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
 #  BASELINE LOCK CONTRACT (Sprint A.1) — Engine 1.3.0 기준선 보호 장치
 #  1) ENGINE-VERSION-LOCK-001: Snapshot/ReportPackage/Fixture 엔진버전 일치
 #  2) GOLDEN-FIXTURE-MUTATION-GUARD-001: fixture를 손으로 고치면 감지
@@ -6960,6 +7107,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [C425-FLUID-VERDICT-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── Equipment↔DischargeSystem 연결 안전장치 (C-4.27) ──────────
+    print("\n── C427-001 (Sprint C-4.27) ────────────────────────────")
+    tr = test_c427_connection_integrity_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [C427-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"
