@@ -4679,19 +4679,24 @@ def test_c427_connection_integrity_contract() -> TestResult:
              "경고가 ds 유무에 따른 조건부 렌더가 아닌 것으로 보임")
 
     # ── CONNECT-001/002/003/004/005: 검증 로직 functional 재현 ────
+    # C-4.28에서 이 로직이 공용 함수 validateConnectedTags()로 분리됨
+    # (DischargeSystemForm과 DischargeSystemWizard가 함께 재사용) — 추출
+    # 대상만 갱신, 판정 기준 자체는 C-4.27과 동일.
     if node:
-        rt_start = am_src.index('const rawTags = f.connectedTags.split(",")')
-        hs_start = am_src.index("const handleSave = () => {", rt_start)
-        validation_block = am_src[rt_start:hs_start]
+        vf_start = am_src.index("function validateConnectedTags(")
+        vf_end   = am_src.index("\n}\n", vf_start) + 2
+        validate_fn_block = am_src[vf_start:vf_end]
 
         def run_validation(f_connected_tags, equipments_js, ds_js, editing_js="null"):
             script = f"""
-const f = {{ connectedTags: {json.dumps(f_connected_tags)}, name:"TEST-DS", D:0.1, L:1, mocId:"MOC-TEST-01" }};
+{validate_fn_block}
+const rawTags = {json.dumps(f_connected_tags)}.split(",").map(t=>t.trim()).filter(Boolean);
 const editing = {editing_js};
 const isRevision = !!editing;
 const equipments = {equipments_js};
 const dischargeSystems = {ds_js};
-{validation_block}
+const {{ internalDupTags, unknownTags, conflicts, tagsValid }} =
+  validateConnectedTags(rawTags, equipments, dischargeSystems, isRevision ? editing.id : null);
 console.log(JSON.stringify({{
   tagsValid, unknownTags, internalDupTags,
   conflicts: conflicts.map(c=>({{tag:c.tag, ownerName:c.ownerName}})),
@@ -4787,6 +4792,201 @@ console.log(JSON.stringify({{
     tr.check("SCOPE_C427_sample_data_untouched",
              "C-4.27" not in schema_src,
              "C-4.27이 SAMPLE_EQUIPMENT/SAMPLE_DISCHARGE_SYSTEMS를 건드림 — 범위 위반")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
+#  C-4.28 — DischargeSystem Guided Workflow (Wizard)
+#  WF-001~013: 5단계 마법사 구조, Tag 직접입력 제거, 이미 연결된 설비
+#  선택차단, 저장 시점 최종 방어선(C-4.27 재사용), Cancel/뒤로가기/검토
+#  수정 시 state 보존, 저장 실패 시 입력유지, 기존 Case/C-4.23-A/C-4.25
+#  회귀 없음, Engine/Snapshot/Report 미변경
+# ════════════════════════════════════════════════════════════════
+def test_c428_ds_wizard_contract() -> TestResult:
+    tr = TestResult("C428-001", "DischargeSystem Guided Workflow")
+    node = shutil.which("node")
+
+    am_src   = (SRC / "components" / "AssetMaster.jsx").read_text()
+    arc_src  = (SRC / "ArcSafe.jsx").read_text()
+
+    # 이번 테스트에서 반복 참조할 Wizard 컴포넌트 소스 블록만 추출
+    wiz_start = am_src.index("function DischargeSystemWizard(")
+    wiz_end   = am_src.index("\n// ── RevisionHistoryPanel", wiz_start)
+    wiz_src   = am_src[wiz_start:wiz_end]
+
+    # ── WF-001: 5단계 구조 + 기본 흐름 ─────────────────────────
+    for marker in ['step===1 &&', 'step===2 &&', 'step===3 &&', 'step===4 &&', 'step===5 &&']:
+        tr.check(f"WF_001_step_block_{marker.replace('=','').replace('&','').strip()}",
+                 marker in wiz_src, f"Wizard에 {marker} 블록이 없음")
+    tr.check("WF_001_saves_via_existing_factory",
+             "createDischargeSystem({" in wiz_src,
+             "Wizard가 기존 createDischargeSystem()을 쓰지 않음 — 새 저장 경로를 만든 것으로 보임")
+    tr.check("WF_001_advances_to_complete_on_success",
+             re.search(r"onSave\(ds\);.*\n\s*setSavedDs\(ds\);\s*\n\s*setStep\(5\);", wiz_src) is not None,
+             "저장 성공 시 Step 5(완료)로 전환하는 코드가 없음")
+
+    # ── WF-002/WF-003: state 단일 소스 — 여러 step 컴포넌트가 각자
+    #    로컬 state를 갖는 게 아니라 Wizard 최상단 하나의 useState(data)를
+    #    공유해서 step 전환/뒤로가기/검토-수정에서도 값이 보존되는 구조인지 ──
+    data_state_decls = re.findall(r"const \[data, setData\] = useState\(", wiz_src)
+    tr.check("WF_002_003_single_shared_state",
+             len(data_state_decls) == 1,
+             f"data state가 {len(data_state_decls)}곳에서 선언됨 — 1곳(Wizard 최상단)이어야 step 이동 시 값이 보존됨")
+    tr.check("WF_002_back_uses_setStep_not_remount",
+             "onBack={()=>setStep(2)}" in wiz_src and "onBack={()=>setStep(1)}" in wiz_src,
+             "이전 이동이 setStep이 아닌 다른 방식(리마운트 등)으로 구현된 것으로 보임")
+    tr.check("WF_003_review_edit_links_reuse_setStep",
+             wiz_src.count("onClick={()=>setStep(1)}") >= 1 and
+             wiz_src.count("onClick={()=>setStep(2)}") >= 1 and
+             wiz_src.count("onClick={()=>setStep(3)}") >= 1,
+             "검토(Step4)의 [수정] 링크가 각 Step으로 setStep 이동하지 않음")
+    tr.check("WF_003_review_reads_live_data",
+             "selectedEquip = (equipments||[]).filter(eq=>data.selectedTags.includes(eq.tag))" in wiz_src,
+             "검토 화면이 수정 시점의 스냅샷이 아니라 현재 data를 그대로 읽는 구조인지 확인 실패")
+
+    # ── WF-004: Step 2에 Tag 자유입력 input이 존재하면 FAIL ──────
+    step2_start = wiz_src.index("step===2 &&")
+    step2_end   = wiz_src.index("step===3 &&")
+    step2_block = wiz_src[step2_start:step2_end]
+    tr.check("WF_004_no_free_text_tag_input",
+             "<input" not in step2_block,
+             "Step 2(연결 설비)에 Tag를 직접 입력하는 <input>이 존재함 — 금지 사항 위반")
+    tr.check("WF_004_uses_checkbox_semantics",
+             'role="checkbox"' in step2_block,
+             "Step 2 선택 UI가 실제 checkbox semantics(role)를 갖지 않음(접근성 요구사항)")
+
+    # ── WF-005: 이미 연결된 설비 — 선택 불가 + 사유 표시 (functional) ──
+    tr.check("WF_005_claimed_card_disabled_marker",
+             "aria-disabled={!!claimedBy}" in wiz_src and "tabIndex={claimedBy?-1:0}" in wiz_src,
+             "이미 연결된 설비 카드가 접근성 관점에서 명확히 비활성화되지 않음")
+    tr.check("WF_005_claimed_reason_shown",
+             "이미 다른 배출계통에 연결됨 — {claimedBy}" in wiz_src,
+             "이미 연결된 설비에 대해 사유(연결된 배출계통명)를 보여주지 않음")
+
+    if node:
+        cm_start = wiz_src.index("const claimMap = new Map();")
+        cm_end   = wiz_src.index("const step1Valid", cm_start)
+        claim_block = wiz_src[cm_start:cm_end]
+        script = f"""
+{claim_block}
+console.log(JSON.stringify({{
+  r201: claimMap.get("PSV-R201") || null,
+  r302: claimMap.get("PSV-R302") || null,
+  r201_selectable: !claimMap.has("PSV-R201"),
+}}));
+"""
+        full_script = f"""
+const dischargeSystems = [{{id:"DS-A",name:"LP-FLARE-01",connectedTags:["PSV-R201"]}}];
+{script}
+"""
+        r = subprocess.run([node, "-e", full_script], capture_output=True, text=True, timeout=15)
+        try:
+            out = json.loads(r.stdout.strip())
+        except Exception:
+            out = {}
+        tr.check("WF_005_claimMap_functional",
+                 out.get("r201") == "LP-FLARE-01" and out.get("r302") is None and out.get("r201_selectable") is False,
+                 f"claimMap 계산 결과가 기대와 다름: {out} stderr={r.stderr[:200]}")
+    else:
+        tr.check("WF_005_node_available", False, "node 없어 functional 검증 스킵")
+
+    # ── WF-006: 저장 시점 최종 방어선(C-4.27 재사용, UI가 대체 안 함) ──
+    submit_start = wiz_src.index("const handleSubmit = () => {")
+    submit_end   = wiz_src.index("const cardStyle", submit_start)
+    submit_block = wiz_src[submit_start:submit_end]
+    tr.check("WF_006_revalidates_with_shared_fn_before_create",
+             "validateConnectedTags(rawTags, equipments, dischargeSystems, null)" in submit_block,
+             "저장 직전 공용 validateConnectedTags()로 재검증하지 않음 — C-4.27 최종 방어선 미보존")
+    m = re.search(r"if \(!v\.tagsValid\) \{[\s\S]*?return;\s*\n\s*\}", submit_block)
+    create_idx = submit_block.find("createDischargeSystem(")
+    tr.check("WF_006_validation_gates_create_call",
+             m is not None and create_idx > m.end(),
+             "재검증 실패 시 createDischargeSystem 호출을 막는 구조(검증→return, 그 뒤에 생성)가 아님")
+
+    # ── WF-007: Cancel — 저장 없이 취소, 확인 다이얼로그 ──────────
+    tr.check("WF_007_cancel_confirm_text",
+             "입력 중인 내용이 있습니다. 등록을 취소하시겠습니까?" in wiz_src,
+             "취소 시 확인 문구가 없음")
+    tr.check("WF_007_cancel_never_saves",
+             "handleCancel" in wiz_src and "onCancel();" in wiz_src and
+             wiz_src.index("onCancel();") < wiz_src.index("const claimMap"),
+             "handleCancel 경로에서 저장 관련 호출이 섞여있을 가능성")
+    tr.check("WF_007_wizard_cancel_wiring_no_side_effect",
+             'onCancel={()=>setShowDsForm(false)}/>' in am_src,
+             "AssetMaster가 Wizard onCancel에서 setShowDsForm(false) 외의 부수효과(저장 등)를 실행하는 것으로 보임")
+
+    # ── WF-008: 저장 실패 시 입력 유지, 완료 화면으로 안 넘어감 ────
+    catch_block = submit_block[submit_block.index("} catch(e) {"):]
+    tr.check("WF_008_catch_does_not_advance_to_complete",
+             "setStep(5)" not in catch_block,
+             "저장 실패(catch) 경로에서도 Step 5로 넘어갈 수 있는 것으로 보임")
+    tr.check("WF_008_catch_sets_error_keeps_data",
+             "setSaveError(" in catch_block and "setData(" not in catch_block,
+             "저장 실패 시 오류 표시가 없거나, data를 초기화해버리는 것으로 보임(입력값 소실)")
+    tr.check("WF_008_review_shows_error_and_retry",
+             "saveError &&" in wiz_src and "다시 시도해주세요" in wiz_src,
+             "검토 화면에 저장 실패 오류/재시도 안내가 표시되지 않음")
+
+    # ── WF-009: 새로고침 — 새 persistence 도입 여부 확인 ──────────
+    # 이번 Change는 새 DB/schema를 만들지 않는다는 원칙에 따라 Wizard
+    # state는 in-memory(React state)로만 유지한다 — 기존 단일 폼도 새로고침
+    # 시 동일하게 소실되므로 이번 변경으로 인한 새로운 회귀는 아니다.
+    tr.check("WF_009_no_new_persistence_introduced",
+             "CaseRepository" not in wiz_src and "indexedDB" not in wiz_src.lower(),
+             "Wizard가 새로운 persistence(CaseRepository 등) 경로를 도입함 — 범위 위반(새 DB/schema 금지)")
+
+    # ── WF-010: 기존 Case dischargeSystemId 보호 — C-4.27과 동일 메커니즘 불변 ──
+    cv_src = (SRC / "components" / "CaseView.jsx").read_text()
+    tr.check("WF_010_case_dischargeSystemId_lookup_unchanged",
+             "caseData.dischargeSystemId\n    ? (dischargeSystems || []).find(ds => ds.id === caseData.dischargeSystemId)" in cv_src,
+             "CaseView의 dischargeSystemId 고정 조회 로직이 변경됨")
+    tr.check("WF_010_new_case_matching_unchanged",
+             "const ds = dischargeSystems.find(\n      d => d.connectedTags.includes(equipment.tag)" in arc_src,
+             "ArcSafe.jsx의 새 Case 생성 시 ds 매칭 로직이 변경됨")
+    tr.check("WF_010_wizard_save_shape_matches_existing_handler",
+             "onSave={ds=>onAddDischargeSystem(ds)}" in am_src,
+             "Wizard의 저장 결과가 기존 onAddDischargeSystem 핸들러로 그대로 흘러가지 않음(새 경로 도입 의심)")
+
+    # ── WF-011: C-4.23-A inletPiping 회귀 없음 ─────────────────────
+    iv_src = (SRC / "components" / "InputView.jsx").read_text()
+    tr.check("WF_011_inletpiping_optional_wording_intact",
+             "선택 항목" in iv_src and "OPTIONAL" in iv_src,
+             "C-4.23-A의 인입배관 '선택 항목(OPTIONAL)' 문구가 회귀됨")
+
+    # ── WF-012: C-4.25 Case.fluid 회귀 없음 ────────────────────────
+    dash_src = (SRC / "components" / "Dashboard.jsx").read_text()
+    tr.check("WF_012_fluid_hardcode_still_absent",
+             'fluid:            "CO₂' not in arc_src and "c.fluid" not in dash_src,
+             "C-4.25의 Case.fluid 하드코딩 제거가 회귀됨")
+    tr.check("WF_012_fluid_label_derivation_intact",
+             "_findFluidLabel(c.latestSnap.inputs)" in dash_src,
+             "C-4.25의 Snapshot 기반 fluid 라벨 도출 로직이 회귀됨")
+
+    # ── WF-013: Engine/Snapshot/Report 미변경 (diff 마커 확인) ─────
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+    relief_src = (SRC / "engine" / "relief_load.js").read_text()
+    bp_src     = (SRC / "engine" / "backpressure.js").read_text()
+    snap_src   = (SRC / "snapshot" / "create.js").read_text()
+    report_src = (SRC / "report" / "createPackage.js").read_text()
+    for name, src in [("api520.js", api520_src), ("relief_load.js", relief_src),
+                       ("backpressure.js", bp_src), ("snapshot/create.js", snap_src),
+                       ("report/createPackage.js", report_src)]:
+        tr.check(f"WF_013_engine_snapshot_report_untouched_{name.replace('/','_').replace('.','_')}",
+                 "C-4.28" not in src,
+                 f"C-4.28이 {name}(Engine/Snapshot/Report)을 건드림 — 범위 위반")
+
+    # ── 샘플 데이터 Secondary화(§17) — 표시 전용, 데이터 미변경 ─────
+    schema_src = (SRC / "asset" / "schema.js").read_text()
+    tr.check("WF_sample_secondary_no_data_change",
+             "C-4.28" not in schema_src,
+             "C-4.28이 asset/schema.js(SAMPLE 데이터/스키마)를 건드림 — 범위 위반")
+    tr.check("WF_sample_primary_cta_is_new_entry",
+             '+ 새 설비 등록' in am_src and '예시 데이터로 구조 참고하기' in am_src,
+             "새 설비 등록 CTA/예시 데이터 Secondary 노출 문구가 없음")
+    tr.check("WF_sample_badge_present",
+             am_src.count('">예시</span>') >= 1 or am_src.count(">예시</span>") >= 1,
+             "샘플 데이터를 구분하는 배지가 없음")
 
     return tr
 
@@ -7118,6 +7318,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [C427-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── DischargeSystem Guided Workflow (C-4.28) ──────────────────
+    print("\n── C428-001 (Sprint C-4.28) ────────────────────────────")
+    tr = test_c428_ds_wizard_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [C428-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"
