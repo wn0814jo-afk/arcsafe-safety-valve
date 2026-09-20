@@ -1144,9 +1144,10 @@ function AssetMaster({ equipments, dischargeSystems,
                        onSelectEquipment,
                        onAddEquipment, onReviseEquipment,
                        onAddDischargeSystem,
-                       onReviseDischargeSystem, onBack }) {
+                       onReviseDischargeSystem, onBack,
+                       autoOpenNewEquipmentForm }) {
   const [tab,      setTab]      = useState("equipment"); // equipment | discharge
-  const [showEqForm, setShowEqForm] = useState(false);
+  const [showEqForm, setShowEqForm] = useState(!!autoOpenNewEquipmentForm); // C-4.30
   const [showDsForm, setShowDsForm] = useState(false); // C-4.28: 이제 DischargeSystemWizard를 연다
   const [editingEq,  setEditingEq]  = useState(null); // 개정 대상 Equipment
   const [editingDs,  setEditingDs]  = useState(null); // 개정 대상 DischargeSystem

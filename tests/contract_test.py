@@ -4992,6 +4992,128 @@ const dischargeSystems = [{{id:"DS-A",name:"LP-FLARE-01",connectedTags:["PSV-R20
 
 
 # ════════════════════════════════════════════════════════════════
+#  C-4.30 — First-Run Entry Screen 재구성
+#  ENTRY-001~015: 목적 중심 첫 화면, 내부 용어 지연 노출, 예시 진입점의
+#  실데이터 격리, 기존 검토 이어하기 조건부 노출, C-4.27/C-4.28 회귀 없음,
+#  Engine/Snapshot/Report 미변경
+# ════════════════════════════════════════════════════════════════
+def test_c430_entry_journey_contract() -> TestResult:
+    tr = TestResult("C430-001", "First-Run Entry Screen 재구성")
+
+    dash_src = (SRC / "components" / "Dashboard.jsx").read_text()
+    arc_src  = (SRC / "ArcSafe.jsx").read_text()
+    cv_src   = (SRC / "components" / "CaseView.jsx").read_text()
+
+    frm_start = dash_src.index("function FirstRunMenu(")
+    frm_end   = dash_src.index("\n// C-4.30: \"기존 검토", frm_start)
+    firstrun_block = dash_src[frm_start:frm_end]
+
+    res_start = dash_src.index("function ReviewEntryScreen(")
+    res_end   = dash_src.index("\nfunction Dashboard(", res_start)
+    reviewentry_block = dash_src[res_start:res_end]
+
+    tr.check("ENTRY_001_primary_cta_is_review",
+             'emphasis="primary"' in firstrun_block and
+             'title="안전밸브 사양 검토하기"' in firstrun_block,
+             "FirstRunMenu의 Primary EntryCard가 '안전밸브 사양 검토하기'가 아님")
+
+    tr.check("ENTRY_002_old_cta_removed",
+             "설비 선택 → 새 검토 시작" not in dash_src,
+             "옛 Primary CTA 문구('설비 선택 → 새 검토 시작')가 여전히 남아있음")
+
+    core_journey_block = firstrun_block + reviewentry_block
+    for term in ["Snapshot", "MOC", "DischargeSystem", "Case", "설비대장"]:
+        tr.check(f"ENTRY_003_no_{term.replace(' ','_')}_in_core_cta",
+                 re.search(r'\b' + re.escape(term) + r'\b', core_journey_block) is None,
+                 f"핵심 CTA/설명(FirstRunMenu·ReviewEntryScreen)에 내부 용어 '{term}'가 노출됨")
+
+    tr.check("ENTRY_004_005_secondary_gated_by_hasCases",
+             "{hasCases && (" in firstrun_block and
+             'title="기존 검토 이어하기"' in firstrun_block,
+             "'기존 검토 이어하기' EntryCard가 hasCases 조건으로 게이트되지 않음")
+
+    tr.check("ENTRY_006_review_entry_title",
+             "어떤 안전밸브를 검토할까요?" in reviewentry_block,
+             "ReviewEntryScreen에 목적 중심 타이틀이 없음")
+    tr.check("ENTRY_006_routing_wired",
+             'onStartReview={()=>setScreen("review-entry")}' in arc_src and
+             'curScreen === "review-entry"' in arc_src,
+             "Primary CTA가 review-entry 화면으로 라우팅되지 않음")
+
+    tr.check("ENTRY_007_two_distinct_options",
+             "① 등록된 안전밸브에서 선택" in reviewentry_block and
+             "② 새 안전밸브 정보 입력" in reviewentry_block and
+             "onClick={onSelectExisting}" in reviewentry_block and
+             "onClick={onCreateNew}" in reviewentry_block,
+             "ReviewEntryScreen에 두 선택지가 명확히 분리돼 있지 않음")
+    tr.check("ENTRY_007_new_entry_autoopens_equipment_form",
+             'autoOpenNewEquipmentForm={entryIntent === "new"}' in arc_src and
+             "useState(!!autoOpenNewEquipmentForm)" in (SRC / "components" / "AssetMaster.jsx").read_text(),
+             "'새 안전밸브 정보 입력'이 AssetMaster의 신규 등록 폼을 자동으로 열지 않음")
+
+    schema_src = (SRC / "asset" / "schema.js").read_text()
+    tr.check("ENTRY_008_schema_untouched",
+             "C-4.30" not in schema_src,
+             "C-4.30이 asset/schema.js(Equipment/DischargeSystem 데이터 모델)를 건드림")
+
+    tr.check("ENTRY_009_example_entrypoint_exists",
+             "처음이라면 예시로 검토해보기" in dash_src and "onStartExample" in dash_src,
+             "예시 진입점(FirstRunMenu)이 없음")
+    tr.check("ENTRY_009_example_banner_in_caseview",
+             "caseData.isExample &&" in cv_src and "실제 검토가 아닙니다" in cv_src,
+             "CaseView에 예시 배너가 없음")
+
+    handle_start = arc_src.index("const handleStartExample = () => {")
+    handle_end   = arc_src.index("\n  };", handle_start)
+    example_handler = arc_src[handle_start:handle_end]
+    tr.check("ENTRY_010_example_never_added_to_cases",
+             "setCases(" not in example_handler,
+             "handleStartExample이 cases 배열에 예시 Case를 추가함 — 실 데이터와 섞일 위험")
+    tr.check("ENTRY_010_example_never_persisted_on_create",
+             "CaseRepository.saveCase" not in example_handler,
+             "handleStartExample이 예시 Case를 즉시 persistence에 저장함")
+    tr.check("ENTRY_010_example_flagged",
+             "isExample:        true" in example_handler,
+             "예시 Case에 isExample 플래그가 없음 — CaseView가 구분할 방법이 없음")
+    tr.check("ENTRY_010_caseview_skips_draft_persistence_for_example",
+             "if (caseData.isExample) { setDraftHydrated(true); return; }" in cv_src and
+             "if (caseData.isExample || !draftHydrated" in cv_src,
+             "CaseView가 예시 Case에 대해 draft 로드/저장을 건너뛰지 않음 — IndexedDB에 예시 흔적이 남을 수 있음")
+
+    tr.check("ENTRY_011_back_returns_to_dashboard",
+             'onBack={()=>setScreen("dashboard")}' in arc_src,
+             "ReviewEntryScreen의 뒤로가기가 dashboard로 복귀하지 않음")
+
+    am_src = (SRC / "components" / "AssetMaster.jsx").read_text()
+    tr.check("ENTRY_012_c428_wizard_intact",
+             "function DischargeSystemWizard(" in am_src and
+             "DS_WIZARD_STEPS" in am_src,
+             "C-4.28 DischargeSystemWizard 구조가 회귀됨")
+
+    tr.check("ENTRY_013_c427_validation_intact",
+             "function validateConnectedTags(" in am_src,
+             "C-4.27 공용 검증 함수 validateConnectedTags가 회귀됨")
+
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+    relief_src = (SRC / "engine" / "relief_load.js").read_text()
+    bp_src     = (SRC / "engine" / "backpressure.js").read_text()
+    snap_src   = (SRC / "snapshot" / "create.js").read_text()
+    report_src = (SRC / "report" / "createPackage.js").read_text()
+    for name, src in [("api520.js", api520_src), ("relief_load.js", relief_src),
+                       ("backpressure.js", bp_src), ("snapshot/create.js", snap_src),
+                       ("report/createPackage.js", report_src)]:
+        tr.check(f"ENTRY_014_engine_snapshot_report_untouched_{name.replace('/','_').replace('.','_')}",
+                 "C-4.30" not in src,
+                 f"C-4.30이 {name}(Engine/Snapshot/Report)을 건드림 — 범위 위반")
+
+    tr.check("ENTRY_015_c425_fluid_verdict_logic_preserved_in_rewrite",
+             "_findFluidLabel(c.latestSnap.inputs)" in dash_src and '"미정"' in dash_src,
+             "Dashboard.jsx 재작성 과정에서 C-4.25 fluid 표시 로직이 유실됨")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
 #  BASELINE LOCK CONTRACT (Sprint A.1) — Engine 1.3.0 기준선 보호 장치
 #  1) ENGINE-VERSION-LOCK-001: Snapshot/ReportPackage/Fixture 엔진버전 일치
 #  2) GOLDEN-FIXTURE-MUTATION-GUARD-001: fixture를 손으로 고치면 감지
@@ -7329,6 +7451,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [C428-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── First-Run Entry Screen 재구성 (C-4.30) ────────────────────
+    print("\n── C430-001 (Sprint C-4.30) ────────────────────────────")
+    tr = test_c430_entry_journey_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [C430-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"

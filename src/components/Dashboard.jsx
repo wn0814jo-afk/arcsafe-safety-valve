@@ -88,14 +88,18 @@ function CaseCard({ c, onOpen }) {
   );
 }
 
-function AboutBanner() {
-  const [open, setOpen] = useState(true);
+// C-4.30: 첫 화면에서는 기본적으로 접혀있다("정보를 삭제하지 않되, 아무
+// 행동도 하기 전에 학습을 강요하지 않는다" 원칙). 필요하면 사용자가 직접
+// 펼쳐서 API 520/521·Snapshot·MOC 같은 상세 설명을 볼 수 있다 — 내용 자체는
+// 그대로 유지, 노출 시점만 지연.
+function AboutBanner({ defaultOpen }) {
+  const [open, setOpen] = useState(!!defaultOpen);
   if (!open) {
     return (
       <button onClick={()=>setOpen(true)}
         style={{display:"block",width:"100%",textAlign:"left",background:"transparent",
           border:`1px dashed ${T.border}`,borderRadius:10,padding:"6px 10px",
-          marginBottom:12,fontSize:10,color:T.sub,fontFamily:font.sans,cursor:"pointer"}}>
+          marginBottom:14,fontSize:10,color:T.sub,fontFamily:font.sans,cursor:"pointer"}}>
         ⓘ 이 앱은 무엇을 위한 도구인가요?
       </button>
     );
@@ -127,43 +131,141 @@ function AboutBanner() {
   );
 }
 
-function Dashboard({ cases, onOpenCase, onNewCase, onOpenAssetMaster, onWipeAllData }) {
-  const [reviewType, setReviewType] = useState("정기 PSM 검토");
-  const REVIEW_OPTIONS = ["정기 PSM 검토","최초 설치 검토","변경 검토 (MOC)","사고 후 검토"];
+// ── EntryCard — First-Run 메뉴의 Primary/Secondary 카드 공용 컴포넌트 ──
+function EntryCard({ emphasis, title, desc, onClick }) {
+  const isPrimary = emphasis === "primary";
+  return (
+    <button onClick={onClick}
+      style={{display:"block",width:"100%",textAlign:"left",
+        background:isPrimary?T.navyLight:T.white,
+        color:isPrimary?T.white:T.navy,
+        border:isPrimary?"none":`1.5px solid ${T.border}`,
+        borderRadius:14,padding:"16px 18px",marginBottom:10,cursor:"pointer",
+        boxShadow:isPrimary?`0 5px 0 ${T.navy}`:"0 2px 8px #0001",
+        fontFamily:font.sans,appearance:"none",WebkitAppearance:"none",
+        WebkitTapHighlightColor:"rgba(0,0,0,0.1)"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <span style={{fontSize:15,fontWeight:900}}>{title}</span>
+        <span style={{fontSize:15,fontWeight:900}}>→</span>
+      </div>
+      <div style={{fontSize:11,marginTop:4,
+        color:isPrimary?T.blueBg:T.sub,fontWeight:isPrimary?600:400}}>
+        {desc}
+      </div>
+    </button>
+  );
+}
 
+// C-4.30: 첫 화면 — "무엇을 하시겠어요?"를 사용자 목적 중심으로 먼저
+// 받는다. 데이터 모델(설비/배출계통/Case/Snapshot/MOC)은 여기서 설명하지
+// 않고, 실제로 필요한 다음 화면(ReviewEntryScreen)에서 그때그때만 노출.
+function FirstRunMenu({ hasCases, onStartReview, onShowExisting, onStartExample }) {
   return (
     <div>
-      <AboutBanner/>
+      <AboutBanner defaultOpen={false}/>
 
-      {/* 메인 CTA — 설비대장에서 선택 */}
-      <button onClick={onOpenAssetMaster}
-        style={{width:"100%",padding:"16px",background:T.navyLight,color:T.white,
-          border:"none",borderRadius:14,fontSize:15,fontWeight:900,
-          fontFamily:font.sans,cursor:"pointer",
-          boxShadow:`0 5px 0 ${T.navy}`,marginBottom:8,
-          WebkitTapHighlightColor:"rgba(255,255,255,0.2)"}}>
-        + 설비 선택 → 새 검토 시작
-      </button>
-      <div style={{fontSize:10,color:T.sub,fontFamily:font.sans,textAlign:"center",marginBottom:16}}>
-        설비대장에서 PSV를 선택하면 사양이 자동으로 채워집니다
+      <div style={{fontSize:14,fontWeight:900,color:T.navy,fontFamily:font.sans,
+        marginBottom:12,textAlign:"center"}}>
+        무엇을 하시겠어요?
       </div>
 
-      {/* 진행 중인 검토 */}
-      {cases.length > 0 && (
-        <>
-          <div style={{fontSize:10,fontWeight:700,color:T.sub,fontFamily:font.mono,marginBottom:10,letterSpacing:1}}>
-            진행 중인 검토 ({cases.length})
-          </div>
-          {cases.map(c => <CaseCard key={c.id} c={c} onOpen={onOpenCase}/>)}
-        </>
+      <EntryCard emphasis="primary"
+        title="안전밸브 사양 검토하기"
+        desc="내 안전밸브가 적정한지 확인합니다."
+        onClick={onStartReview}/>
+
+      {hasCases && (
+        <EntryCard emphasis="secondary"
+          title="기존 검토 이어하기"
+          desc="이전에 작성한 검토를 계속합니다."
+          onClick={onShowExisting}/>
       )}
 
-      {cases.length === 0 && (
+      <button onClick={onStartExample}
+        style={{display:"block",width:"100%",textAlign:"center",background:"transparent",
+          border:"none",color:T.blue,fontSize:11,fontWeight:700,fontFamily:font.sans,
+          cursor:"pointer",padding:"8px 4px",marginTop:2}}>
+        처음이라면 예시로 검토해보기
+      </button>
+    </div>
+  );
+}
+
+// C-4.30: "기존 검토 이어하기"를 눌렀을 때만 보여주는 목록 — 여기서도
+// 사용자에게는 "Case"라는 말을 쓰지 않는다(카드 자체가 밸브Tag·위치·
+// 판정만 보여줌).
+function ExistingReviewList({ cases, onOpen, onBack }) {
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+        <button onClick={onBack}
+          style={{padding:"8px 12px",background:T.bg,border:`1px solid ${T.border}`,
+            borderRadius:9,fontSize:13,fontWeight:700,color:T.sub,
+            fontFamily:font.mono,cursor:"pointer"}}>←</button>
+        <div style={{fontSize:14,fontWeight:900,color:T.navy,fontFamily:font.sans}}>
+          진행 중인 검토
+        </div>
+      </div>
+      {cases.length === 0 ? (
         <div style={{textAlign:"center",padding:"40px 20px",color:T.gray,fontFamily:font.sans}}>
           <div style={{fontSize:40,marginBottom:10}}>📋</div>
           <div style={{fontSize:13,color:T.sub,fontWeight:700}}>진행 중인 검토가 없습니다</div>
-          <div style={{fontSize:11,color:T.gray,marginTop:4}}>위 버튼으로 설비를 선택해 검토를 시작하세요</div>
         </div>
+      ) : (
+        cases.map(c => <CaseCard key={c.id} c={c} onOpen={onOpen}/>)
+      )}
+    </div>
+  );
+}
+
+// C-4.30: Primary CTA("안전밸브 사양 검토하기") 클릭 직후 보여주는 목적
+// 중심 중간 화면. "설비를 선택하세요"로 시작하지 않는다 — 내부적으로는
+// Equipment를 다루더라도 사용자에게는 "등록된 안전밸브"로 설명한다.
+function ReviewEntryScreen({ onSelectExisting, onCreateNew, onBack }) {
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16}}>
+        <button onClick={onBack}
+          style={{padding:"8px 12px",background:T.bg,border:`1px solid ${T.border}`,
+            borderRadius:9,fontSize:13,fontWeight:700,color:T.sub,
+            fontFamily:font.mono,cursor:"pointer"}}>←</button>
+      </div>
+      <div style={{fontSize:15,fontWeight:900,color:T.navy,fontFamily:font.sans,marginBottom:4}}>
+        어떤 안전밸브를 검토할까요?
+      </div>
+      <div style={{fontSize:11,color:T.sub,fontFamily:font.sans,marginBottom:16}}>
+        검토할 안전밸브를 선택하거나 새로 입력할 수 있습니다.
+      </div>
+
+      <EntryCard emphasis="secondary"
+        title="① 등록된 안전밸브에서 선택"
+        desc="이미 등록된 설비의 안전밸브 사양으로 검토합니다."
+        onClick={onSelectExisting}/>
+      <EntryCard emphasis="secondary"
+        title="② 새 안전밸브 정보 입력"
+        desc="아직 등록하지 않은 안전밸브의 사양을 입력합니다."
+        onClick={onCreateNew}/>
+    </div>
+  );
+}
+
+function Dashboard({ cases, onOpenCase, onStartReview, onStartExample, onWipeAllData }) {
+  // C-4.30: 첫 화면은 이제 "목적 선택 메뉴"가 기본이고, "기존 검토
+  // 이어하기"를 눌렀을 때만 실제 목록 화면으로 전환한다(같은 컴포넌트
+  // 내부 상태 — 별도 top-level screen을 늘리지 않음, §13 상태2).
+  const [showExisting, setShowExisting] = useState(false);
+  const hasCases = cases.length > 0;
+
+  return (
+    <div>
+      {showExisting ? (
+        <ExistingReviewList cases={cases} onOpen={onOpenCase}
+          onBack={()=>setShowExisting(false)}/>
+      ) : (
+        <FirstRunMenu hasCases={hasCases}
+          onStartReview={onStartReview}
+          onShowExisting={()=>setShowExisting(true)}
+          onStartExample={onStartExample}/>
       )}
 
       {/* C-4.22-B PERSISTENCE-005: 과도한 경고 UI 없이 짧은 고지 한 줄 +

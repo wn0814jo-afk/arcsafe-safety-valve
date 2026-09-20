@@ -22,6 +22,10 @@ function ArcSafe() {
   const [cases,      setCases]      = useState([]);
   const [activeCase, setActiveCase] = useState(null);
   const [screen,     setScreen]     = useState("dashboard");
+  // C-4.30: "review-entry"(어떤 안전밸브를 검토할까요?) 중간 화면과,
+  // 거기서 "② 새 안전밸브 정보 입력"을 골랐을 때 AssetMaster가 신규
+  // 등록 폼을 자동으로 열게 하는 1회성 의도 플래그.
+  const [entryIntent, setEntryIntent] = useState(null); // null | "new"
 
   // ── C-4.22-B — Device-local persistence hydrate (최초 1회) ──
   // PERSISTENCE-002: 이 로드가 실패해도(IndexedDB 미지원/차단 등) 앱은
@@ -121,6 +125,31 @@ function ArcSafe() {
 
   const handleOpenCase = (c) => setActiveCase(c);
   const handleBack = () => setActiveCase(null);
+
+  // C-4.30: "예시로 검토해보기" — 실제 Case를 하나도 만들지 않는다.
+  // cases 배열에 절대 추가하지 않음(Dashboard 목록/CaseRepository.saveCase
+  // 양쪽에서 자연히 격리됨 — Snapshot/승인 갱신 핸들러가 cases.map으로 대상을 찾을 때 이 id가 배열에 없으므로 매치 자체가
+  // 안 되고, activeCase 쪽만 직접 갱신되어 화면은 정상 동작하면서도
+  // 저장은 전혀 안 되는 기존 구조를 그대로 활용). SAMPLE_EQUIPMENT의
+  // PSV-R201을 그대로 사용 — 새 fixture를 만들지 않는다.
+  const handleStartExample = () => {
+    const eq = equipments.find(e => e.tag === "PSV-R201") || equipments[0];
+    if (!eq) return;
+    const ds = dischargeSystems.find(d => d.connectedTags.includes(eq.tag)) || null;
+    const exampleCase = {
+      id:               "EXAMPLE-CASE",
+      valveTag:         eq.tag,
+      equipment:        eq,
+      dischargeSystemId:ds?.id || null,
+      reviewType:       "예시 검토",
+      workflow:         "DRAFT",
+      latestSnap:       null,
+      snapshotHistory:  [],
+      approvals:        [],
+      isExample:        true, // 표시 전용 — Case schema 필드 아님
+    };
+    setActiveCase(exampleCase);
+  };
 
   // Equipment 선택 → Case 생성 → CaseView 진입
   const handleEquipmentSelect = (equipment) => {
@@ -230,6 +259,7 @@ function ArcSafe() {
 
   const curScreen = activeCase ? "case"
     : screen === "assets" ? "assets"
+    : screen === "review-entry" ? "review-entry"
     : "dashboard";
 
   return (
@@ -321,6 +351,14 @@ function ArcSafe() {
             onReviseEquipment={handleReviseEquipment}
             onAddDischargeSystem={handleAddDischargeSystem}
             onReviseDischargeSystem={handleReviseDischargeSystem}
+            autoOpenNewEquipmentForm={entryIntent === "new"}
+            onBack={()=>{ setScreen("dashboard"); setEntryIntent(null); }}
+          />
+        )}
+        {curScreen === "review-entry" && (
+          <ReviewEntryScreen
+            onSelectExisting={()=>{ setEntryIntent(null); setScreen("assets"); }}
+            onCreateNew={()=>{ setEntryIntent("new"); setScreen("assets"); }}
             onBack={()=>setScreen("dashboard")}
           />
         )}
@@ -328,8 +366,8 @@ function ArcSafe() {
           <Dashboard
             cases={cases}
             onOpenCase={handleOpenCase}
-            onNewCase={()=>setScreen("assets")}
-            onOpenAssetMaster={()=>setScreen("assets")}
+            onStartReview={()=>setScreen("review-entry")}
+            onStartExample={handleStartExample}
             onWipeAllData={CaseRepository.isAvailable() ? handleWipeAllData : null}
           />
         )}

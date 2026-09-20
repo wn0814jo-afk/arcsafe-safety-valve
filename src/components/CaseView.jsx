@@ -145,7 +145,13 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   // 1) 최초 마운트 시 저장된 Draft를 복원한다. 저장된 Draft가 없으면
   //    (res.draft === null) 아무것도 하지 않고 지금 있는 초기값(Equipment
   //    기반 기본값 등, initialInputs 참고)을 그대로 쓴다.
+  // C-4.30: 예시 Case(caseData.isExample)는 cases 배열에 애초에 들어가지
+  // 않고(ArcSafe.jsx handleStartExample), 여기서는 Draft persistence
+  // 자체를 완전히 건너뛴다 — IndexedDB(caseDrafts)에 예시 흔적이 전혀
+  // 남지 않도록. Case/Snapshot schema는 그대로(isExample은 표시 전용
+  // 플래그일 뿐 스키마에 정의된 필드가 아님).
   useEffect(() => {
+    if (caseData.isExample) { setDraftHydrated(true); return; }
     if (!CaseRepository.isAvailable()) { setDraftHydrated(true); return; }
     let cancelled = false;
     CaseRepository.loadDraft(caseId).then(res => {
@@ -173,7 +179,7 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
   //    state가 바뀔 때마다 600ms debounce로 저장한다(키 입력마다
   //    쓰지 않음).
   useEffect(() => {
-    if (!draftHydrated || !CaseRepository.isAvailable()) return;
+    if (caseData.isExample || !draftHydrated || !CaseRepository.isAvailable()) return;
     const timer = setTimeout(() => {
       CaseRepository.saveDraft(caseId, {
         screen, inputs, deviceType,
@@ -610,6 +616,16 @@ function CaseView({ caseData, dischargeSystems, onBack, onSnapshotCreate, onAppr
           {wfLabel}
         </div>
       </div>
+
+      {caseData.isExample && (
+        <div style={{background:"#F3F0FF",border:"1px solid #D9CFFF",borderRadius:11,
+          padding:"9px 13px",marginBottom:12,fontSize:11,color:"#5B3FD6",
+          fontFamily:font.sans,fontWeight:700,display:"flex",alignItems:"center",gap:6}}>
+          <span style={{fontSize:8,padding:"2px 7px",borderRadius:8,background:"#7C5CFC",
+            color:"#fff",fontFamily:font.mono}}>예시</span>
+          실제 검토가 아닙니다 — 검토 과정을 미리 체험해보는 화면입니다. 저장되지 않습니다.
+        </div>
+      )}
 
       {/* 탭 */}
       <div style={{display:"flex",gap:6,marginBottom:14,
