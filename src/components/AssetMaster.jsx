@@ -1642,7 +1642,7 @@ function AssetMaster({ equipments, dischargeSystems,
               + 새 안전밸브 정보 입력
             </button>
           )}
-          {(() => {
+          {!showEqForm && (() => {
             const realEq   = equipments.filter(eq=>!SAMPLE_EQUIPMENT_TAGS.has(eq.tag));
             const sampleEq = equipments.filter(eq=> SAMPLE_EQUIPMENT_TAGS.has(eq.tag));
             return (

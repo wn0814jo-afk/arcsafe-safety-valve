@@ -5294,6 +5294,12 @@ def test_c431_equipment_wizard_contract() -> TestResult:
              "C-4.31" not in schema_src,
              "C-4.31이 asset/schema.js(Equipment 스키마/유일성 정책)를 건드림 — 범위 위반")
 
+    # ── 실사용 중 발견: Wizard가 열려있을 때 기존 설비 목록이 그 아래
+    #    계속 보여서 "설비대장에 들어왔다"는 인상을 주던 문제 수정 확인 ──
+    tr.check("WF_031_022_equipment_list_hidden_while_wizard_open",
+             "{!showEqForm && (() => {" in am_src,
+             "Wizard가 열려있는 동안 기존 설비 목록이 계속 렌더링됨 — 설비대장에 들어온 것처럼 보이는 문제 회귀")
+
     return tr
 
 
