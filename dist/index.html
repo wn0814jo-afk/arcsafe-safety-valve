@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:fa5553fdb98b\n\n' +
+    box.textContent = '[ERROR] BUILD:cec7c5fc8776\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:fa5553fdb98b\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:cec7c5fc8776\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:fa5553fdb98b | 2026-09-20T23:31:07Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:cec7c5fc8776 | 2026-09-22T01:55:21Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "fa5553fdb98b";
+const __BUILD_HASH__ = "cec7c5fc8776";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -6295,6 +6295,404 @@ function EquipmentForm({ onSave, onCancel, editing }) {
 // 대비해 저장 시점에는 반드시 이 함수를 다시 돌린다 — C-4.27 검증 자체를
 // 대체하는 게 아니라 최종 방어선으로 유지(WF-006). 판정 기준은 C-4.27과
 // 완전히 동일(trim 후 완전일치) — 새 normalization 도입하지 않음.
+// ── EquipmentWizard (C-4.31) ────────────────────────────────────
+// "새 안전밸브 정보 입력" 전용 Guided Journey. 기존 EquipmentForm(개정
+// 경로)은 전혀 건드리지 않는다 — Equipment는 여전히 단일 레코드(Valve와
+// Protected Equipment로 스키마를 쪼개지 않음)이고, 이 컴포넌트는 그
+// 레코드의 필드를 의미별 단계로 나눠서만 보여준다. 검증 기준(psetErr/
+// ipPartial/ipInvalid/valid)은 EquipmentForm과 완전히 동일 — 새로
+// 만들지 않고 그대로 재현한다.
+//
+// 단계별 필드 소속(C-4.31 Audit 계약):
+//   ① 보호 대상 설비 — 설치 위치, MAWP
+//   ② 안전밸브 기본 정보 — Tag No., 밸브 종류
+//   ③ 설정압력·과압·오리피스 — 설정압, Overpressure, 오리피스, 입구/출구 Size
+//   ④ 연결 배관 조건 — L, D, ΣK (C-4.23-A optional 정책 그대로)
+//   ⑤ 제조사·식별 정보 — 제조사, 모델, Serial, 설치일
+//   ⑥ 입력 확인
+const EQ_WIZARD_STEPS = ["보호 대상 설비","안전밸브 기본 정보","설정압력·과압·오리피스","연결 배관 조건","제조사·식별 정보","입력 확인"];
+
+function EqWizardStepIndicator({ step }) {
+  return (
+    <div style={{display:"flex",gap:3,marginBottom:16,overflowX:"auto"}}>
+      {EQ_WIZARD_STEPS.map((label,i)=>{
+        const n = i+1;
+        const state = n<step ? "done" : n===step ? "current" : "todo";
+        return (
+          <div key={label} style={{flex:1,textAlign:"center",minWidth:44}}>
+            <div style={{
+              width:20,height:20,borderRadius:"50%",margin:"0 auto 2px",
+              display:"flex",alignItems:"center",justifyContent:"center",
+              fontSize:9,fontWeight:900,fontFamily:font.mono,
+              background: state==="done"?T.navyLight : state==="current"?T.navy : T.bg,
+              color: state==="todo"?T.gray:T.white,
+              border:`1.5px solid ${state==="todo"?T.border:T.navyLight}`,
+            }}>{state==="done"?"✓":n}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// 항상 보이는 "왜 필요한가요?" 안내 — 팝업 뒤에 숨기지 않는다(§15).
+function EqWizardWhy({ children }) {
+  return (
+    <div style={{background:T.blueBg,border:`1px solid ${T.blue}`,borderRadius:10,
+      padding:"10px 13px",marginBottom:14,fontSize:11,color:T.navyLight,
+      fontFamily:font.sans,lineHeight:1.6}}>
+      <b>왜 필요한가요?</b><br/>{children}
+    </div>
+  );
+}
+
+function EqWizardNav({ onBack, onNext, onCancel, nextLabel, nextDisabled }) {
+  return (
+    <div style={{display:"flex",gap:8,marginTop:14}}>
+      {onCancel && (
+        <button onClick={onCancel} style={{padding:"12px 14px",background:T.bg,
+          color:T.sub,border:`1px solid ${T.border}`,borderRadius:11,fontSize:12,
+          fontWeight:700,fontFamily:font.mono,cursor:"pointer"}}>취소</button>
+      )}
+      {onBack && (
+        <button onClick={onBack} style={{padding:"12px 14px",background:T.white,
+          color:T.navy,border:`1.5px solid ${T.border}`,borderRadius:11,fontSize:12,
+          fontWeight:700,fontFamily:font.mono,cursor:"pointer"}}>← 이전</button>
+      )}
+      <button onClick={onNext} disabled={nextDisabled}
+        style={{flex:1,padding:"12px",
+          background:nextDisabled?"#CBD5E1":T.navyLight,
+          color:T.white,border:"none",borderRadius:11,fontSize:13,
+          fontWeight:900,fontFamily:font.sans,
+          cursor:nextDisabled?"not-allowed":"pointer",
+          boxShadow:nextDisabled?"none":`0 4px 0 ${T.navy}`}}>
+        {nextLabel}
+      </button>
+    </div>
+  );
+}
+
+function EquipmentWizard({ onSaveAndContinue, onCancel }) {
+  const [step, setStep] = useState(1);
+  const [f, setF] = useState({
+    tag:"", location:"", deviceType:"safetyValve",
+    mawp:6.0, setPressure:5.5, overpressure:10,
+    inletSize:"3\"", outletSize:"4\"", orifice:"",
+    manufacturer:"", model:"", serialNo:"", installedAt:"",
+    inletPiping: { L:"", D:"", fittingsK:"" },
+  });
+  const [saveError, setSaveError] = useState(null);
+  const upd = (k,v) => setF(p=>({...p,[k]:v}));
+  const updInlet = (k,v) => setF(p=>({...p, inletPiping:{...p.inletPiping, [k]:v}}));
+
+  // EquipmentForm과 완전히 동일한 검증(§17 — 새로 만들지 않고 그대로 재현)
+  const psetErr = f.setPressure > f.mawp;
+  const ipAllEmpty = f.inletPiping.L === "" && f.inletPiping.D === "" && f.inletPiping.fittingsK === "";
+  const ipPartial = !ipAllEmpty && (f.inletPiping.L === "" || f.inletPiping.D === "" || f.inletPiping.fittingsK === "");
+  const ipInvalid = !ipAllEmpty && !ipPartial && (
+    isNaN(Number(f.inletPiping.L)) || isNaN(Number(f.inletPiping.D)) || isNaN(Number(f.inletPiping.fittingsK)) ||
+    Number(f.inletPiping.D) <= 0 || Number(f.inletPiping.L) < 0 || Number(f.inletPiping.fittingsK) < 0
+  );
+  const overpressureValid = f.overpressure !== "" && f.overpressure !== null &&
+    !isNaN(Number(f.overpressure)) && Number(f.overpressure) >= 0;
+  const step1Valid = f.mawp > 0;
+  const step2Valid = f.tag.trim().length > 0;
+  const step3Valid = f.setPressure > 0 && !psetErr && overpressureValid;
+  const step4Valid = !ipPartial && !ipInvalid;
+  const allValid = step1Valid && step2Valid && step3Valid && step4Valid; // step5는 전부 선택 입력
+
+  const touched = step>1 || f.tag.trim().length>0 || f.location.trim().length>0;
+  const handleCancel = () => {
+    if (touched && !window.confirm("입력을 취소할까요?\n아직 저장하지 않은 내용은 사라집니다.")) return;
+    onCancel();
+  };
+
+  const handleSubmit = () => {
+    setSaveError(null);
+    if (!allValid) return; // 최종 방어선 — 버튼은 이미 비활성화돼 있지만 한 번 더 확인
+    const inletPipingPayload = ipAllEmpty ? null : {
+      L: Number(f.inletPiping.L), D: Number(f.inletPiping.D), fittingsK: Number(f.inletPiping.fittingsK),
+    };
+    try {
+      const eq = createEquipment({ ...f, inletPiping: inletPipingPayload });
+      onSaveAndContinue(eq); // 저장 + 곧바로 해당 안전밸브의 검토(계산 입력) 흐름으로 연결(§18)
+    } catch(e) {
+      setSaveError(e.message || "저장하지 못했습니다. 입력 내용은 유지되어 있습니다.");
+    }
+  };
+
+  return (
+    <div style={{background:T.cardBg,borderRadius:16,padding:18,
+      border:`1.5px solid ${T.border}`,boxShadow:"0 4px 16px #0002"}}>
+      <EqWizardStepIndicator step={step}/>
+
+      {step===1 && (
+        <div>
+          <div style={{fontSize:14,fontWeight:900,color:T.navy,fontFamily:font.mono,marginBottom:4}}>
+            보호 대상 설비
+          </div>
+          <div style={{fontSize:11,color:T.sub,fontFamily:font.sans,marginBottom:10}}>
+            이 안전밸브가 보호하는 설비의 정보를 입력합니다.
+          </div>
+          <EqWizardWhy>
+            안전밸브의 설정압력과 보호 대상 설비의 허용압력을 비교하기 위해 필요한 정보입니다.
+          </EqWizardWhy>
+          <Section title="보호 대상 설비 정보">
+            <Field label="설치 위치">
+              <input value={f.location} onChange={e=>upd("location",e.target.value)}
+                placeholder="반응기 R-201 상부" style={iS()}/>
+              <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:3}}>
+                안전밸브가 설치되어 있는 설비나 위치를 구분하기 위한 정보입니다.
+              </div>
+            </Field>
+            <Field label="MAWP (barg)" req>
+              <input type="number" value={f.mawp} step={0.1} min={0.1}
+                onChange={e=>upd("mawp",+e.target.value)} style={iS()}/>
+              <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:3}}>
+                보호 대상 설비가 허용할 수 있는 최대압력입니다. 안전밸브 자체의 설정압력이 아닙니다.
+              </div>
+            </Field>
+          </Section>
+          <EqWizardNav onCancel={handleCancel} onNext={()=>step1Valid && setStep(2)}
+            nextLabel="다음 →" nextDisabled={!step1Valid}/>
+        </div>
+      )}
+
+      {step===2 && (
+        <div>
+          <div style={{fontSize:14,fontWeight:900,color:T.navy,fontFamily:font.mono,marginBottom:4}}>
+            안전밸브 기본 정보
+          </div>
+          <div style={{fontSize:11,color:T.sub,fontFamily:font.sans,marginBottom:14}}>
+            이번에 검토할 안전밸브 자체의 기본 정보를 입력합니다.
+          </div>
+          <Section title="안전밸브 식별">
+            <Field label="Tag No." req>
+              <input value={f.tag} onChange={e=>upd("tag",e.target.value)}
+                placeholder="PSV-R201" autoComplete="off" style={iS()}/>
+              <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:3}}>
+                현장에서 이 안전밸브를 구분하기 위한 식별 번호입니다. 예: PSV-R201
+              </div>
+            </Field>
+            <Field label="밸브 종류">
+              <div style={{display:"flex",gap:8}}>
+                {DEVICE_OPTIONS.map(d=>(
+                  <div key={d.id} onClick={()=>upd("deviceType",d.id)}
+                    style={{flex:1,padding:"8px 10px",borderRadius:9,cursor:"pointer",
+                      textAlign:"center",
+                      border:`2px solid ${f.deviceType===d.id?T.navyLight:T.border}`,
+                      background:f.deviceType===d.id?T.navy+"0D":T.white,
+                      fontSize:12,fontWeight:700,
+                      color:f.deviceType===d.id?T.navy:T.text,
+                      fontFamily:font.sans}}>
+                    {d.label}
+                  </div>
+                ))}
+              </div>
+            </Field>
+          </Section>
+          <EqWizardNav onCancel={handleCancel} onBack={()=>setStep(1)}
+            onNext={()=>step2Valid && setStep(3)} nextLabel="다음 →" nextDisabled={!step2Valid}/>
+        </div>
+      )}
+
+      {step===3 && (
+        <div>
+          <div style={{fontSize:14,fontWeight:900,color:T.navy,fontFamily:font.mono,marginBottom:4}}>
+            설정압력·과압·오리피스
+          </div>
+          <div style={{fontSize:11,color:T.sub,fontFamily:font.sans,marginBottom:14}}>
+            안전밸브의 작동 조건과 용량 검토에 필요한 값을 입력합니다.
+          </div>
+          <Section title="작동 조건">
+            <Row2
+              a={<Field label="설정압 (barg)" req>
+                <input type="number" value={f.setPressure} step={0.1} min={0.1}
+                  onChange={e=>upd("setPressure",+e.target.value)}
+                  style={iS({border:`1.5px solid ${psetErr?T.red:T.border}`})}/>
+                {psetErr && <div style={{fontSize:9,color:T.red,marginTop:3}}>MAWP 초과</div>}
+                <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:3}}>
+                  안전밸브가 설정된 압력입니다.
+                </div>
+              </Field>}
+              b={<Field label="Overpressure (%)" req>
+                <input type="number" value={f.overpressure} step={1} min={0} max={50}
+                  onChange={e=>upd("overpressure",+e.target.value)} style={iS()}/>
+                <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:3}}>
+                  정격 방출용량을 검토할 때 적용되는 과압 조건입니다.
+                </div>
+              </Field>}
+            />
+            <Row2
+              a={<Field label="오리피스">
+                <input value={f.orifice} onChange={e=>upd("orifice",e.target.value.toUpperCase())}
+                  placeholder="P" style={iS()}/>
+                <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:3}}>
+                  안전밸브가 압력을 방출하는 유효 단면을 나타내는 정보입니다.
+                </div>
+              </Field>}
+              b={<Field label="입구/출구 Size">
+                <div style={{display:"flex",gap:6}}>
+                  <input value={f.inletSize} onChange={e=>upd("inletSize",e.target.value)}
+                    placeholder='3"' style={iS({width:"50%"})}/>
+                  <input value={f.outletSize} onChange={e=>upd("outletSize",e.target.value)}
+                    placeholder='4"' style={iS({width:"50%"})}/>
+                </div>
+              </Field>}
+            />
+          </Section>
+          <EqWizardNav onCancel={handleCancel} onBack={()=>setStep(2)}
+            onNext={()=>step3Valid && setStep(4)} nextLabel="다음 →" nextDisabled={!step3Valid}/>
+        </div>
+      )}
+
+      {step===4 && (
+        <div>
+          <div style={{fontSize:14,fontWeight:900,color:T.navy,fontFamily:font.mono,marginBottom:4}}>
+            연결 배관 조건
+          </div>
+          <div style={{fontSize:11,color:T.sub,fontFamily:font.sans,marginBottom:10}}>
+            안전밸브에 연결된 배관의 조건을 입력합니다.
+          </div>
+          <EqWizardWhy>
+            이 정보는 안전밸브 입구 배관의 압력손실 등을 검토하기 위한 설치 조건입니다
+            (KOSHA D-18-2020 §7.2(1)). 입력하지 않아도 나머지 계산에는 영향이 없으며,
+            이 세부 판정만 보류됩니다.
+          </EqWizardWhy>
+          <Section title="배관 형상 (선택)">
+            <Row2
+              a={<Field label="배관 길이 L (m)">
+                <input type="number" value={f.inletPiping.L} step={0.1}
+                  onChange={e=>updInlet("L",e.target.value)} placeholder="예: 3.5" style={iS()}/>
+              </Field>}
+              b={<Field label="배관 내경 D (m)">
+                <input type="number" value={f.inletPiping.D} step={0.001}
+                  onChange={e=>updInlet("D",e.target.value)} placeholder="예: 0.08" style={iS()}/>
+              </Field>}
+            />
+            <Field label="배관 부속 저항계수 ΣK">
+              <input type="number" value={f.inletPiping.fittingsK} step={0.1}
+                onChange={e=>updInlet("fittingsK",e.target.value)} placeholder="예: 1.5" style={iS()}/>
+            </Field>
+            {ipPartial && (
+              <div style={{fontSize:10,color:T.red,fontFamily:font.sans,marginTop:-6,marginBottom:10}}>
+                L / D / ΣK 중 일부만 입력됐습니다 — 3개 모두 입력하거나 모두 비워두세요.
+              </div>
+            )}
+            {ipInvalid && (
+              <div style={{fontSize:10,color:T.red,fontFamily:font.sans,marginTop:-6,marginBottom:10}}>
+                내경(D)은 0보다 커야 하고, 길이(L)·ΣK는 0 이상이어야 합니다.
+              </div>
+            )}
+          </Section>
+          <EqWizardNav onCancel={handleCancel} onBack={()=>setStep(3)}
+            onNext={()=>step4Valid && setStep(5)} nextLabel="다음 →" nextDisabled={!step4Valid}/>
+        </div>
+      )}
+
+      {step===5 && (
+        <div>
+          <div style={{fontSize:14,fontWeight:900,color:T.navy,fontFamily:font.mono,marginBottom:4}}>
+            제조사·식별 정보
+          </div>
+          <div style={{fontSize:11,color:T.sub,fontFamily:font.sans,marginBottom:14}}>
+            안전밸브를 식별하고 검토 이력을 관리하기 위한 정보입니다. (전부 선택)
+          </div>
+          <Section title="제조사 정보 (선택)">
+            <Row2
+              a={<Field label="제조사"><input value={f.manufacturer}
+                onChange={e=>upd("manufacturer",e.target.value)} placeholder="Crosby" style={iS()}/></Field>}
+              b={<Field label="모델"><input value={f.model}
+                onChange={e=>upd("model",e.target.value)} placeholder="JOS-E" style={iS()}/></Field>}
+            />
+            <Row2
+              a={<Field label="Serial No.">
+                <input value={f.serialNo} onChange={e=>upd("serialNo",e.target.value)}
+                  placeholder="SN-2024-001" style={iS()}/>
+                <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:3}}>
+                  제조사가 부여한 개별 안전밸브 식별번호입니다.
+                </div>
+              </Field>}
+              b={<Field label="설치일">
+                <input type="date" value={f.installedAt}
+                  onChange={e=>upd("installedAt",e.target.value)} style={iS()}/>
+                <div style={{fontSize:9,color:T.gray,fontFamily:font.sans,marginTop:3}}>
+                  해당 안전밸브가 설치된 날짜입니다.
+                </div>
+              </Field>}
+            />
+          </Section>
+          <EqWizardNav onCancel={handleCancel} onBack={()=>setStep(4)} onNext={()=>setStep(6)}
+            nextLabel="다음 →"/>
+        </div>
+      )}
+
+      {step===6 && (
+        <div>
+          <div style={{fontSize:14,fontWeight:900,color:T.navy,fontFamily:font.mono,marginBottom:4}}>
+            입력 확인
+          </div>
+          <div style={{fontSize:11,color:T.sub,fontFamily:font.sans,marginBottom:14}}>
+            저장하기 전에 입력한 내용을 확인하세요.
+          </div>
+
+          <Section title="보호 대상 설비">
+            <div style={{fontSize:12,fontFamily:font.mono,color:T.text,marginBottom:3}}>설치 위치: {f.location || "—"}</div>
+            <div style={{fontSize:12,fontFamily:font.mono,color:T.text}}>MAWP: {f.mawp} barg</div>
+            <button onClick={()=>setStep(1)} style={{marginTop:8,fontSize:10,color:T.navyLight,
+              background:"none",border:"none",cursor:"pointer",fontFamily:font.mono,fontWeight:700,padding:0}}>[수정]</button>
+          </Section>
+
+          <Section title="안전밸브">
+            <div style={{fontSize:12,fontFamily:font.mono,color:T.text,marginBottom:3}}>Tag No.: {f.tag || "—"}</div>
+            <div style={{fontSize:12,fontFamily:font.mono,color:T.text}}>
+              밸브 종류: {DEVICE_OPTIONS.find(d=>d.id===f.deviceType)?.label}
+            </div>
+            <button onClick={()=>setStep(2)} style={{marginTop:8,fontSize:10,color:T.navyLight,
+              background:"none",border:"none",cursor:"pointer",fontFamily:font.mono,fontWeight:700,padding:0}}>[수정]</button>
+          </Section>
+
+          <Section title="설정압력·과압·오리피스">
+            <div style={{fontSize:12,fontFamily:font.mono,color:T.text,marginBottom:3}}>설정압: {f.setPressure} barg · Overpressure: {f.overpressure}%</div>
+            <div style={{fontSize:12,fontFamily:font.mono,color:T.text}}>오리피스: {f.orifice || "—"} · {f.inletSize}/{f.outletSize}</div>
+            <button onClick={()=>setStep(3)} style={{marginTop:8,fontSize:10,color:T.navyLight,
+              background:"none",border:"none",cursor:"pointer",fontFamily:font.mono,fontWeight:700,padding:0}}>[수정]</button>
+          </Section>
+
+          <Section title="연결 배관">
+            {ipAllEmpty ? (
+              <div style={{fontSize:12,fontFamily:font.mono,color:T.sub}}>미입력(선택 항목)</div>
+            ) : (
+              <div style={{fontSize:12,fontFamily:font.mono,color:T.text}}>
+                L={f.inletPiping.L}m · D={f.inletPiping.D}m · ΣK={f.inletPiping.fittingsK}
+              </div>
+            )}
+            <button onClick={()=>setStep(4)} style={{marginTop:8,fontSize:10,color:T.navyLight,
+              background:"none",border:"none",cursor:"pointer",fontFamily:font.mono,fontWeight:700,padding:0}}>[수정]</button>
+          </Section>
+
+          <Section title="제조사·식별">
+            <div style={{fontSize:12,fontFamily:font.mono,color:T.text,marginBottom:3}}>{f.manufacturer || "—"} · {f.model || "—"}</div>
+            <div style={{fontSize:12,fontFamily:font.mono,color:T.text}}>S/N {f.serialNo || "—"} · {f.installedAt || "—"}</div>
+            <button onClick={()=>setStep(5)} style={{marginTop:8,fontSize:10,color:T.navyLight,
+              background:"none",border:"none",cursor:"pointer",fontFamily:font.mono,fontWeight:700,padding:0}}>[수정]</button>
+          </Section>
+
+          {saveError && (
+            <div style={{background:"#FEF2F2",border:`1px solid ${T.red}`,borderRadius:10,
+              padding:"10px 12px",fontSize:11,color:T.red,fontFamily:font.sans,marginBottom:10}}>
+              {saveError}
+            </div>
+          )}
+
+          <EqWizardNav onCancel={handleCancel} onBack={()=>setStep(5)}
+            onNext={handleSubmit} nextLabel="저장하고 검토 계속하기 →" nextDisabled={!allValid}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function validateConnectedTags(rawTags, equipments, dischargeSystems, selfId) {
   const seenTags = new Set();
   const internalDupTags = [];
@@ -7180,22 +7578,25 @@ function AssetMaster({ equipments, dischargeSystems,
             fontFamily:font.mono,cursor:"pointer"}}>←</button>
         <div>
           <div style={{fontSize:16,fontWeight:900,color:T.navy,fontFamily:font.mono}}>
-            설비대장
+            {showEqForm ? "새 안전밸브 정보 입력" : "설비대장"}
           </div>
           <div style={{fontSize:10,color:T.sub,fontFamily:font.sans}}>
-            PSV 설비 선택 → 검토 시작
+            {showEqForm ? "보호 대상 설비 → 안전밸브 → 압력·오리피스 → 배관 → 확인" : "PSV 설비 선택 → 검토 시작"}
           </div>
         </div>
       </div>
 
-      {/* 탭 */}
-      <div style={{display:"flex",gap:6,marginBottom:14}}>
-        <Tab id="equipment" label={`🔧 설비 (${equipments.length})`}/>
-        <Tab id="discharge" label={`⟶ 배출계통 (${dischargeSystems.length})`}/>
-      </div>
+      {/* 탭 — C-4.31: Wizard 진행 중에는 숨김(탭 전환으로 입력 중인 state가
+          사라지는 걸 막고, "설비대장" 맥락에 들어왔다는 인상도 주지 않음) */}
+      {!showEqForm && (
+        <div style={{display:"flex",gap:6,marginBottom:14}}>
+          <Tab id="equipment" label={`🔧 설비 (${equipments.length})`}/>
+          <Tab id="discharge" label={`⟶ 배출계통 (${dischargeSystems.length})`}/>
+        </div>
+      )}
 
       {/* Equipment 탭 */}
-      {tab === "equipment" && (
+      {(tab === "equipment" || showEqForm) && (
         <>
           {!showEqForm && !editingEq && equipments.length > 0 && (
             <div style={{background:T.blueBg,border:`1px solid ${T.blue}`,borderRadius:10,
@@ -7207,8 +7608,8 @@ function AssetMaster({ equipments, dischargeSystems,
           )}
           {showEqForm && (
             <div style={{marginBottom:12}}>
-              <EquipmentForm
-                onSave={eq=>{ onAddEquipment(eq); setShowEqForm(false); }}
+              <EquipmentWizard
+                onSaveAndContinue={eq=>{ onAddEquipment(eq); setShowEqForm(false); onSelectEquipment(eq); }}
                 onCancel={()=>setShowEqForm(false)}/>
             </div>
           )}
@@ -7229,14 +7630,16 @@ function AssetMaster({ equipments, dischargeSystems,
               allSnapshots={allSnapshots}
               onClose={()=>setViewingEqHistory(null)}/>
           )}
-          {/* C-4.28: 새 설비 등록 = Primary CTA. 예시 데이터보다 먼저, 더 강조된 스타일 */}
+          {/* C-4.31: "설비 등록"이라는 관리 용어 대신 사용자가 지금 하려는
+              일을 그대로 표현 — 새 안전밸브 정보 입력(보호 대상 설비 단계부터
+              시작하는 Wizard). Primary CTA, 예시 데이터보다 먼저·더 강조. */}
           {!showEqForm && !editingEq && (
             <button onClick={()=>setShowEqForm(true)}
               style={{width:"100%",padding:"12px",background:T.navyLight,color:T.white,
                 border:"none",borderRadius:12,fontSize:13,fontWeight:900,
                 fontFamily:font.sans,cursor:"pointer",boxShadow:`0 4px 0 ${T.navy}`,
                 marginBottom:14}}>
-              + 새 설비 등록
+              + 새 안전밸브 정보 입력
             </button>
           )}
           {(() => {
@@ -9289,7 +9692,7 @@ function ArcSafe() {
         position:"sticky",top:0,zIndex:100}}>
         <div>
           <div style={{fontSize:16,fontWeight:900,color:T.white,
-            fontFamily:font.mono,letterSpacing:1}}>ArcSafe</div>
+            fontFamily:font.mono,letterSpacing:1}}>ArchSafe</div>
           <div style={{fontSize:9,color:"#7B9EC0",fontFamily:font.mono}}>
             PSM 안전밸브 관리 시스템
           </div>

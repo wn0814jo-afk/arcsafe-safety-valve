@@ -270,7 +270,7 @@ function ArcSafe() {
         position:"sticky",top:0,zIndex:100}}>
         <div>
           <div style={{fontSize:16,fontWeight:900,color:T.white,
-            fontFamily:font.mono,letterSpacing:1}}>ArcSafe</div>
+            fontFamily:font.mono,letterSpacing:1}}>ArchSafe</div>
           <div style={{fontSize:9,color:"#7B9EC0",fontFamily:font.mono}}>
             PSM 안전밸브 관리 시스템
           </div>

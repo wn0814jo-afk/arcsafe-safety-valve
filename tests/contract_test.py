@@ -4982,8 +4982,8 @@ const dischargeSystems = [{{id:"DS-A",name:"LP-FLARE-01",connectedTags:["PSV-R20
              "C-4.28" not in schema_src,
              "C-4.28이 asset/schema.js(SAMPLE 데이터/스키마)를 건드림 — 범위 위반")
     tr.check("WF_sample_primary_cta_is_new_entry",
-             '+ 새 설비 등록' in am_src and '예시 데이터로 구조 참고하기' in am_src,
-             "새 설비 등록 CTA/예시 데이터 Secondary 노출 문구가 없음")
+             '+ 새 안전밸브 정보 입력' in am_src and '예시 데이터로 구조 참고하기' in am_src,
+             "새 안전밸브 입력 CTA/예시 데이터 Secondary 노출 문구가 없음")
     tr.check("WF_sample_badge_present",
              am_src.count('">예시</span>') >= 1 or am_src.count(">예시</span>") >= 1,
              "샘플 데이터를 구분하는 배지가 없음")
@@ -5109,6 +5109,190 @@ def test_c430_entry_journey_contract() -> TestResult:
     tr.check("ENTRY_015_c425_fluid_verdict_logic_preserved_in_rewrite",
              "_findFluidLabel(c.latestSnap.inputs)" in dash_src and '"미정"' in dash_src,
              "Dashboard.jsx 재작성 과정에서 C-4.25 fluid 표시 로직이 유실됨")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
+#  C-4.31 — Guided Safety Valve Equipment Input Journey
+#  WF-031-001~021: 신규 안전밸브 입력을 "보호 대상 설비/안전밸브 기본
+#  정보/설정압력·과압·오리피스/연결 배관/제조사·식별/확인" 6단계로 분리,
+#  각 단계 설명, state 보존, 저장 후 검토 흐름 연결, 기존 회귀 없음
+# ════════════════════════════════════════════════════════════════
+def test_c431_equipment_wizard_contract() -> TestResult:
+    tr = TestResult("C431-001", "Guided Safety Valve Equipment Input Journey")
+
+    am_src  = (SRC / "components" / "AssetMaster.jsx").read_text()
+    arc_src = (SRC / "ArcSafe.jsx").read_text()
+
+    wiz_start = am_src.index("function EquipmentWizard(")
+    wiz_end   = am_src.index("\nfunction validateConnectedTags(", wiz_start)
+    wiz_src   = am_src[wiz_start:wiz_end]
+
+    # ── WF-031-001/002: 보호 대상 설비 단계 + 설명 ─────────────────
+    step1_start = wiz_src.index("step===1 &&")
+    step1_end   = wiz_src.index("step===2 &&")
+    step1_block = wiz_src[step1_start:step1_end]
+    tr.check("WF_031_001_step1_is_protected_equipment",
+             "보호 대상 설비" in step1_block,
+             "Step1 제목이 '보호 대상 설비'가 아님")
+    tr.check("WF_031_002_why_explanation_present",
+             "왜 필요한가요?" in am_src and "허용압력을 비교하기 위해" in step1_block,
+             "'왜 필요한가요?' 설명이 없거나 Step1에 연결되지 않음")
+
+    # ── WF-031-003: 설치 위치·MAWP가 보호 대상 설비 단계에 ─────────
+    tr.check("WF_031_003_location_mawp_in_step1",
+             '<Field label="설치 위치">' in step1_block and '<Field label="MAWP (barg)" req>' in step1_block,
+             "설치 위치/MAWP가 Step1(보호 대상 설비)에 없음")
+
+    # ── WF-031-004: Tag No.·밸브종류가 안전밸브 기본 정보 단계에 ────
+    step2_start = wiz_src.index("step===2 &&")
+    step2_end   = wiz_src.index("step===3 &&")
+    step2_block = wiz_src[step2_start:step2_end]
+    tr.check("WF_031_004_tag_devicetype_in_step2",
+             "안전밸브 기본 정보" in step2_block and
+             '<Field label="Tag No." req>' in step2_block and "밸브 종류" in step2_block,
+             "Tag No./밸브 종류가 Step2(안전밸브 기본 정보)에 없음")
+
+    # ── WF-031-005: 설정압/Overpressure/오리피스/입출구가 3단계에 ───
+    step3_start = wiz_src.index("step===3 &&")
+    step3_end   = wiz_src.index("step===4 &&")
+    step3_block = wiz_src[step3_start:step3_end]
+    tr.check("WF_031_005_pressure_orifice_fields_in_step3",
+             "설정압력·과압·오리피스" in step3_block and
+             '<Field label="설정압 (barg)" req>' in step3_block and
+             '<Field label="Overpressure (%)" req>' in step3_block and
+             '<Field label="오리피스">' in step3_block and
+             '<Field label="입구/출구 Size">' in step3_block,
+             "설정압/Overpressure/오리피스/입출구Size가 Step3에 없음")
+
+    # ── WF-031-006: L/D/ΣK가 연결 배관 단계에 ───────────────────────
+    step4_start = wiz_src.index("step===4 &&")
+    step4_end   = wiz_src.index("step===5 &&")
+    step4_block = wiz_src[step4_start:step4_end]
+    tr.check("WF_031_006_piping_fields_in_step4",
+             "연결 배관 조건" in step4_block and
+             '<Field label="배관 길이 L (m)">' in step4_block and
+             '<Field label="배관 내경 D (m)">' in step4_block and
+             '<Field label="배관 부속 저항계수 ΣK">' in step4_block,
+             "L/D/ΣK가 Step4(연결 배관 조건)에 없음")
+
+    # ── WF-031-007: 제조사/모델/Serial/설치일이 식별 정보 단계에 ────
+    step5_start = wiz_src.index("step===5 &&")
+    step5_end   = wiz_src.index("step===6 &&")
+    step5_block = wiz_src[step5_start:step5_end]
+    tr.check("WF_031_007_manufacturer_fields_in_step5",
+             "제조사·식별 정보" in step5_block and
+             '<Field label="제조사">' in step5_block and '<Field label="모델">' in step5_block and
+             '<Field label="Serial No.">' in step5_block and '<Field label="설치일">' in step5_block,
+             "제조사/모델/Serial/설치일이 Step5에 없음")
+
+    # ── WF-031-008: 보호 대상 설비 필드가 안전밸브 단계(Step2/3)에 섞이지 않음 ──
+    tr.check("WF_031_008_no_mixing_mawp_field_in_step2_or_3",
+             'label="MAWP' not in step2_block and 'label="MAWP' not in step3_block,
+             "MAWP 입력 필드(보호 대상 설비 정보)가 안전밸브 단계(Step2/3)에 섞여 나옴")
+    tr.check("WF_031_008_no_mixing_tag_in_step1",
+             'label="Tag No."' not in step1_block,
+             "Tag No.(안전밸브 정보)가 Step1(보호 대상 설비)에 섞여 나옴")
+
+    # ── WF-031-009/010: 단계 이동 + state 보존(단일 useState 구조) ──
+    data_state_decls = re.findall(r"const \[f, setF\] = useState\(", wiz_src)
+    tr.check("WF_031_009_010_single_shared_state",
+             len(data_state_decls) == 1,
+             f"입력 state가 {len(data_state_decls)}곳에서 선언됨 — 1곳(Wizard 최상단)이어야 이동 시 값이 보존됨")
+    for i in range(1,6):
+        tr.check(f"WF_031_009_back_uses_setStep_{i}",
+                 f"onBack={{()=>setStep({i})}}" in wiz_src,
+                 f"Step{i+1}에서 이전(Step{i})으로 setStep 이동이 없음")
+
+    # ── WF-031-011: 확인 화면에서 각 정보가 올바른 그룹으로 표시 ────
+    step6_start = wiz_src.index("step===6 &&")
+    step6_block = wiz_src[step6_start:]
+    for group in ["보호 대상 설비", "안전밸브", "설정압력·과압·오리피스", "연결 배관", "제조사·식별"]:
+        tr.check(f"WF_031_011_review_group_{group[:6]}",
+                 f'title="{group}"' in step6_block,
+                 f"확인 화면(Step6)에 '{group}' 그룹이 없음")
+
+    # ── WF-031-012: 취소 시 부분 저장 없음 ──────────────────────────
+    cancel_start = wiz_src.index("const handleCancel = () => {")
+    cancel_end   = wiz_src.index("\n  };", cancel_start)
+    cancel_block = wiz_src[cancel_start:cancel_end]
+    tr.check("WF_031_012_cancel_never_creates",
+             "createEquipment" not in cancel_block and "onSaveAndContinue" not in cancel_block,
+             "취소 경로에서 Equipment 생성/저장 호출이 발생할 수 있음")
+    tr.check("WF_031_012_cancel_confirm_text",
+             "입력을 취소할까요?" in wiz_src,
+             "취소 확인 문구가 없음")
+
+    # ── WF-031-013: 저장 후 검토 흐름 연결 ──────────────────────────
+    tr.check("WF_031_013_save_continues_to_review",
+             "onSaveAndContinue={eq=>{ onAddEquipment(eq); setShowEqForm(false); onSelectEquipment(eq); }}" in am_src,
+             "저장 완료 후 곧바로 검토(onSelectEquipment) 흐름으로 연결되지 않음")
+
+    # ── WF-031-014: 기존 Equipment revision/persistence 계약 유지 ──
+    tr.check("WF_031_014_revision_path_untouched",
+             'onSave={eq=>{ onReviseEquipment(eq); setEditingEq(null); }}' in am_src and
+             "function EquipmentForm(" in am_src,
+             "기존 EquipmentForm(개정 경로)이 변경되거나 제거됨")
+    tr.check("WF_031_014_createEquipment_reused",
+             "createEquipment({ ...f, inletPiping: inletPipingPayload })" in wiz_src,
+             "EquipmentWizard가 기존 createEquipment()를 재사용하지 않음 — 새 저장 경로 도입 의심")
+
+    # ── WF-031-015: C-4.23-A inletPiping optional 정책 유지 ─────────
+    tr.check("WF_031_015_inletpiping_optional_in_wizard",
+             "ipAllEmpty ? null :" in wiz_src,
+             "Wizard가 inletPiping을 필수로 강제하는 것으로 보임(C-4.23-A 위반)")
+    iv_src = (SRC / "components" / "InputView.jsx").read_text()
+    tr.check("WF_031_015_inletpiping_wording_intact",
+             "선택 항목" in iv_src and "OPTIONAL" in iv_src,
+             "C-4.23-A의 인입배관 '선택 항목(OPTIONAL)' 문구가 회귀됨")
+
+    # ── WF-031-016: C-4.25 fluid 표시 회귀 없음 ─────────────────────
+    dash_src = (SRC / "components" / "Dashboard.jsx").read_text()
+    tr.check("WF_031_016_fluid_label_derivation_intact",
+             "_findFluidLabel(c.latestSnap.inputs)" in dash_src,
+             "C-4.25의 Snapshot 기반 fluid 라벨 도출 로직이 회귀됨")
+
+    # ── WF-031-017/018: C-4.27 validation / C-4.28 Wizard 회귀 없음 ──
+    tr.check("WF_031_017_c427_validation_intact",
+             "function validateConnectedTags(" in am_src,
+             "C-4.27 공용 검증 함수가 회귀됨")
+    tr.check("WF_031_018_c428_ds_wizard_intact",
+             "function DischargeSystemWizard(" in am_src and "DS_WIZARD_STEPS" in am_src,
+             "C-4.28 DischargeSystemWizard 구조가 회귀됨")
+
+    # ── WF-031-019: C-4.30 Dashboard/ReviewEntry 무변경 ─────────────
+    tr.check("WF_031_019_c430_entry_intact",
+             "function ReviewEntryScreen(" in dash_src and "function FirstRunMenu(" in dash_src,
+             "C-4.30의 ReviewEntryScreen/FirstRunMenu 구조가 변경됨")
+    tr.check("WF_031_019_c430_routing_intact",
+             'curScreen === "review-entry"' in arc_src,
+             "C-4.30의 review-entry 라우팅이 변경됨")
+
+    # ── WF-031-020: 브랜드 표시 ArchSafe ────────────────────────────
+    tr.check("WF_031_020_brand_archsafe_in_header",
+             ">ArchSafe</div>" in arc_src,
+             "헤더의 브랜드 표기가 'ArchSafe'로 바뀌지 않음")
+    tr.check("WF_031_020_no_stray_arcsafe_display_string",
+             re.search(r'>ArcSafe<', arc_src) is None,
+             "ArcSafe.jsx에 여전히 화면 표시용 'ArcSafe' 문자열이 남아있음")
+
+    # ── WF-031-021: Engine/Snapshot/Report 미변경 ───────────────────
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+    relief_src = (SRC / "engine" / "relief_load.js").read_text()
+    bp_src     = (SRC / "engine" / "backpressure.js").read_text()
+    snap_src   = (SRC / "snapshot" / "create.js").read_text()
+    report_src = (SRC / "report" / "createPackage.js").read_text()
+    for name, src in [("api520.js", api520_src), ("relief_load.js", relief_src),
+                       ("backpressure.js", bp_src), ("snapshot/create.js", snap_src),
+                       ("report/createPackage.js", report_src)]:
+        tr.check(f"WF_031_021_engine_snapshot_report_untouched_{name.replace('/','_').replace('.','_')}",
+                 "C-4.31" not in src,
+                 f"C-4.31이 {name}(Engine/Snapshot/Report)을 건드림 — 범위 위반")
+    schema_src = (SRC / "asset" / "schema.js").read_text()
+    tr.check("WF_031_021_schema_untouched",
+             "C-4.31" not in schema_src,
+             "C-4.31이 asset/schema.js(Equipment 스키마/유일성 정책)를 건드림 — 범위 위반")
 
     return tr
 
@@ -7462,6 +7646,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [C430-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── Guided Safety Valve Equipment Input Journey (C-4.31) ──────
+    print("\n── C431-001 (Sprint C-4.31) ────────────────────────────")
+    tr = test_c431_equipment_wizard_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [C431-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"
