@@ -5304,6 +5304,134 @@ def test_c431_equipment_wizard_contract() -> TestResult:
 
 
 # ════════════════════════════════════════════════════════════════
+#  C-4.32 — 안전밸브 검토/계산 입력 Wizard 전환
+#  WIZ-032-01~27: InputView.jsx의 단일 긴 Form을 7단계(밸브종류/
+#  방출시나리오/유체/압력조건/Kd/Kb/확인) 실제 화면전환 Wizard로
+#  재구성. Engine/Snapshot/Report/계산식/법적 기준 무변경, C-4.28
+#  AssetMaster.jsx의 기존 전역 WizardNav와 이름 충돌 없음.
+# ════════════════════════════════════════════════════════════════
+def test_c432_review_wizard_contract() -> TestResult:
+    tr = TestResult("WIZ432-001", "안전밸브 검토/계산 입력 Wizard 전환")
+
+    iv_src = (SRC / "components" / "InputView.jsx").read_text()
+    am_src = (SRC / "components" / "AssetMaster.jsx").read_text()
+
+    # ── WIZ-032-01: step state 선언 ──────────────────────────────
+    tr.check("WIZ_032_01_step_state_declared",
+             "const [step, setStep] = useState(0)" in iv_src,
+             "InputView에 wizard step state가 없음")
+
+    # ── WIZ-032-02: 7단계 메타 정의 ──────────────────────────────
+    tr.check("WIZ_032_02_seven_steps_defined",
+             iv_src.count("{ title: ") == 7,
+             "WIZ_STEPS가 정확히 7개 단계로 정의되어 있지 않음")
+
+    # ── WIZ-032-03~09: 7개 step 블록이 실제로 조건부 렌더링됨 ──────
+    step_markers = [f"step==={i} && (" for i in range(7)]
+    for i, marker in enumerate(step_markers):
+        tr.check(f"WIZ_032_0{3+i}_step{i}_conditionally_rendered",
+                 marker in iv_src,
+                 f"step==={i} 블록(조건부 렌더링)이 없음 — 모든 단계가 한 화면에 표시될 위험")
+
+    # step 경계로 각 블록 텍스트 슬라이스
+    bounds = [iv_src.index(m) for m in step_markers] + [iv_src.index("</div>\n  );\n}\n\n// ════")]
+    blocks = [iv_src[bounds[i]:bounds[i+1]] for i in range(7)]
+
+    # ── WIZ-032-10: 이전/다음 네비게이션 컴포넌트 존재, 이름 충돌 없음 ──
+    tr.check("WIZ_032_10_nav_component_defined",
+             "function PsvReviewWizardNav(" in iv_src,
+             "Wizard 이전/다음 네비게이션 컴포넌트가 없음")
+    tr.check("WIZ_032_10b_no_global_name_collision_with_c428_wizardnav",
+             "function WizardNav(" not in iv_src and "function WizardNav(" in am_src,
+             "InputView가 AssetMaster.jsx(C-4.28)의 전역 WizardNav와 이름이 충돌함 — flat concat 빌드에서 재정의 위험")
+
+    # ── WIZ-032-11: 상태 보존 — 로컬 UI state가 InputView 최상단에서 ──
+    #    한 번만 선언됨(step 전환 시 컴포넌트 자체는 unmount되지 않음)
+    for state_decl in ["const [fluidId,", "const [kdId,", "const [kbOverride,"]:
+        tr.check(f"WIZ_032_11_{state_decl.strip('const [ ,')}_declared_once",
+                 iv_src.count(state_decl) == 1,
+                 f"{state_decl} 가 InputView 최상단에 정확히 1번만 선언되어야 step 전환 시 값이 보존됨")
+
+    # ── WIZ-032-12~15: STEP2(방출시나리오) 조건부 하위 흐름 유지 ──────
+    step1_block = blocks[1]
+    tr.check("WIZ_032_12_manual_w_source_selector_in_scenario_step",
+             '["MANUAL", "수동 입력 W"]' in step1_block,
+             "Manual W 선택지가 방출 시나리오 단계에 없음")
+    tr.check("WIZ_032_13_relief_load_scenario_section_in_scenario_step",
+             "<ReliefLoadScenarioSection" in step1_block,
+             "PSV 과압 시나리오(§5.1~5.12) 선택 섹션이 방출 시나리오 단계에 없음")
+    tr.check("WIZ_032_14_liquid_expansion_block_in_scenario_step",
+             "<LiquidExpansionSupplementaryBlock" in step1_block,
+             "§5.11 열팽창용 안전밸브 블록이 방출 시나리오 단계에서 유실됨")
+    tr.check("WIZ_032_15_exchanger_failure_block_in_scenario_step",
+             "<ExchangerFailureSupplementaryBlock" in step1_block,
+             "§5.13 열교환기 고장 참고용 블록이 방출 시나리오 단계에서 유실됨")
+
+    # ── WIZ-032-16/17: STEP3(유체) ───────────────────────────────
+    step2_block = blocks[2]
+    tr.check("WIZ_032_16_fluid_choices_in_fluid_step",
+             "FLUID_CHOICES.map" in step2_block,
+             "유체 선택 카드 목록이 유체 단계에 없음")
+    tr.check("WIZ_032_17_temp_input_in_fluid_step",
+             "<TempInput" in step2_block,
+             "방출 온도 입력이 유체 단계에 없음")
+
+    # ── WIZ-032-18~20: STEP4(압력조건) ───────────────────────────
+    step3_block = blocks[3]
+    tr.check("WIZ_032_18_mawp_and_set_pressure_in_pressure_step",
+             'param="MAWP"' in step3_block and 'param="P1"' in step3_block,
+             "MAWP/설정압력 입력이 압력 조건 단계에 없음")
+    tr.check("WIZ_032_19_relieving_pressure_shown_as_calculated_not_input",
+             "RELIEVING PRESSURE" in step3_block and "시스템 산정값" in step3_block,
+             "계산된 방출압력(Relieving Pressure)이 계산결과가 아니라 입력처럼 보일 위험 — 기존 '시스템 산정값' 라벨 유실")
+    tr.check("WIZ_032_20_pressure_step_next_blocked_on_mawp_warning",
+             "nextDisabled={!!mawpWarning}" in step3_block,
+             "설정압 > MAWP 오류 상태에서도 다음 단계로 진행 가능함 — 압력 조건 단계 검증 누락")
+
+    # ── WIZ-032-21: STEP5(Kd) ────────────────────────────────────
+    step4_block = blocks[4]
+    tr.check("WIZ_032_21_kd_decision_choice_in_kd_step",
+             'param="Kd"' in step4_block,
+             "방출계수 Kd 선택이 Kd 단계에 없음")
+
+    # ── WIZ-032-22/23: STEP6(Kb) ─────────────────────────────────
+    step5_block = blocks[5]
+    tr.check("WIZ_032_22_kb_system_calculated_in_kb_step",
+             "SYSTEM CALCULATED" in step5_block,
+             "Kb 시스템 계산값 표시가 Kb 단계에 없음")
+    tr.check("WIZ_032_23_kb_step_next_blocked_without_override_reason",
+             "nextDisabled={kbOverride && !kbOverrideReason.trim()}" in step5_block,
+             "Kb override 근거 미입력 상태에서도 다음 단계로 진행 가능함 — 기존 제출 시 검증(blockReason)과 불일치")
+
+    # ── WIZ-032-24~26: STEP7(확인) ───────────────────────────────
+    step6_block = blocks[6]
+    tr.check("WIZ_032_24_final_summary_shown",
+             "GOVERNING RELIEF LOAD" in step6_block,
+             "사양 결정 요약(Governing Relief Load)이 최종 확인 단계에 없음")
+    tr.check("WIZ_032_25_final_submit_button_present",
+             "사양 확정 → 계산 실행" in step6_block,
+             "사양 확정 → 계산 실행 버튼이 최종 확인 단계에서 유실됨")
+    tr.check("WIZ_032_26_final_submit_uses_existing_blockreason_gate",
+             "disabled={!!blockReason}" in step6_block,
+             "최종 제출 버튼이 기존 blockReason(설정압 오류/Kb override 근거/W 산정 미완료) 검증을 더 이상 쓰지 않음")
+
+    # ── WIZ-032-27: Engine/Snapshot/Report/법적기준 무변경 ─────────
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+    relief_src = (SRC / "engine" / "relief_load.js").read_text()
+    bp_src     = (SRC / "engine" / "backpressure.js").read_text()
+    snap_src   = (SRC / "snapshot" / "create.js").read_text()
+    report_src = (SRC / "report" / "createPackage.js").read_text()
+    for name, src in [("api520.js", api520_src), ("relief_load.js", relief_src),
+                       ("backpressure.js", bp_src), ("snapshot/create.js", snap_src),
+                       ("report/createPackage.js", report_src)]:
+        tr.check(f"WIZ_032_27_engine_snapshot_report_untouched_{name.replace('/','_').replace('.','_')}",
+                 "C-4.32" not in src,
+                 f"C-4.32가 {name}(Engine/Snapshot/Report)을 건드림 — 범위 위반")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
 #  BASELINE LOCK CONTRACT (Sprint A.1) — Engine 1.3.0 기준선 보호 장치
 #  1) ENGINE-VERSION-LOCK-001: Snapshot/ReportPackage/Fixture 엔진버전 일치
 #  2) GOLDEN-FIXTURE-MUTATION-GUARD-001: fixture를 손으로 고치면 감지
@@ -7663,6 +7791,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [C431-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── 안전밸브 검토/계산 입력 Wizard 전환 (C-4.32) ──────────────
+    print("\n── WIZ432-001 (Sprint C-4.32) ──────────────────────────")
+    tr = test_c432_review_wizard_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [WIZ432-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"

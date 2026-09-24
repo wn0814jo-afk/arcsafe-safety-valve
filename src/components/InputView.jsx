@@ -1084,6 +1084,70 @@ const RELIEF_LOAD_BASIS_LABEL = {
   EXTERNAL_FIRE:        "§5.12 외부화재",
 };
 
+// ════════════════════════════════════════════════════════════════
+// C-4.32 — 안전밸브 검토/계산 입력 Wizard
+// 목적: "긴 Form에 섹션 번호만 붙인 화면" → "한 번에 한 단계만 보여주고
+// 다음으로 넘어가는 실제 Wizard". Engine/Snapshot/Report/계산식/법적
+// 기준은 이 Change에서 전혀 건드리지 않는다 — 아래는 순수 Input UX
+// 재구성이며, 각 단계의 실제 필드/검증/계산은 기존 컴포넌트
+// (DecisionSlider/DecisionChoice/ReliefLoadScenarioSection 등)를
+// 그대로 재사용한다(새 계산 로직을 만들지 않음).
+// 상태 보존: step 전환은 InputView 컴포넌트 자체를 unmount하지 않고
+// 내부에서 어떤 JSX 블록을 렌더링할지만 바꾼다 — 모든 필드 상태(inputs는
+// CaseView 소유 prop, fluidId/kdId/kbOverride 등은 InputView 로컬 state)가
+// step을 오가도 그대로 유지된다(요구사항: "선택을 바꿔도 아래 입력값들은
+// 지워지지 않는다").
+const WIZ_STEPS = [
+  { title: "밸브 종류",       sub: "어떤 안전장치인가요?" },
+  { title: "방출 시나리오",   sub: "어떤 상황에서 안전밸브가 열리나요?" },
+  { title: "유체",            sub: "어떤 유체가 방출되나요?" },
+  { title: "압력 조건",       sub: "보호 대상 설비와 안전밸브의 압력 조건" },
+  { title: "방출계수 Kd",     sub: "어떤 근거로 이 계수를 적용할까요?" },
+  { title: "배압보정계수 Kb", sub: "배압이 방출능력에 미치는 영향을 확인하세요" },
+  { title: "입력 내용 확인",  sub: "확정 전 최종 검토" },
+];
+
+function PsvReviewWizardHeader({ step }) {
+  const meta = WIZ_STEPS[step];
+  return (
+    <div style={{marginBottom:16}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
+        <div style={{fontSize:11,fontWeight:700,color:T.sub,fontFamily:font.mono}}>안전밸브 사양 검토</div>
+        <div style={{fontSize:11,fontWeight:700,color:T.sub,fontFamily:font.mono}}>{step+1} / {WIZ_STEPS.length}</div>
+      </div>
+      <div style={{fontSize:16,fontWeight:900,color:T.navy,fontFamily:font.sans,marginBottom:2}}>{meta.title}</div>
+      <div style={{fontSize:11,color:T.sub,fontFamily:font.sans,marginBottom:8}}>{meta.sub}</div>
+      <div style={{display:"flex",gap:5}}>
+        {WIZ_STEPS.map((_,i)=>(
+          <div key={i} style={{flex:1,height:4,borderRadius:2,background: i<=step ? T.navyLight : T.border}}/>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function PsvReviewWizardNav({ step, onBack, onNext, nextDisabled, nextBlockedReason }) {
+  return (
+    <div style={{display:"flex",gap:8,marginTop:16,marginBottom:20}}>
+      {step > 0 && (
+        <button onClick={onBack} type="button"
+          style={{flex:"0 0 auto",padding:"14px 18px",background:T.white,color:T.navy,
+            border:`1.5px solid ${T.border}`,borderRadius:12,fontSize:13,fontWeight:700,
+            fontFamily:font.sans,cursor:"pointer"}}>
+          ← 이전
+        </button>
+      )}
+      <button onClick={onNext} type="button" disabled={nextDisabled}
+        style={{flex:1,padding:"14px 18px",
+          background:nextDisabled?T.border:T.navyLight,color:T.white,border:"none",
+          borderRadius:12,fontSize:14,fontWeight:900,fontFamily:font.sans,
+          cursor:nextDisabled?"not-allowed":"pointer"}}>
+        {nextDisabled && nextBlockedReason ? nextBlockedReason : "다음 →"}
+      </button>
+    </div>
+  );
+}
+
 function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dischargeSystem, equipment,
   reliefLoadScenarioType, reliefLoadScenarioInput, reliefLoadScenarioResult, reliefLoadAdapter, reliefLoadBlocking,
   wInputSource, onWInputSourceChange, liquidExpansionAdapter, liquidExpansionBlocking,
@@ -1098,6 +1162,9 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
   const [showCustomFluid, setShowCustomFluid] = useState(false);
   const [kbOverride, setKbOverride] = useState(false);
   const [kbOverrideReason, setKbOverrideReason] = useState("");
+  const [step, setStep] = useState(0); // C-4.32 wizard step (0-indexed, 7 steps)
+  const goBack = () => setStep(s => Math.max(0, s - 1));
+  const goNext = () => setStep(s => Math.min(WIZ_STEPS.length - 1, s + 1));
 
   // 유체 선택 → M, k, Kd 동시 결정
   const handleFluidSelect = (f) => {
@@ -1164,7 +1231,11 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
 
   return (
     <div style={{padding:"0 2px"}}>
+      <PsvReviewWizardHeader step={step}/>
 
+      {/* ── STEP 1: 밸브 종류 ── */}
+      {step===0 && (
+        <div>
       {/* ── 1. 밸브 종류 결정 ── */}
       <SectionHeader step="1" title="밸브 종류" sub="설치된 밸브 또는 럽처디스크 선택"/>
       <div style={{display:"flex",gap:8,marginBottom:16}}>
@@ -1212,6 +1283,15 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
       )}
 
 
+          <PsvReviewWizardNav step={step} onBack={goBack} onNext={goNext}
+            nextDisabled={!deviceType}
+            nextBlockedReason={!deviceType ? "밸브 종류를 선택하세요" : null}/>
+        </div>
+      )}
+
+      {/* ── STEP 2: 방출 시나리오 ── */}
+      {step===1 && (
+        <div>
       {/* ── 2. 방출 시나리오 ── */}
       <SectionHeader step="2" title="방출 시나리오" sub="어떤 상황에서 밸브가 열리는가 — API 521 시나리오"/>
 
@@ -1319,6 +1399,13 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
       {/* ── 2e. §5.2/§5.10 — 추가 검토가 필요한 시나리오(계산 미제공, 정적 안내) ── */}
       <EngineeringDecisionReviewArea/>
 
+          <PsvReviewWizardNav step={step} onBack={goBack} onNext={goNext} nextDisabled={false}/>
+        </div>
+      )}
+
+      {/* ── STEP 3: 유체 ── */}
+      {step===2 && (
+        <div>
       {/* ── 3. 유체 사양 결정 ── */}
       <SectionHeader step="3" title="유체 사양" sub="M, k 값은 유체 선택 시 자동 결정됨"/>
       <div style={{background:T.cardBg,borderRadius:12,padding:"12px 14px",marginBottom:10,border:`1.5px solid ${fluidId?T.navyLight:T.border}`}}>
@@ -1368,6 +1455,13 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
       {/* 온도 */}
       <TempInput value={inputs.T} onChange={v=>onChange("T",v)}/>
 
+          <PsvReviewWizardNav step={step} onBack={goBack} onNext={goNext} nextDisabled={false}/>
+        </div>
+      )}
+
+      {/* ── STEP 4: 압력 조건 ── */}
+      {step===3 && (
+        <div>
       {/* ── 4. 압력 조건 결정 ── */}
       <SectionHeader step="4" title="압력 조건" sub="명판 및 공정 설계 문서 기준"/>
       <DecisionSlider
@@ -1525,6 +1619,15 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         슬라이더의 현재 표시값이 그대로 계산에 사용됩니다.
       </FieldGuide>
 
+          <PsvReviewWizardNav step={step} onBack={goBack} onNext={goNext}
+            nextDisabled={!!mawpWarning}
+            nextBlockedReason={mawpWarning ? "설정압력이 MAWP를 초과합니다 — 수정 후 진행 가능" : null}/>
+        </div>
+      )}
+
+      {/* ── STEP 5: 방출계수 Kd ── */}
+      {step===4 && (
+        <div>
       {/* ── 5. 방출계수 결정 ── */}
       <SectionHeader step="5" title="방출계수 Kd" sub="어떤 근거로 이 계수를 적용하는가"/>
       <DecisionChoice
@@ -1544,6 +1647,13 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         </div>
       </details>
 
+          <PsvReviewWizardNav step={step} onBack={goBack} onNext={goNext} nextDisabled={false}/>
+        </div>
+      )}
+
+      {/* ── STEP 6: 배압보정계수 Kb ── */}
+      {step===5 && (
+        <div>
       {/* ── 6. 배압보정계수 — 시스템 계산값 (사용자 직접 선택 금지) ── */}
       <SectionHeader step="6" title="배압보정계수 Kb" sub="P1, P2로부터 시스템이 계산 — 직접 선택 불가"/>
       <div style={{
@@ -1605,6 +1715,15 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         )}
       </div>
 
+          <PsvReviewWizardNav step={step} onBack={goBack} onNext={goNext}
+            nextDisabled={kbOverride && !kbOverrideReason.trim()}
+            nextBlockedReason={(kbOverride && !kbOverrideReason.trim()) ? "Kb override 근거를 입력해야 진행 가능" : null}/>
+        </div>
+      )}
+
+      {/* ── STEP 7: 입력 내용 확인 ── */}
+      {step===6 && (
+        <div>
       {/* ── 결정 요약 ── */}
       <div style={{background:T.navy,borderRadius:14,padding:"14px 16px",marginBottom:14}}>
         <div style={{fontSize:10,fontWeight:700,color:"#7B9EC0",fontFamily:font.mono,marginBottom:8,letterSpacing:1}}>사양 결정 요약</div>
@@ -1681,6 +1800,16 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
           </button>
         );
       })()}
+          <div style={{display:"flex",gap:8,marginTop:4}}>
+            <button onClick={goBack} type="button"
+              style={{flex:"0 0 auto",padding:"14px 18px",background:T.white,color:T.navy,
+                border:`1.5px solid ${T.border}`,borderRadius:12,fontSize:13,fontWeight:700,
+                fontFamily:font.sans,cursor:"pointer"}}>
+              ← 이전
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
