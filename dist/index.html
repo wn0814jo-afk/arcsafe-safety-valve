@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:e939c3fce2ec\n\n' +
+    box.textContent = '[ERROR] BUILD:27d41ebf7b67\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:e939c3fce2ec\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:27d41ebf7b67\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:e939c3fce2ec | 2026-09-24T01:27:48Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:27d41ebf7b67 | 2026-09-26T07:45:14Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "e939c3fce2ec";
+const __BUILD_HASH__ = "27d41ebf7b67";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -5356,58 +5356,70 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         이 Case의 W(배출용량)를 어디서 가져올지 고릅니다. 세 가지는 상호배타이며, 선택을 바꿔도
         아래 입력값들은 지워지지 않습니다 — 다시 전환하면 이전에 입력한 값이 그대로 남아있습니다.
       </FieldGuide>
-      <div style={{position:"relative"}}>
-        {/* C-4.12: 이 배지는 "Manual W가 실제로 sizing에 쓰이는가"를
-            그대로 보여준다 — effectiveWSource는 하단 "사양 결정 요약"의
-            GOVERNING RELIEF LOAD 배지와 정확히 같은 파생값이므로 두 배지가
-            서로 모순될 수 없다. 시나리오 선택 여부(reliefLoadScenarioType)
-            만으로 판단하지 않는 이유: §5.11처럼 시나리오를 선택하고
-            계산까지 성공해도 governing 후보가 될 수 없는(VOLUME_FLOW)
-            경우, Manual W는 계속 실제로 쓰이므로 "참고용 — 미사용"이라고
-            하면 사실과 다르다. */}
-        <div style={{position:"absolute",top:-6,right:0,zIndex:1,fontSize:9,padding:"2px 8px",borderRadius:6,
-          fontFamily:font.mono,fontWeight:700,
-          background: effectiveWSource!=="MANUAL_INPUT" ? T.orangeBg : T.greenBg,
-          color: effectiveWSource!=="MANUAL_INPUT" ? "#946200" : T.greenDk,
-          border:`1px solid ${effectiveWSource!=="MANUAL_INPUT" ? T.orange : T.green}`}}>
-          {effectiveWSource!=="MANUAL_INPUT" ? "참고용 — 미사용" : "MANUAL INPUT 사용 중"}
+      {/* C-4.32 보완(Journey D) — wInputSource 3-way 선택에 따라 아래 세
+          블록(Manual W / §5 Scenario / §5.11 Thermal Expansion)을 상호
+          배타적으로 조건부 렌더링한다. wInputSource는 기존에 이미 있던
+          단일 상태값(CaseView 소유)을 그대로 쓴다 — 새 state 추가 없음,
+          계산/검증 로직 무변경. 값 자체(inputs.W/liquidExpansionInput 등)는
+          숨겨진 블록이라도 그대로 CaseView state에 남아있으므로 탭을
+          오가도 유지된다(UI visibility와 input state persistence 분리). */}
+      {wInputSource==="MANUAL" && (
+        <div style={{position:"relative"}}>
+          {/* C-4.12: 이 배지는 "Manual W가 실제로 sizing에 쓰이는가"를
+              그대로 보여준다 — effectiveWSource는 하단 "사양 결정 요약"의
+              GOVERNING RELIEF LOAD 배지와 정확히 같은 파생값이므로 두 배지가
+              서로 모순될 수 없다. 시나리오 선택 여부(reliefLoadScenarioType)
+              만으로 판단하지 않는 이유: §5.11처럼 시나리오를 선택하고
+              계산까지 성공해도 governing 후보가 될 수 없는(VOLUME_FLOW)
+              경우, Manual W는 계속 실제로 쓰이므로 "참고용 — 미사용"이라고
+              하면 사실과 다르다. */}
+          <div style={{position:"absolute",top:-6,right:0,zIndex:1,fontSize:9,padding:"2px 8px",borderRadius:6,
+            fontFamily:font.mono,fontWeight:700,
+            background: effectiveWSource!=="MANUAL_INPUT" ? T.orangeBg : T.greenBg,
+            color: effectiveWSource!=="MANUAL_INPUT" ? "#946200" : T.greenDk,
+            border:`1px solid ${effectiveWSource!=="MANUAL_INPUT" ? T.orange : T.green}`}}>
+            {effectiveWSource!=="MANUAL_INPUT" ? "참고용 — 미사용" : "MANUAL INPUT 사용 중"}
+          </div>
+          <DecisionSlider
+            param="W" label="설계 방출량 (Manual)" unit="kg/h"
+            value={inputs.W} min={500} max={10000} step={100}
+            onChange={v=>onChange("W",v)}
+            basis="HAZOP 또는 API 521 시나리오 계산서 기반. 화재, 반응 폭주, 냉각 상실 등 최대 방출 시나리오 중 지배 케이스 적용. 설계 여유 없이 계산된 최대값 사용. 아래 Relief Load 시나리오를 선택하면 이 값 대신 시나리오 산정값이 사용됩니다."
+          />
+          <FieldGuide kind="external">
+            외부 계산서의 수동 입력값입니다. 다른 W 산정 근거(방출 시나리오/열팽창용 안전밸브)를
+            선택하면 이 값 대신 해당 산정값이 사용됩니다.
+          </FieldGuide>
         </div>
-        <DecisionSlider
-          param="W" label="설계 방출량 (Manual)" unit="kg/h"
-          value={inputs.W} min={500} max={10000} step={100}
-          onChange={v=>onChange("W",v)}
-          basis="HAZOP 또는 API 521 시나리오 계산서 기반. 화재, 반응 폭주, 냉각 상실 등 최대 방출 시나리오 중 지배 케이스 적용. 설계 여유 없이 계산된 최대값 사용. 아래 Relief Load 시나리오를 선택하면 이 값 대신 시나리오 산정값이 사용됩니다."
+      )}
+
+      {/* ── 2b. Relief Load — §5 시나리오 기반 W 산정 (PSV 과압 시나리오 선택 시에만) ── */}
+      {wInputSource==="GOVERNING_SCENARIO" && (
+        <ReliefLoadScenarioSection
+          scenarioType={reliefLoadScenarioType}
+          scenarioInput={reliefLoadScenarioInput}
+          scenarioResult={reliefLoadScenarioResult}
+          adapter={reliefLoadAdapter}
+          onScenarioTypeChange={onReliefLoadScenarioTypeChange}
+          onFieldChange={onReliefLoadScenarioInputChange}
+          onExternalFireCaseChange={onExternalFireCaseChange}
+          onExternalFireMChange={onExternalFireMChange}
+          onExternalFireFMethodChange={onExternalFireFMethodChange}
+          onExternalFireT1MethodChange={onExternalFireT1MethodChange}
+          onExternalFireInsulationLayerAdd={onExternalFireInsulationLayerAdd}
+          onExternalFireInsulationLayerRemove={onExternalFireInsulationLayerRemove}
+          onExternalFireInsulationLayerFieldChange={onExternalFireInsulationLayerFieldChange}
+          fireScenarioActive={fireScenarioActive}
+          p1AbsSuggestedMPa={p1AbsSuggestedMPa}
         />
-        <FieldGuide kind="external">
-          외부 계산서의 수동 입력값입니다. 아래에서 시나리오별 계산값이 선택되면 이 값은 적용되지
-          않을 수 있습니다(현재 상태는 위 배지로 표시됩니다).
-        </FieldGuide>
-      </div>
+      )}
 
-      {/* ── 2b. Relief Load — §5 시나리오 기반 W 산정 (선택) ── */}
-      <ReliefLoadScenarioSection
-        scenarioType={reliefLoadScenarioType}
-        scenarioInput={reliefLoadScenarioInput}
-        scenarioResult={reliefLoadScenarioResult}
-        adapter={reliefLoadAdapter}
-        onScenarioTypeChange={onReliefLoadScenarioTypeChange}
-        onFieldChange={onReliefLoadScenarioInputChange}
-        onExternalFireCaseChange={onExternalFireCaseChange}
-        onExternalFireMChange={onExternalFireMChange}
-        onExternalFireFMethodChange={onExternalFireFMethodChange}
-        onExternalFireT1MethodChange={onExternalFireT1MethodChange}
-        onExternalFireInsulationLayerAdd={onExternalFireInsulationLayerAdd}
-        onExternalFireInsulationLayerRemove={onExternalFireInsulationLayerRemove}
-        onExternalFireInsulationLayerFieldChange={onExternalFireInsulationLayerFieldChange}
-        fireScenarioActive={fireScenarioActive}
-        p1AbsSuggestedMPa={p1AbsSuggestedMPa}
-      />
-
-      {/* ── 2c. §5.11 열팽창용 안전밸브(C-C-13-2026) — 독립 입력, wInputSource가
-          LIQUID_THERMAL_EXPANSION일 때만 실제 sizing에 반영됨(그 외에는
-          §5.13과 동일하게 참고용으로만 표시) ── */}
-      <div style={{position:"relative"}}>
-        {wInputSource==="LIQUID_THERMAL_EXPANSION" && (
+      {/* ── 2c. §5.11 열팽창용 안전밸브(C-C-13-2026) — 열팽창용 안전밸브 선택 시에만.
+          C-4.32 보완 전에는 "독립 입력이라 항상 열람 가능"하게 설계돼 있었으나(§5.13과
+          동일 취급), Journey D 지시서에 따라 이번엔 다른 두 탭과 동일하게 wInputSource
+          기준 조건부 렌더링으로 통일한다 — §5.11 자체의 계산 로직/입력 필드는 무변경. */}
+      {wInputSource==="LIQUID_THERMAL_EXPANSION" && (
+        <div style={{position:"relative"}}>
           <div style={{position:"absolute",top:-6,right:0,zIndex:1,fontSize:9,padding:"2px 8px",borderRadius:6,
             fontFamily:font.mono,fontWeight:700,
             background: liquidExpansionAdapter?.valid ? T.greenBg : T.orangeBg,
@@ -5415,14 +5427,14 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
             border:`1px solid ${liquidExpansionAdapter?.valid ? T.green : T.orange}`}}>
             {liquidExpansionAdapter?.valid ? "SIZING에 사용 중" : "입력 미완료"}
           </div>
-        )}
-        <LiquidExpansionSupplementaryBlock
-          value={liquidExpansionInput}
-          onFieldChange={onLiquidExpansionFieldChange}
-          result={liquidExpansionResult}
-          isActiveWSource={wInputSource==="LIQUID_THERMAL_EXPANSION"}
-        />
-      </div>
+          <LiquidExpansionSupplementaryBlock
+            value={liquidExpansionInput}
+            onFieldChange={onLiquidExpansionFieldChange}
+            result={liquidExpansionResult}
+            isActiveWSource={true}
+          />
+        </div>
+      )}
 
       {/* ── 2d. §5.13 열교환기 고장 — 독립 부가 계산(참고용, governing과 무관) ── */}
       <ExchangerFailureSupplementaryBlock

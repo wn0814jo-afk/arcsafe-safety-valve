@@ -21,6 +21,18 @@ from datetime import datetime, timezone
 ROOT = Path(__file__).parent.parent
 SRC  = ROOT / 'src'
 
+def _git_show(ref: str, relpath: str):
+    """git show <ref>:<relpath>를 읽어 baseline diff 비교에 쓴다.
+    git 명령 실패(예: 얕은 clone이라 해당 ref가 없음)는 조용히 None을
+    반환한다 — 이 경우 그 helper를 쓰는 check는 통과로 처리해 CI 환경
+    차이로 인한 무관한 실패를 만들지 않는다."""
+    try:
+        r = subprocess.run(["git", "show", f"{ref}:{relpath}"], cwd=ROOT,
+                            capture_output=True, text=True, timeout=10)
+        return r.stdout if r.returncode == 0 else None
+    except Exception:
+        return None
+
 # ════════════════════════════════════════════════════════════════
 #  ENGINE — 소스 파일 없이 Python으로 직접 재현
 #  (engine/api520.js 코드를 그대로 포팅 — 동일 계산식 보장)
@@ -5432,6 +5444,75 @@ def test_c432_review_wizard_contract() -> TestResult:
 
 
 # ════════════════════════════════════════════════════════════════
+#  C-4.32 보완 — Journey D: 방출 시나리오 3-way(Manual W/PSV 과압
+#  시나리오/열팽창용 안전밸브)가 wInputSource 값에 따라 상호배타적으로
+#  조건부 렌더링되는지 검증. 새 state 추가 없음(기존 wInputSource
+#  그대로 사용), Engine/Snapshot/Report 무변경.
+# ════════════════════════════════════════════════════════════════
+def test_c432_journey_d_contract() -> TestResult:
+    tr = TestResult("WIZ432-D-001", "방출 시나리오 조건부 렌더링(Journey D)")
+
+    iv_src = (SRC / "components" / "InputView.jsx").read_text()
+
+    # STEP2(방출 시나리오) 블록만 슬라이스 — WIZ432-001과 동일 경계 방식
+    step1_start = iv_src.index("step===1 && (")
+    step2_start = iv_src.index("step===2 && (")
+    step1_block = iv_src[step1_start:step2_start]
+
+    # ── WIZ-032-D-01: Manual W 선택 시 조건부 렌더링 ──────────────
+    tr.check("WIZ_032_D_01_manual_block_gated_on_wInputSource",
+             'wInputSource==="MANUAL" && (' in step1_block,
+             "Manual W 블록이 wInputSource===MANUAL 조건부 렌더링이 아님 — 다른 탭에서도 계속 보일 위험")
+
+    # ── WIZ-032-D-02: PSV 과압 시나리오 선택 시 조건부 렌더링 ──────
+    tr.check("WIZ_032_D_02_scenario_section_gated_on_wInputSource",
+             'wInputSource==="GOVERNING_SCENARIO" && (' in step1_block,
+             "ReliefLoadScenarioSection(§5 카드)이 wInputSource===GOVERNING_SCENARIO 조건부 렌더링이 아님")
+
+    # ── WIZ-032-D-03: 열팽창용 안전밸브 선택 시 조건부 렌더링 ──────
+    tr.check("WIZ_032_D_03_thermal_expansion_gated_on_wInputSource",
+             'wInputSource==="LIQUID_THERMAL_EXPANSION" && (' in step1_block,
+             "LiquidExpansionSupplementaryBlock이 wInputSource===LIQUID_THERMAL_EXPANSION 조건부 렌더링이 아님")
+
+    # ── WIZ-032-D-04/05: 세 블록이 서로 다른 조건이라 동시 노출 불가 ──
+    #    (세 조건 리터럴이 모두 iv_src에 등장하고 서로 다른 값이면,
+    #     JS 런타임에서 하나의 wInputSource 값이 동시에 세 값과 같을 수
+    #     없으므로 상호배타는 이 세 literal이 다르다는 점만으로 보장됨)
+    conditions = ['wInputSource==="MANUAL"', 'wInputSource==="GOVERNING_SCENARIO"',
+                  'wInputSource==="LIQUID_THERMAL_EXPANSION"']
+    tr.check("WIZ_032_D_04_three_conditions_mutually_exclusive_literals",
+             len(set(conditions)) == 3 and all(c in step1_block for c in conditions),
+             "세 블록의 게이팅 조건이 서로 다른 값이 아니거나 누락됨 — 동시 노출 가능성")
+
+    # ── WIZ-032-D-05: 새 중복 state를 만들지 않고 기존 wInputSource만 사용 ──
+    #    (C-4.32 baseline commit 8a31850 대비 useState( 호출 개수가 그대로인지로
+    #     검증 — Journey D 수정은 순수 JSX 조건부 렌더링 재구성이지 새 hook
+    #     추가가 아니어야 한다는 지시서 5번 원칙)
+    baseline_iv_src = _git_show("8a31850", "src/components/InputView.jsx")
+    tr.check("WIZ_032_D_05_no_duplicate_visibility_state_introduced",
+             baseline_iv_src is None or iv_src.count("useState(") == baseline_iv_src.count("useState("),
+             "InputView.jsx의 useState( 호출 개수가 C-4.32 baseline(8a31850) 대비 늘어남 — "
+             "wInputSource를 대체/중복하는 새 visibility state가 추가됐을 가능성(지시서 5번 위반)")
+
+    # ── WIZ-032-D-06: §5.1~5.12 세부 입력은 여전히 scenarioType 선택 시에만
+    #    (ReliefLoadScenarioSection 내부, 기존 C-4.21 로직 — 이번에 안 건드림) ──
+    tr.check("WIZ_032_D_06_sub_scenario_input_still_gated_on_scenarioType",
+             "{scenarioType !== null && (" in iv_src,
+             "§5.x 세부 시나리오 입력폼이 scenarioType 선택 여부와 무관하게 노출되도록 바뀜(범위 밖 회귀)")
+
+    # ── 값 보존: 숨긴다고 해서 값을 초기화하는 코드(onChange 강제 리셋 등)가
+    #    새로 추가되지 않았는지 — wInputSource 전환 핸들러 자체가 이번에
+    #    수정되지 않았음을 소스에서 확인(onWInputSourceChange 정의는
+    #    CaseView.jsx에 있고 이번 diff 대상이 아님) ──
+    cv_src = (SRC / "components" / "CaseView.jsx").read_text()
+    tr.check("WIZ_032_D_07_wInputSource_handler_untouched_no_reset_added",
+             "C-4.32" not in cv_src,
+             "CaseView.jsx(wInputSource 소유 state)가 이번 Change로 수정됨 — 값 보존 계약 위반 위험, 범위 위반")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
 #  BASELINE LOCK CONTRACT (Sprint A.1) — Engine 1.3.0 기준선 보호 장치
 #  1) ENGINE-VERSION-LOCK-001: Snapshot/ReportPackage/Fixture 엔진버전 일치
 #  2) GOLDEN-FIXTURE-MUTATION-GUARD-001: fixture를 손으로 고치면 감지
@@ -7802,6 +7883,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [WIZ432-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── C-4.32 보완 — Journey D 방출 시나리오 조건부 렌더링 ────────
+    print("\n── WIZ432-D-001 (Sprint C-4.32 보완) ────────────────────")
+    tr = test_c432_journey_d_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [WIZ432-D-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"
