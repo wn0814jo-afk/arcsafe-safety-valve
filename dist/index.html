@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:a14cfc333e7c\n\n' +
+    box.textContent = '[ERROR] BUILD:d9616b0715da\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:a14cfc333e7c\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:d9616b0715da\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:a14cfc333e7c | 2026-09-27T16:10:24Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:d9616b0715da | 2026-09-27T23:56:53Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "a14cfc333e7c";
+const __BUILD_HASH__ = "d9616b0715da";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -5567,11 +5567,21 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
             ⚠ 설비대장에 Overpressure(%) 미설정 — 계산 불가. 설비대장에서 값을 먼저 입력하세요.
           </div>
         )}
-        <FieldGuide kind="lookup">
-          Overpressure(%)는 이 화면에서 임의로 선택하는 값이 아니라 설비대장에 등록된 이 밸브의
-          축적압력 조건입니다. 적용 가능한 상한은 아래 축적압력 허용 정책(밸브 설치 수량·화재
-          보호 목적 여부)에 따라 결정됩니다.
-        </FieldGuide>
+        {/* SPACING-001(P3 UI 버그, C-4.34와 무관한 독립 수정): FieldGuide의
+            공통 marginTop:-4px는 보통 슬라이더 바로 아래에 붙는 배치를
+            기준으로 잡힌 값이라, 여기(RELIEVING PRESSURE 값 표시 바로
+            아래)에서는 값 텍스트와 지나치게 붙어 보인다. FieldGuide 자체나
+            다른 위치의 spacing에는 영향을 주지 않도록, 이 위치에만
+            paddingTop을 가진 래퍼를 하나 추가해 자식의 음수 marginTop이
+            부모 밖으로 나가지 못하게(패딩이 margin collapse를 차단) 만들어
+            둘 사이에 최소 여백만 생기게 한다. */}
+        <div style={{paddingTop:8}}>
+          <FieldGuide kind="lookup">
+            Overpressure(%)는 이 화면에서 임의로 선택하는 값이 아니라 설비대장에 등록된 이 밸브의
+            축적압력 조건입니다. 적용 가능한 상한은 아래 축적압력 허용 정책(밸브 설치 수량·화재
+            보호 목적 여부)에 따라 결정됩니다.
+          </FieldGuide>
+        </div>
       </div>
 
       {/* ── ACCUMULATION-001: 축적압력 허용성 검증 — sizing과 별개 정책 ── */}

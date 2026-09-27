@@ -1532,11 +1532,21 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
             ⚠ 설비대장에 Overpressure(%) 미설정 — 계산 불가. 설비대장에서 값을 먼저 입력하세요.
           </div>
         )}
-        <FieldGuide kind="lookup">
-          Overpressure(%)는 이 화면에서 임의로 선택하는 값이 아니라 설비대장에 등록된 이 밸브의
-          축적압력 조건입니다. 적용 가능한 상한은 아래 축적압력 허용 정책(밸브 설치 수량·화재
-          보호 목적 여부)에 따라 결정됩니다.
-        </FieldGuide>
+        {/* SPACING-001(P3 UI 버그, C-4.34와 무관한 독립 수정): FieldGuide의
+            공통 marginTop:-4px는 보통 슬라이더 바로 아래에 붙는 배치를
+            기준으로 잡힌 값이라, 여기(RELIEVING PRESSURE 값 표시 바로
+            아래)에서는 값 텍스트와 지나치게 붙어 보인다. FieldGuide 자체나
+            다른 위치의 spacing에는 영향을 주지 않도록, 이 위치에만
+            paddingTop을 가진 래퍼를 하나 추가해 자식의 음수 marginTop이
+            부모 밖으로 나가지 못하게(패딩이 margin collapse를 차단) 만들어
+            둘 사이에 최소 여백만 생기게 한다. */}
+        <div style={{paddingTop:8}}>
+          <FieldGuide kind="lookup">
+            Overpressure(%)는 이 화면에서 임의로 선택하는 값이 아니라 설비대장에 등록된 이 밸브의
+            축적압력 조건입니다. 적용 가능한 상한은 아래 축적압력 허용 정책(밸브 설치 수량·화재
+            보호 목적 여부)에 따라 결정됩니다.
+          </FieldGuide>
+        </div>
       </div>
 
       {/* ── ACCUMULATION-001: 축적압력 허용성 검증 — sizing과 별개 정책 ── */}
