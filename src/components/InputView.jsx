@@ -70,6 +70,26 @@ function FieldGuide({ kind, children }) {
   );
 }
 
+// ── C-4.33 — Kd/Kb 계수 기본 설명 UX ──
+// 목적: Kd/Kb 선택 UI 바로 근처에 "무엇인지/왜 필요한지"를 5~10초 내에
+// 이해할 수 있는 짧은 설명을 추가한다. 계산 로직/기본값/선택지/Wizard
+// 흐름은 이 Change에서 전혀 건드리지 않는다 — 순수 설명 UX 추가.
+function CoefficientExplainer({ what, why }) {
+  return (
+    <div style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:10,
+      padding:"10px 12px",marginBottom:10}}>
+      <div style={{display:"flex",gap:7,marginBottom:5,alignItems:"baseline"}}>
+        <span style={{fontSize:10,fontWeight:700,color:T.navyLight,fontFamily:font.mono,flexShrink:0}}>무엇인가?</span>
+        <span style={{fontSize:11,color:T.text,fontFamily:font.sans,lineHeight:1.5}}>{what}</span>
+      </div>
+      <div style={{display:"flex",gap:7,alignItems:"baseline"}}>
+        <span style={{fontSize:10,fontWeight:700,color:T.navyLight,fontFamily:font.mono,flexShrink:0}}>왜 필요한가?</span>
+        <span style={{fontSize:11,color:T.text,fontFamily:font.sans,lineHeight:1.5}}>{why}</span>
+      </div>
+    </div>
+  );
+}
+
 // ── C-4.10 — §5.12 EXTERNAL_FIRE fireCase 메타 ──
 // 표시명/설명/계산가능여부는 C-4.10 설계 확정본(2장)을 그대로 따른다.
 const EXTERNAL_FIRE_CASE_ORDER = [
@@ -1642,6 +1662,10 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         <div>
       {/* ── 5. 방출계수 결정 ── */}
       <SectionHeader step="5" title="방출계수 Kd" sub="어떤 근거로 이 계수를 적용하는가"/>
+      <CoefficientExplainer
+        what="밸브가 실제로 유체를 방출할 때의 흐름 성능을 나타내는 계수입니다. 이론적으로 계산한 유량과 실제 밸브가 방출하는 유량의 차이를 보정합니다."
+        why="필요한 방출면적을 계산할 때 이론값이 아니라 실제 밸브의 방출 성능을 반영하기 위해 사용합니다. 값이 작을수록 같은 유량을 처리하는 데 더 큰 방출면적이 필요합니다."
+      />
       <DecisionChoice
         param="Kd" label="방출계수 선택"
         options={KD_OPTIONS}
@@ -1668,6 +1692,10 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
         <div>
       {/* ── 6. 배압보정계수 — 시스템 계산값 (사용자 직접 선택 금지) ── */}
       <SectionHeader step="6" title="배압보정계수 Kb" sub="P1, P2로부터 시스템이 계산 — 직접 선택 불가"/>
+      <CoefficientExplainer
+        what="안전밸브 출구 쪽 배관에 걸리는 배압이 방출 성능에 미치는 영향을 반영하는 계수입니다. 배압이 높을수록 밸브가 방출할 수 있는 유량이 줄어듭니다."
+        why="배압의 영향을 반영해 필요한 방출면적을 정확히 계산하기 위해 사용합니다. 설정압 대비 배압 비율이 일정 수준을 넘으면 이 값이 감소합니다."
+      />
       <div style={{
         background: kbCalc.status==="out_of_range" ? T.redBg : T.bg,
         borderRadius:12, padding:"14px 16px", marginBottom:10,

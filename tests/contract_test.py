@@ -5513,6 +5513,123 @@ def test_c432_journey_d_contract() -> TestResult:
 
 
 # ════════════════════════════════════════════════════════════════
+#  C-4.33 — Kd/Kb 계수 기본 설명 UX. Kd/Kb 선택 UI 바로 근처에
+#  "무엇인지/왜 필요한지" 설명을 추가. 계산 로직/기본값/선택지/Wizard
+#  흐름/Engine/Snapshot/Report는 이 Change에서 전혀 건드리지 않는다.
+# ════════════════════════════════════════════════════════════════
+def test_c433_kd_kb_explainer_contract() -> TestResult:
+    tr = TestResult("C433-001", "Kd/Kb 계수 기본 설명 UX 개선")
+
+    iv_src = (SRC / "components" / "InputView.jsx").read_text()
+
+    # ── C433-01: 설명 컴포넌트 정의 ──────────────────────────────
+    tr.check("C433_01_explainer_component_defined",
+             "function CoefficientExplainer(" in iv_src,
+             "CoefficientExplainer 컴포넌트가 정의되어 있지 않음")
+
+    # STEP5(Kd)/STEP6(Kb) 블록 슬라이스 — WIZ432-001과 동일 경계 방식
+    step4_start = iv_src.index("step===4 && (")
+    step5_start = iv_src.index("step===5 && (")
+    step6_start = iv_src.index("step===6 && (")
+    kd_block = iv_src[step4_start:step5_start]
+    kb_block = iv_src[step5_start:step6_start]
+
+    # ── C433-02/03: Kd 단계에 설명 삽입, 선택 UI 바로 위(근처) ──────
+    tr.check("C433_02_explainer_present_in_kd_step",
+             "<CoefficientExplainer" in kd_block,
+             "Kd 단계에 CoefficientExplainer가 삽입되지 않음")
+    tr.check("C433_03_explainer_before_kd_decision_choice",
+             kd_block.index("<CoefficientExplainer") < kd_block.index('param="Kd"'),
+             "Kd 설명이 선택 UI보다 뒤에 있음 — 선택 UI 바로 근처에 위치해야 함")
+
+    # ── C433-04/05: Kb 단계에 설명 삽입, 계산값 표시 바로 위(근처) ──
+    tr.check("C433_04_explainer_present_in_kb_step",
+             "<CoefficientExplainer" in kb_block,
+             "Kb 단계에 CoefficientExplainer가 삽입되지 않음")
+    tr.check("C433_05_explainer_before_kb_calculated_display",
+             kb_block.index("<CoefficientExplainer") < kb_block.index("SYSTEM CALCULATED"),
+             "Kb 설명이 시스템 계산값 표시보다 뒤에 있음 — 선택 UI 바로 근처에 위치해야 함")
+
+    # ── C433-06: 컴포넌트 자체가 "무엇인가?"/"왜 필요한가?" 라벨을 렌더링 ──
+    #    (라벨은 CoefficientExplainer 정의에 1번만 있고, 호출부는 what/why
+    #     내용만 prop으로 넘김 — 재사용 컴포넌트 구조이므로 정의에서 확인)
+    explainer_def_start = iv_src.index("function CoefficientExplainer(")
+    explainer_def_end = iv_src.index("\n}\n", explainer_def_start)
+    explainer_def = iv_src[explainer_def_start:explainer_def_end]
+    tr.check("C433_06_component_renders_what_and_why_labels",
+             "무엇인가?" in explainer_def and "왜 필요한가?" in explainer_def,
+             "CoefficientExplainer가 '무엇인가?'/'왜 필요한가?' 라벨을 렌더링하지 않음")
+    # 각 호출부(Kd/Kb)에 what/why 내용이 비어있지 않게 전달되는지
+    for label, block in [("kd", kd_block), ("kb", kb_block)]:
+        call_start = block.index("<CoefficientExplainer")
+        call_end = block.index("/>", call_start)
+        call_src = block[call_start:call_end]
+        tr.check(f"C433_06b_{label}_what_prop_has_content",
+                 'what="' in call_src and len(call_src.split('what="')[1].split('"')[0]) > 10,
+                 f"{label.upper()} 설명의 what 내용이 비어있거나 지나치게 짧음")
+        tr.check(f"C433_06c_{label}_why_prop_has_content",
+                 'why="' in call_src and len(call_src.split('why="')[1].split('"')[0]) > 10,
+                 f"{label.upper()} 설명의 why 내용이 비어있거나 지나치게 짧음")
+
+    # ── C433-07: 내부 구현 용어를 설명 문구에 그대로 노출하지 않음 ──
+    #    (지시서 6번 — Engine/Snapshot/Case/API 520/521/schema/adapter/
+    #     source enum/wInputSource/내부 component 이름 노출 금지)
+    forbidden_terms = ["Engine", "Snapshot", "schema", "adapter", "source enum",
+                       "wInputSource", "API 520", "API 521", "Case"]
+    # CoefficientExplainer 호출부(2곳)의 what/why 문자열만 추출해 검사
+    explainer_calls = []
+    idx = 0
+    while True:
+        i = iv_src.find("<CoefficientExplainer", idx)
+        if i == -1:
+            break
+        end = iv_src.index("/>", i)
+        explainer_calls.append(iv_src[i:end])
+        idx = end
+    tr.check("C433_07_two_explainer_calls_found", len(explainer_calls) == 2,
+             f"CoefficientExplainer 호출이 정확히 2곳이어야 함(Kd/Kb) — 실제 {len(explainer_calls)}곳")
+    for i, call in enumerate(explainer_calls):
+        for term in forbidden_terms:
+            tr.check(f"C433_07_no_internal_term_{term.replace(' ','_')}_in_explainer_{i}",
+                     term not in call,
+                     f"설명 문구에 내부 구현 용어 '{term}'이 그대로 노출됨(지시서 6번 위반)")
+
+    # ── C433-08: 기존 Kd/Kb 선택·계산 계약 무변경(회귀) ─────────────
+    tr.check("C433_08_kd_options_unchanged",
+             "KD_OPTIONS" in iv_src and 'value:0.975' in iv_src and 'value:0.900' in iv_src and 'value:0.877' in iv_src,
+             "KD_OPTIONS 값이 변경됨 — 이번 Change 범위 밖")
+    tr.check("C433_09_kb_system_calculated_badge_unchanged",
+             "SYSTEM CALCULATED" in kb_block and "ENGINEER OVERRIDE" in kb_block,
+             "Kb SYSTEM CALCULATED/ENGINEER OVERRIDE 배지가 유실됨 — 회귀")
+    tr.check("C433_10_kb_override_reason_gate_unchanged",
+             "nextDisabled={kbOverride && !kbOverrideReason.trim()}" in kb_block,
+             "Kb override 근거 미입력 시 진행 차단 로직이 변경됨 — 회귀")
+
+    # ── C433-11: Wizard 1~7 흐름 무변경(7단계, step===0~6 전부 존재) ──
+    for i in range(7):
+        tr.check(f"C433_11_step{i}_still_conditionally_rendered",
+                 f"step==={i} && (" in iv_src,
+                 f"step==={i} 블록이 유실됨 — Wizard 흐름 변경(범위 위반)")
+
+    # ── C433-12: Engine/Snapshot/Report/Persistence 무변경 ──────────
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+    relief_src = (SRC / "engine" / "relief_load.js").read_text()
+    bp_src     = (SRC / "engine" / "backpressure.js").read_text()
+    snap_src   = (SRC / "snapshot" / "create.js").read_text()
+    report_src = (SRC / "report" / "createPackage.js").read_text()
+    repo_src   = (SRC / "persistence" / "CaseRepository.js").read_text()
+    for name, src in [("api520.js", api520_src), ("relief_load.js", relief_src),
+                       ("backpressure.js", bp_src), ("snapshot/create.js", snap_src),
+                       ("report/createPackage.js", report_src),
+                       ("persistence/CaseRepository.js", repo_src)]:
+        tr.check(f"C433_12_untouched_{name.replace('/','_').replace('.','_')}",
+                 "C-4.33" not in src,
+                 f"C-4.33이 {name}(Engine/Snapshot/Report/Persistence)을 건드림 — 범위 위반")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
 #  BASELINE LOCK CONTRACT (Sprint A.1) — Engine 1.3.0 기준선 보호 장치
 #  1) ENGINE-VERSION-LOCK-001: Snapshot/ReportPackage/Fixture 엔진버전 일치
 #  2) GOLDEN-FIXTURE-MUTATION-GUARD-001: fixture를 손으로 고치면 감지
@@ -7894,6 +8011,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [WIZ432-D-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── Kd/Kb 계수 기본 설명 UX (C-4.33) ──────────────────────────
+    print("\n── C433-001 (Sprint C-4.33) ─────────────────────────────")
+    tr = test_c433_kd_kb_explainer_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [C433-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"
