@@ -1185,6 +1185,10 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
   const [step, setStep] = useState(0); // C-4.32 wizard step (0-indexed, 7 steps)
   const goBack = () => setStep(s => Math.max(0, s - 1));
   const goNext = () => setStep(s => Math.min(WIZ_STEPS.length - 1, s + 1));
+  // ── C-4.34 — 진행 차단 원인 단계 바로가기 ──
+  // 기존 blockReason 판정 로직은 그대로 두고, "그 원인이 몇 번째 step인지"
+  // 만 이동용으로 별도 보관한다(판정 자체를 여기서 복제하지 않음).
+  const goToStep = (n) => setStep(Math.max(0, Math.min(WIZ_STEPS.length - 1, n)));
 
   // 유체 선택 → M, k, Kd 동시 결정
   const handleFluidSelect = (f) => {
@@ -1833,11 +1837,31 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
           : reliefLoadIncomplete
           ? "⚠ W 산정 근거 입력을 완료해야 진행 가능"
           : null;
+        // C-4.34 — blockReason과 완전히 동일한 조건/동일한 우선순위로만
+        // "이동할 step"을 고른다. 새 판정을 추가하지 않고 위 세 조건을
+        // 그대로 재사용한다(판정 로직 이중화·drift 방지, 지시서 6번 원칙).
+        const blockTarget = mawpWarning
+          ? { step: 3, label: "압력 조건으로 이동" }
+          : (kbOverride && !kbOverrideReason.trim())
+          ? { step: 5, label: "배압보정계수로 이동" }
+          : reliefLoadIncomplete
+          ? { step: 1, label: "방출 시나리오로 이동" }
+          : null;
         return (
-          <button onClick={onSubmit} disabled={!!blockReason}
-            style={{width:"100%",padding:"16px",background:blockReason?T.border:T.navyLight,color:T.white,border:"none",borderRadius:14,fontSize:15,fontWeight:900,fontFamily:font.sans,cursor:blockReason?"not-allowed":"pointer",boxShadow:blockReason?"none":`0 5px 0 ${T.navy}`,transition:"all 0.15s",letterSpacing:0.5}}>
-            {blockReason || "사양 확정 → 계산 실행"}
-          </button>
+          <div>
+            <button onClick={onSubmit} disabled={!!blockReason}
+              style={{width:"100%",padding:"16px",background:blockReason?T.border:T.navyLight,color:T.white,border:"none",borderRadius:14,fontSize:15,fontWeight:900,fontFamily:font.sans,cursor:blockReason?"not-allowed":"pointer",boxShadow:blockReason?"none":`0 5px 0 ${T.navy}`,transition:"all 0.15s",letterSpacing:0.5}}>
+              {blockReason || "사양 확정 → 계산 실행"}
+            </button>
+            {blockTarget && (
+              <button onClick={()=>goToStep(blockTarget.step)} type="button"
+                style={{width:"100%",padding:"12px",marginTop:8,background:T.white,
+                  color:T.navyLight,border:`1.5px solid ${T.navyLight}`,borderRadius:12,
+                  fontSize:13,fontWeight:700,fontFamily:font.sans,cursor:"pointer"}}>
+                {blockTarget.label} →
+              </button>
+            )}
+          </div>
         );
       })()}
           <div style={{display:"flex",gap:8,marginTop:4}}>

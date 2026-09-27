@@ -5630,6 +5630,127 @@ def test_c433_kd_kb_explainer_contract() -> TestResult:
 
 
 # ════════════════════════════════════════════════════════════════
+#  C-4.34 — 진행 차단 원인 단계 바로가기. STEP7 blockReason과 동일한
+#  조건/우선순위를 재사용해 "이동할 step"만 별도로 붙인다(판정 이중화
+#  금지). 전체 Wizard 자유이동/progress dot 클릭화/자동 Step7 복귀는
+#  범위 밖.
+# ════════════════════════════════════════════════════════════════
+def test_c434_block_step_navigation_contract() -> TestResult:
+    tr = TestResult("C434-001", "진행 차단 원인 단계 바로가기")
+
+    iv_src = (SRC / "components" / "InputView.jsx").read_text()
+
+    # ── C434-01: goToStep 헬퍼 신규, 기존 goBack/goNext는 그대로 ──
+    tr.check("C434_00_goToStep_defined_once",
+             iv_src.count("const goToStep = ") == 1,
+             "goToStep 헬퍼가 정확히 1번 선언되어 있지 않음")
+    tr.check("C434_00b_goBack_goNext_unchanged",
+             "const goBack = () => setStep(s => Math.max(0, s - 1));" in iv_src and
+             "const goNext = () => setStep(s => Math.min(WIZ_STEPS.length - 1, s + 1));" in iv_src,
+             "기존 goBack/goNext 로직이 변경됨 — 회귀 위험")
+
+    # STEP7(최종 확인, step===6) 블록만 슬라이스
+    step6_start = iv_src.index("step===6 && (")
+    step6_block = iv_src[step6_start:iv_src.index("</div>\n  );\n}\n\n// ════")]
+
+    # ── C434-01: 설정압 오류 → targetStep=3(압력 조건) ──────────────
+    tr.check("C434_01_mawp_target_step4",
+             '{ step: 3, label: "압력 조건으로 이동" }' in step6_block,
+             "설정압 오류 blockReason에 Step4(압력 조건) 이동 타깃이 없음")
+
+    # ── C434-02: Kb override 근거 누락 → targetStep=5(배압보정계수) ──
+    tr.check("C434_02_kb_target_step6",
+             '{ step: 5, label: "배압보정계수로 이동" }' in step6_block,
+             "Kb override 근거 누락 blockReason에 Step6(배압보정계수) 이동 타깃이 없음")
+
+    # ── C434-03: W 산정 근거 미완료 → targetStep=1(방출 시나리오) ────
+    tr.check("C434_03_w_target_step2",
+             '{ step: 1, label: "방출 시나리오로 이동" }' in step6_block,
+             "W 산정 근거 미완료 blockReason에 Step2(방출 시나리오) 이동 타깃이 없음")
+
+    # ── C434-04: 이동 버튼이 goToStep을 호출, blockTarget 있을 때만 렌더 ──
+    tr.check("C434_04_move_button_calls_goToStep",
+             "onClick={()=>goToStep(blockTarget.step)}" in step6_block,
+             "이동 버튼이 goToStep을 호출하지 않음")
+    tr.check("C434_04b_move_button_conditionally_rendered",
+             "{blockTarget && (" in step6_block,
+             "이동 버튼이 blockTarget 존재 여부로 조건부 렌더링되지 않음 — 정상 상태에서도 노출될 위험")
+
+    # ── C434-05: blockTarget 판정이 blockReason과 동일한 조건/순서를
+    #    그대로 재사용(판정 이중화 금지, 지시서 6번) — 두 삼항연산자가
+    #    정확히 같은 조건식 순서를 쓰는지 문자열로 직접 비교 ──
+    tr.check("C434_05_blockTarget_reuses_same_conditions_as_blockReason",
+             ("const blockReason = mawpWarning\n" in step6_block and
+              "const blockTarget = mawpWarning\n" in step6_block and
+              "? { step: 3, label: \"압력 조건으로 이동\" }\n          : (kbOverride && !kbOverrideReason.trim())\n          ? { step: 5, label: \"배압보정계수로 이동\" }\n          : reliefLoadIncomplete\n          ? { step: 1, label: \"방출 시나리오로 이동\" }\n          : null;" in step6_block),
+             "blockTarget이 blockReason과 다른 조건식/순서를 쓸 가능성 — 판정 drift 위험")
+    tr.check("C434_05b_no_new_relief_load_judgement",
+             step6_block.count("const reliefLoadIncomplete = ") == 1,
+             "reliefLoadIncomplete 판정이 중복 선언됨 — 단일 진실 소스 원칙 위반")
+
+    # ── C434-06: 개발자용 용어를 사용자 화면 라벨에 노출하지 않음(지시서 8번) ──
+    forbidden_dev_terms = ["targetStep", "blockReason", "validation error", "invalid state", "schema"]
+    move_button_call_start = step6_block.index('{blockTarget && (')
+    move_button_call_end = step6_block.index(')}', move_button_call_start) + 2
+    move_button_jsx = step6_block[move_button_call_start:move_button_call_end]
+    for term in forbidden_dev_terms:
+        tr.check(f"C434_06_no_dev_term_{term.replace(' ','_')}_in_move_button",
+                 term not in move_button_jsx,
+                 f"이동 버튼 JSX에 개발자용 용어 '{term}'이 노출됨")
+
+    # ── C434-07: 전체 Wizard를 자유 이동형으로 바꾸지 않음 — progress
+    #    bar/dot 자체(PsvReviewWizardHeader)는 여전히 onClick이 없어야 함 ──
+    header_start = iv_src.index("function PsvReviewWizardHeader(")
+    header_end = iv_src.index("\n}\n", header_start)
+    header_src = iv_src[header_start:header_end]
+    tr.check("C434_07_progress_dots_still_not_clickable",
+             "onClick" not in header_src,
+             "PsvReviewWizardHeader의 progress dot에 onClick이 추가됨 — 지시서 4번(자유 탐색형 금지) 위반")
+
+    # ── C434-08: 기존 nextDisabled 조건 전부 무변경(회귀) ────────────
+    tr.check("C434_08a_pressure_step_nextDisabled_unchanged",
+             "nextDisabled={!!mawpWarning}" in iv_src,
+             "압력 조건 단계의 nextDisabled 조건이 변경됨")
+    tr.check("C434_08b_kb_step_nextDisabled_unchanged",
+             "nextDisabled={kbOverride && !kbOverrideReason.trim()}" in iv_src,
+             "Kb 단계의 nextDisabled 조건이 변경됨")
+    tr.check("C434_08c_scenario_step_still_ungated",
+             '{step===1 && (' in iv_src and 'nextDisabled={false}' in iv_src[iv_src.index('{step===1 && ('):iv_src.index('{step===2 && (')],
+             "방출 시나리오(Step2) 단계 게이트가 변경됨 — C-4.34 범위 밖")
+
+    # ── C434-09: Wizard 1~7 흐름/7단계 메타 무변경 ──────────────────
+    for i in range(7):
+        tr.check(f"C434_09_step{i}_still_conditionally_rendered",
+                 f"step==={i} && (" in iv_src,
+                 f"step==={i} 블록이 유실됨 — Wizard 흐름 변경(범위 위반)")
+    tr.check("C434_09b_seven_steps_meta_unchanged",
+             iv_src.count("{ title: ") == 7,
+             "WIZ_STEPS 7단계 메타가 변경됨")
+
+    # ── C434-10: Kd/Kb 설명(C-4.33) 무변경 ──────────────────────────
+    tr.check("C434_10_c433_explainer_untouched",
+             "function CoefficientExplainer(" in iv_src and iv_src.count("<CoefficientExplainer") == 2,
+             "C-4.33의 CoefficientExplainer가 변경/유실됨")
+
+    # ── C434-11: Engine/Snapshot/Report/Persistence 무변경 ──────────
+    api520_src = (SRC / "engine" / "api520.js").read_text()
+    relief_src = (SRC / "engine" / "relief_load.js").read_text()
+    bp_src     = (SRC / "engine" / "backpressure.js").read_text()
+    snap_src   = (SRC / "snapshot" / "create.js").read_text()
+    report_src = (SRC / "report" / "createPackage.js").read_text()
+    repo_src   = (SRC / "persistence" / "CaseRepository.js").read_text()
+    for name, src in [("api520.js", api520_src), ("relief_load.js", relief_src),
+                       ("backpressure.js", bp_src), ("snapshot/create.js", snap_src),
+                       ("report/createPackage.js", report_src),
+                       ("persistence/CaseRepository.js", repo_src)]:
+        tr.check(f"C434_11_untouched_{name.replace('/','_').replace('.','_')}",
+                 "C-4.34" not in src,
+                 f"C-4.34가 {name}(Engine/Snapshot/Report/Persistence)을 건드림 — 범위 위반")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
 #  BASELINE LOCK CONTRACT (Sprint A.1) — Engine 1.3.0 기준선 보호 장치
 #  1) ENGINE-VERSION-LOCK-001: Snapshot/ReportPackage/Fixture 엔진버전 일치
 #  2) GOLDEN-FIXTURE-MUTATION-GUARD-001: fixture를 손으로 고치면 감지
@@ -8022,6 +8143,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [C433-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── 진행 차단 원인 단계 바로가기 (C-4.34) ──────────────────────
+    print("\n── C434-001 (Sprint C-4.34) ─────────────────────────────")
+    tr = test_c434_block_step_navigation_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [C434-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"
