@@ -5751,6 +5751,118 @@ def test_c434_block_step_navigation_contract() -> TestResult:
 
 
 # ════════════════════════════════════════════════════════════════
+#  C-4.35 — 로그인 필수 Authentication Access Gate. ArcSafe.jsx
+#  최상위 한 곳에서만 authState로 전체 프로그램 접근을 차단한다.
+#  Pro Gate(plan/policy-me/PDF export)는 이 Gate 조건에 절대 사용하지
+#  않고, Dashboard/CaseView/AssetMaster/ReportView 등 하위 컴포넌트에는
+#  인증 로직을 추가하지 않는다(지시서 절대 금지 목록).
+# ════════════════════════════════════════════════════════════════
+def test_c435_auth_gate_contract() -> TestResult:
+    tr = TestResult("C435-001", "로그인 필수 Authentication Access Gate")
+
+    arcsafe_src = (SRC / "ArcSafe.jsx").read_text()
+
+    # ── 준비: authGranted 선언부 ~ 파일 끝(컨텐츠 렌더 포함) 슬라이스 ──
+    authgranted_decl = "const authGranted = authState === \"authenticated\";"
+    tr.check("C435_00_authGranted_declared_once",
+             arcsafe_src.count(authgranted_decl) == 1,
+             "authGranted 판정이 정확히 1번 선언되어 있지 않음")
+    content_start = arcsafe_src.index("{/* 컨텐츠 */}")
+    content_block = arcsafe_src[content_start:]
+
+    # ── AUTH-01/02/06/07: loading/unauthenticated/unavailable 각각
+    #    프로그램 본문과 배타적으로 렌더링되고, 프로그램 본문(curScreen
+    #    분기)은 오직 authGranted 안에서만 렌더된다 ──
+    tr.check("C435_01_loading_screen_wired",
+             '{authState === "loading" && <AuthGateLoading/>}' in content_block,
+             "loading 상태에서 AuthGateLoading이 렌더되지 않음")
+    tr.check("C435_02_unauthenticated_screen_wired",
+             '{authState === "unauthenticated" && <AuthGateUnauthenticated onLogin={handleLogin}/>}' in content_block,
+             "unauthenticated 상태에서 AuthGateUnauthenticated가 렌더되지 않음")
+    tr.check("C435_06_unavailable_screen_wired",
+             '{authState === "unavailable" && <AuthGateUnavailable/>}' in content_block,
+             "unavailable 상태에서 AuthGateUnavailable이 렌더되지 않음")
+    tr.check("C435_01_02_06_program_body_gated_by_authGranted_only",
+             "{authGranted && (<>" in content_block,
+             "프로그램 본문(curScreen 분기)이 authGranted 한 조건으로만 감싸여 있지 않음")
+    # curScreen 4개 분기가 전부 그 authGranted 블록 "안"에 있는지 —
+    # authGranted 블록 시작 이후 위치에서만 등장해야 한다.
+    gate_wrap_idx = content_block.index("{authGranted && (<>")
+    for scr in ['curScreen === "case"', 'curScreen === "assets"',
+                'curScreen === "review-entry"', 'curScreen === "dashboard"']:
+        idx = content_block.index(scr)
+        tr.check(f"C435_03_{scr.split('===')[1].strip()}_inside_authGranted_gate",
+                 idx > gate_wrap_idx,
+                 f"{scr} 분기가 authGranted Gate 밖에 있음 — 비인증 상태에서도 렌더될 위험")
+
+    # ── AUTH-03/04: Free/Pro 둘 다 authenticated면 기존 프로그램 그대로
+    #    — curScreen 분기/각 컴포넌트 props가 기존과 동일(무변경) ──
+    for props_marker in ["caseData={activeCase}", "onSnapshotCreate={handleSnapshotCreate}",
+                          "onSelectEquipment={handleEquipmentSelect}",
+                          "onStartReview={()=>setScreen(\"review-entry\")}"]:
+        tr.check(f"C435_04_prop_unchanged_{props_marker[:20].replace('=','_').replace('{','').replace('}','').replace('(','').replace(')','').replace('>','').replace('\"','')}",
+                 props_marker in content_block,
+                 f"기존 컴포넌트 prop({props_marker})이 변경/유실됨 — 회귀 위험")
+
+    # ── 절대 금지(지시서 1번): Authentication Gate 관련 코드에 plan/Pro
+    #    관련 식별자를 절대 쓰지 않는다 — AuthGate* 컴포넌트 정의부와
+    #    authGranted 판정식 전체를 검사 대상으로 슬라이스 ──
+    gate_components_start = arcsafe_src.index("function AuthGateBrandHeader(")
+    gate_components_end = arcsafe_src.index("//  ROOT — ArcSafe App")
+    gate_components_src = arcsafe_src[gate_components_start:gate_components_end]
+    forbidden_in_gate = ["plan", "planBadgeState", "policy/me", "policy.archsafe.co.kr", "pro\""]
+    for term in forbidden_in_gate:
+        tr.check(f"C435_05_no_{term.replace('/','_').replace('.','_').replace(chr(34),'')}_in_gate_components",
+                 term not in gate_components_src,
+                 f"Authentication Gate 컴포넌트에 금지된 Pro/plan 관련 식별자 '{term}'이 사용됨")
+    tr.check("C435_05b_authGranted_condition_is_authState_only",
+             authgranted_decl in arcsafe_src and "plan" not in authgranted_decl.lower(),
+             "authGranted 판정식이 authState 이외의 조건(plan 등)을 포함함")
+
+    # ── AUTH-05/06(세션 만료·unavailable 전환): 인증 상태가 바뀌면
+    #    프로그램 본문이 '즉시' 사라져야 한다 — 이는 authGranted가 매
+    #    렌더마다 현재 authState를 직접 읽는 순수 조건식이어야만
+    #    보장된다(디바운스/캐시/별도 state로 지연시키지 않음). 또한
+    #    이 전환에서 데이터를 지우는 코드가 없어야 한다(지시서 4번) ──
+    tr.check("C435_07_no_debounce_or_cache_around_authGranted",
+             "useMemo" not in arcsafe_src[arcsafe_src.index(authgranted_decl)-5:arcsafe_src.index(authgranted_decl)+5] and
+             "setTimeout" not in arcsafe_src[max(0,arcsafe_src.index(authgranted_decl)-200):arcsafe_src.index(authgranted_decl)],
+             "authGranted 판정 근처에 디바운스/캐시로 의심되는 코드가 있음 — 즉시 전환 보장 위반 가능성")
+    auth_effect_start = arcsafe_src.index("useEffect(() => {\n    if (typeof AuthClient")
+    auth_effect_end = arcsafe_src.index("const handleLogin", auth_effect_start)
+    auth_effect_src = arcsafe_src[auth_effect_start:auth_effect_end]
+    for forbidden_wipe in ["setCases(", "setEquipmentHistory(", "setDischargeHistory(",
+                           "wipeAll", "setActiveCase(", "indexedDB.deleteDatabase"]:
+        tr.check(f"C435_08_no_data_wipe_on_auth_change_{forbidden_wipe.strip('(')}",
+                 forbidden_wipe not in auth_effect_src,
+                 f"auth 상태 변경 effect 안에서 데이터/화면 상태를 지우는 코드('{forbidden_wipe}')가 발견됨 — 지시서 4번(데이터 삭제 금지) 위반")
+
+    # ── 지시서 2번: 하위 컴포넌트에 인증 로직 복제 금지 ────────────
+    for comp_file in ["Dashboard.jsx", "CaseView.jsx", "AssetMaster.jsx", "ReportView.jsx"]:
+        comp_src = (SRC / "components" / comp_file).read_text()
+        tr.check(f"C435_09_no_auth_logic_duplicated_in_{comp_file.replace('.','_')}",
+                 "authState" not in comp_src and "authGranted" not in comp_src and "AuthClient" not in comp_src,
+                 f"{comp_file}에 인증 관련 로직이 추가됨 — 지시서(하위 컴포넌트 인증 로직 추가 금지) 위반")
+
+    # ── 지시서 5번: 기존 Pro Gate(ReportView.jsx) 완전 무변경 ──────
+    report_src = (SRC / "components" / "ReportView.jsx").read_text()
+    tr.check("C435_10_pro_gate_untouched",
+             'if (plan !== "pro") { setShowUpgradeModal(true); return; }' in report_src and
+             'https://policy.archsafe.co.kr/policy/me' in report_src,
+             "ReportView.jsx의 기존 Pro Gate 로직이 변경됨")
+
+    # ── Engine/Snapshot/Report/Persistence 무변경 ──────────────────
+    for name in ["engine/api520.js", "engine/relief_load.js", "engine/backpressure.js",
+                 "snapshot/create.js", "report/createPackage.js", "persistence/CaseRepository.js"]:
+        src = (SRC / name).read_text()
+        tr.check(f"C435_11_untouched_{name.replace('/','_').replace('.','_')}",
+                 "authState" not in src and "C-4.35" not in src,
+                 f"C-4.35가 {name}(Engine/Snapshot/Report/Persistence)을 건드림 — 범위 위반")
+
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
 #  BASELINE LOCK CONTRACT (Sprint A.1) — Engine 1.3.0 기준선 보호 장치
 #  1) ENGINE-VERSION-LOCK-001: Snapshot/ReportPackage/Fixture 엔진버전 일치
 #  2) GOLDEN-FIXTURE-MUTATION-GUARD-001: fixture를 손으로 고치면 감지
@@ -8154,6 +8266,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [C434-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── 로그인 필수 Authentication Access Gate (C-4.35) ────────────
+    print("\n── C435-001 (Sprint C-4.35) ─────────────────────────────")
+    tr = test_c435_auth_gate_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [C435-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"

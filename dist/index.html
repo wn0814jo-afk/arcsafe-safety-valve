@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:d9616b0715da\n\n' +
+    box.textContent = '[ERROR] BUILD:c61b3a30d7dc\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:d9616b0715da\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:c61b3a30d7dc\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:d9616b0715da | 2026-09-27T23:56:53Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:c61b3a30d7dc | 2026-09-28T00:05:47Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "d9616b0715da";
+const __BUILD_HASH__ = "c61b3a30d7dc";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -9623,6 +9623,63 @@ function Dashboard({ cases, onOpenCase, onStartReview, onStartExample, onWipeAll
 
 
 // ── ArcSafe.jsx ──────────────────────────
+//  C-4.35 — Authentication Access Gate (loading/unauthenticated/unavailable)
+// ════════════════════════════════════════════════════════════════
+// 이 세 컴포넌트는 오직 authState 값에 따른 화면만 그린다. plan/Pro
+// 관련 로직은 절대 포함하지 않는다(지시서 1번 절대 금지 목록).
+function AuthGateBrandHeader({ title, sub }) {
+  return (
+    <div style={{textAlign:"center",padding:"48px 16px 12px"}}>
+      <div style={{fontSize:20,fontWeight:900,color:T.navy,
+        fontFamily:font.mono,letterSpacing:1,marginBottom:6}}>{title}</div>
+      <div style={{fontSize:12,color:T.sub,fontFamily:font.sans,lineHeight:1.6}}>{sub}</div>
+    </div>
+  );
+}
+function AuthGateLoading() {
+  // A. loading — 본문 미표시, 과도한 스피너 없이 브랜드와 일관된
+  // 최소한의 로딩 표시만. flash 방지가 목적이므로 텍스트 위주.
+  return <AuthGateBrandHeader title="ArchSafe" sub="인증 상태를 확인하는 중입니다…"/>;
+}
+function AuthGateUnauthenticated({ onLogin }) {
+  // B. unauthenticated — 프로그램 본문 전체 비표시, 기존 handleLogin을
+  // 그대로 재사용(새 인증 흐름 생성 안 함).
+  return (
+    <div>
+      <AuthGateBrandHeader title="로그인이 필요합니다"
+        sub="안전밸브 사양 검토 프로그램을 사용하려면 로그인해 주세요."/>
+      <div style={{display:"flex",justifyContent:"center"}}>
+        <button onClick={onLogin}
+          style={{padding:"14px 32px",background:T.navy,color:T.white,border:"none",
+            borderRadius:12,fontSize:14,fontWeight:900,fontFamily:font.sans,
+            cursor:"pointer",boxShadow:`0 4px 0 ${T.navyLight}`}}>
+          로그인
+        </button>
+      </div>
+    </div>
+  );
+}
+function AuthGateUnavailable() {
+  // D. unavailable — fail-closed. unauthenticated와 같은 화면으로
+  // 뭉개지 않고 원인이 다르다는 것을 구분해서 보여준다. "재시도"는
+  // 새로고침(이 앱에서 이미 쓰이는 handleWipeAllData 등과 동일한
+  // window.location.reload() 패턴)만 재사용 — 새 인증 로직 생성 안 함.
+  return (
+    <div>
+      <AuthGateBrandHeader title="인증 서비스를 사용할 수 없습니다"
+        sub="로그인 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주세요."/>
+      <div style={{display:"flex",justifyContent:"center"}}>
+        <button onClick={()=>window.location.reload()}
+          style={{padding:"14px 32px",background:T.white,color:T.navy,
+            border:`1.5px solid ${T.border}`,borderRadius:12,fontSize:14,fontWeight:900,
+            fontFamily:font.sans,cursor:"pointer"}}>
+          다시 시도
+        </button>
+      </div>
+    </div>
+  );
+}
+
 //  ROOT — ArcSafe App (v0.2.0-asset-master)
 // ════════════════════════════════════════════════════════════════
 function ArcSafe() {
@@ -9887,6 +9944,15 @@ function ArcSafe() {
     : screen === "review-entry" ? "review-entry"
     : "dashboard";
 
+  // ── C-4.35 — Authentication Access Gate ──
+  // 절대 원칙(지시서 1번): 이 Gate는 authState만 본다. plan/planBadgeState/
+  // Pro 여부/policy-me는 여기서 절대 참조하지 않는다(기존 Pro Gate와
+  // 완전히 독립). Dashboard/CaseView/AssetMaster/ReportView 등 하위
+  // 컴포넌트에는 인증 로직을 추가하지 않고, 이 최상위 분기 하나로만
+  // 13개 접근 경로(2026-09-28 audit) 전부를 커버한다 — 이 앱에는
+  // client-side routing이 없어 모든 화면이 반드시 이 지점을 거친다.
+  const authGranted = authState === "authenticated";
+
   return (
     <div style={{minHeight:"100vh",background:T.bg,fontFamily:font.sans}}>
       {/* 글로벌 헤더 */}
@@ -9909,7 +9975,7 @@ function ArcSafe() {
               {activeCase.valveTag}
             </div>
           )}
-          {!activeCase && (
+          {authGranted && !activeCase && (
             <button
               onClick={()=>setScreen(screen==="assets"?"dashboard":"assets")}
               style={{padding:"6px 11px",
@@ -9955,6 +10021,10 @@ function ArcSafe() {
 
       {/* 컨텐츠 */}
       <div style={{padding:"14px 14px 40px",maxWidth:640,margin:"0 auto"}}>
+        {authState === "loading" && <AuthGateLoading/>}
+        {authState === "unauthenticated" && <AuthGateUnauthenticated onLogin={handleLogin}/>}
+        {authState === "unavailable" && <AuthGateUnavailable/>}
+        {authGranted && (<>
         {curScreen === "case" && activeCase && (
           <CaseView
             caseData={activeCase}
@@ -9996,6 +10066,7 @@ function ArcSafe() {
             onWipeAllData={CaseRepository.isAvailable() ? handleWipeAllData : null}
           />
         )}
+        </>)}
       </div>
     </div>
   );
