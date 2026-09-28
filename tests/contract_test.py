@@ -5863,6 +5863,76 @@ def test_c435_auth_gate_contract() -> TestResult:
 
 
 # ════════════════════════════════════════════════════════════════
+#  A-1 — 밸브 구조 일러스트(Step 1). Engine이 실제 지원하는 선택지
+#  (스프링식/벨로우즈형/럽처디스크)만 시각화하고, 파일럿식은 그리지
+#  않는다. 표시 전용 — 선택/계산/Wizard 로직은 무변경.
+# ════════════════════════════════════════════════════════════════
+def test_a1_valve_illustration_contract() -> TestResult:
+    import re
+    tr = TestResult("VALVEILL-001", "Step1 밸브 구조 일러스트")
+    iv_src = (SRC / "components" / "InputView.jsx").read_text()
+
+    tr.check("A1_00_component_defined_once",
+             iv_src.count("function ValveIllustration(") == 1,
+             "ValveIllustration이 정확히 1번 정의되어 있지 않음")
+    c_start = iv_src.index("function ValveIllustration(")
+    c_end = iv_src.index("function SectionHeader(", c_start)
+    comp = iv_src[c_start:c_end]
+
+    # 지원 3종만: SPRING(기본 분기)/BELLOWS/RUPTURE, 파일럿식 미표현
+    for kind in ["SPRING", "BELLOWS", "RUPTURE"]:
+        tr.check(f"A1_01_kind_{kind}_present", f'{kind}:' in comp or f'"{kind}"' in comp,
+                 f"{kind} 일러스트가 없음")
+    tr.check("A1_02_no_pilot_illustration",
+             "PILOT" not in comp.upper() and "파일럿" not in comp.replace("파일럿식은 Engine 미지원", ""),
+             "Engine 미지원인 파일럿식이 일러스트에 포함됨")
+
+    # T 토큰만 사용: 컴포넌트 안에 hex/rgb 색 리터럴 금지
+    tr.check("A1_03_no_hex_color_literals", re.search(r"#[0-9a-fA-F]{3,8}\b", comp) is None,
+             "일러스트에 T 토큰이 아닌 hex 색 리터럴이 있음")
+    tr.check("A1_03b_no_rgb_literals", "rgb(" not in comp, "일러스트에 rgb() 리터럴이 있음")
+    tr.check("A1_04_uses_T_tokens", "T.navy" in comp and "T.blueBg" in comp and "T.orange" in comp,
+             "일러스트가 T 토큰을 사용하지 않음")
+
+    # 선 굵기 2(sw=2), 글자 없음(라벨은 카드 텍스트가 담당 → 11px 미만 글자 불가)
+    tr.check("A1_05_stroke_width_2", "const sw = 2;" in comp, "기본 선 굵기가 2가 아님")
+    tr.check("A1_06_no_svg_text_elements", "<text" not in comp,
+             "SVG 안에 <text>가 있음 — 넣는다면 11px 이상이어야 하므로 카드 텍스트로 대체할 것")
+    tr.check("A1_07_accessible_label", 'role: "img"' in comp and '"aria-label"' in comp,
+             "일러스트에 role/aria-label이 없음")
+    tr.check("A1_08_no_external_image", "<img" not in comp and "http" not in comp and "data:image" not in comp,
+             "외부 이미지/URL을 사용함 — SVG 인라인만 허용")
+
+    # Step1 카드에 3종 모두 배치, 기존 선택 로직 무변경
+    step0 = iv_src[iv_src.index("{step===0 && ("):iv_src.index("{step===1 && (")]
+    tr.check("A1_09_used_in_step1_cards",
+             '<ValveIllustration kind={ill}' in step0 and '<ValveIllustration kind={v}' in step0 and '"RUPTURE"' in step0,
+             "Step 1 카드에 3종(RUPTURE/SPRING/BELLOWS) 일러스트가 배치되지 않음")
+    tr.check("A1_10_selection_handlers_unchanged",
+             "onClick={()=>onDeviceChange(v)}" in step0 and 'onClick={()=>onChange("valveType",v)}' in step0,
+             "기존 선택 핸들러가 변경됨 — 회귀")
+    tr.check("A1_11_selected_style_reused",
+             step0.count("T.navyLight:T.border") >= 2 and 'T.navy+"0D"' in step0,
+             "기존 선택 상태 스타일(테두리+배경)이 변경됨")
+    tr.check("A1_12_card_radius_12", step0.count("borderRadius:12") >= 2,
+             "Step1 선택 카드 radius가 12가 아님")
+    tr.check("A1_13_step1_gate_unchanged", "nextDisabled={!deviceType}" in step0,
+             "Step 1 진행 조건이 변경됨")
+    tr.check("A1_14_no_other_step_touched",
+             iv_src.count("<ValveIllustration") == 2,
+             "ValveIllustration 호출이 Step 1 카드 2곳(맵 2개) 외에 존재함")
+
+    # Engine/Snapshot/Report/Persistence/계산 무변경
+    for name in ["engine/api520.js", "engine/relief_load.js", "engine/backpressure.js",
+                 "snapshot/create.js", "report/createPackage.js", "persistence/CaseRepository.js",
+                 "ArcSafe.jsx"]:
+        src = (SRC / name).read_text()
+        tr.check(f"A1_15_untouched_{name.replace('/','_').replace('.','_')}",
+                 "ValveIllustration" not in src, f"{name}에 일러스트 관련 변경이 들어감")
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
 #  BASELINE LOCK CONTRACT (Sprint A.1) — Engine 1.3.0 기준선 보호 장치
 #  1) ENGINE-VERSION-LOCK-001: Snapshot/ReportPackage/Fixture 엔진버전 일치
 #  2) GOLDEN-FIXTURE-MUTATION-GUARD-001: fixture를 손으로 고치면 감지
@@ -8277,6 +8347,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [C435-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── 밸브 구조 일러스트 (A-1) ───────────────────────────────────
+    print("\n── VALVEILL-001 (A-1) ─────────────────────────────")
+    tr = test_a1_valve_illustration_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [VALVEILL-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"

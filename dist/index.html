@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:c61b3a30d7dc\n\n' +
+    box.textContent = '[ERROR] BUILD:f6032a5d6b53\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:c61b3a30d7dc\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:f6032a5d6b53\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:c61b3a30d7dc | 2026-09-28T00:05:47Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:f6032a5d6b53 | 2026-09-28T10:36:15Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "c61b3a30d7dc";
+const __BUILD_HASH__ = "f6032a5d6b53";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -5056,6 +5056,56 @@ function DecisionChoice({ param, label, options, value, onChange }) {
 }
 
 // ── 섹션 구분선 ──────────────────────────────────────────────
+// ── A-1 — 밸브 구조 일러스트 (Step 1 선택 카드 전용) ──
+// 현재 Engine이 실제 지원하는 선택지만 그린다: 스프링식(일반형)/
+// 벨로우즈형(밸런스형)/럽처디스크. 파일럿식은 Engine 미지원(가이드 원문에
+// 수치 기준 없음)이라 의도적으로 그리지 않는다 — 그림이 곧 지원 표시가
+// 되기 때문. 색상은 T 토큰만, 선 굵기 2, 글자는 넣지 않는다(라벨은
+// 카드 텍스트가 담당). 표시 전용 — 선택 로직/계산과 무관.
+function ValveIllustration({ kind, size = 44 }) {
+  const sw = 2;
+  const labels = { SPRING: "스프링식 안전밸브 구조도", BELLOWS: "벨로우즈형 안전밸브 구조도", RUPTURE: "럽처디스크 구조도" };
+  const svgProps = {
+    viewBox: "0 0 48 60", width: size, height: Math.round(size * 60 / 48),
+    role: "img", "aria-label": labels[kind] || "밸브 구조도", style: { flexShrink: 0 },
+  };
+  if (kind === "RUPTURE") {
+    return (
+      <svg {...svgProps}>
+        <rect x="16" y="4" width="16" height="20" fill={T.blueBg} stroke={T.navy} strokeWidth={sw}/>
+        <rect x="16" y="36" width="16" height="20" fill={T.blueBg} stroke={T.navy} strokeWidth={sw}/>
+        <rect x="10" y="24" width="28" height="5" rx="1" fill={T.navy}/>
+        <rect x="10" y="31" width="28" height="5" rx="1" fill={T.navy}/>
+        <path d="M17 30 Q24 19 31 30" fill="none" stroke={T.orange} strokeWidth={sw} strokeLinecap="round"/>
+      </svg>
+    );
+  }
+  const bellows = kind === "BELLOWS";
+  return (
+    <svg {...svgProps}>
+      {/* 조정 나사 + 보닛 */}
+      <rect x="20" y="2" width="8" height="4" rx="1" fill={T.navy}/>
+      <rect x="15" y="6" width="18" height="20" rx="2" fill={T.blueBg} stroke={T.navy} strokeWidth={sw}/>
+      {/* 스프링 */}
+      <path d="M24 8 L19 11 L29 15 L19 19 L29 23 L24 25" fill="none" stroke={T.orange} strokeWidth={sw} strokeLinejoin="round" strokeLinecap="round"/>
+      {/* 본체 + 출구 노즐 */}
+      <path d="M10 26 H36 V32 H44 V42 H36 V46 H10 Z" fill={T.blueBg} stroke={T.navy} strokeWidth={sw} strokeLinejoin="round"/>
+      {/* 입구 배관 */}
+      <rect x="17" y="46" width="14" height="10" fill={T.blueBg} stroke={T.navy} strokeWidth={sw}/>
+      {/* 디스크(시트) */}
+      <line x1="17" y1="46" x2="31" y2="46" stroke={T.navy} strokeWidth={sw + 1} strokeLinecap="round"/>
+      {bellows && (
+        <>
+          {/* 벨로우즈: 디스크 위 주름관 — 배압이 스프링 쪽으로 새지 않게 격리 */}
+          <path d="M20 44 L28 41 L20 38 L28 35 L20 32 L28 29" fill="none" stroke={T.blue} strokeWidth={sw} strokeLinejoin="round" strokeLinecap="round"/>
+          {/* 보닛 벤트 */}
+          <line x1="33" y1="20" x2="38" y2="20" stroke={T.navy} strokeWidth={sw} strokeLinecap="round"/>
+        </>
+      )}
+    </svg>
+  );
+}
+
 function SectionHeader({ step, title, sub }) {
   return (
     <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,marginTop:6}}>
@@ -5299,16 +5349,21 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
       <SectionHeader step="1" title="밸브 종류" sub="설치된 밸브 또는 럽처디스크 선택"/>
       <div style={{display:"flex",gap:8,marginBottom:16}}>
         {[
-          ["safetyValve","🔧 안전밸브","스프링식 또는 파일럿식. 설정압에서 개방, 이후 자동 재폐."],
-          ["ruptureDisk","💥 럽처디스크","단일 작동. 파열 후 교체 필요. Kd ×0.9 보정 적용."],
-        ].map(([v,l,sub])=>(
+          ["safetyValve","🔧 안전밸브","스프링식 또는 파일럿식. 설정압에서 개방, 이후 자동 재폐.",null],
+          ["ruptureDisk","💥 럽처디스크","단일 작동. 파열 후 교체 필요. Kd ×0.9 보정 적용.","RUPTURE"],
+        ].map(([v,l,sub,ill])=>(
           <div key={v} onClick={()=>onDeviceChange(v)}
             style={{flex:1,padding:"12px",borderRadius:12,cursor:"pointer",
               border:`2px solid ${deviceType===v?T.navyLight:T.border}`,
               background:deviceType===v?T.navy+"0D":T.cardBg,
               transition:"all 0.15s"}}>
-            <div style={{fontSize:13,fontWeight:900,color:deviceType===v?T.navy:T.text,fontFamily:font.sans}}>{l}</div>
-            <div style={{fontSize:10,color:T.sub,marginTop:3,fontFamily:font.sans,lineHeight:1.4}}>{sub}</div>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              {ill && <ValveIllustration kind={ill} size={36}/>}
+              <div style={{minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:900,color:deviceType===v?T.navy:T.text,fontFamily:font.sans}}>{l}</div>
+                <div style={{fontSize:10,color:T.sub,marginTop:3,fontFamily:font.sans,lineHeight:1.4}}>{sub}</div>
+              </div>
+            </div>
           </div>
         ))}
       </div>
@@ -5325,12 +5380,17 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
               ["BELLOWS","벨로우즈형(밸런스형)", "배압 ≤ 설정압력의 50%"],
             ].map(([v,l,sub])=>(
               <div key={v} onClick={()=>onChange("valveType",v)}
-                style={{flex:1,padding:"10px 12px",borderRadius:10,cursor:"pointer",
+                style={{flex:1,padding:"10px 12px",borderRadius:12,cursor:"pointer",
                   border:`2px solid ${(inputs.valveType||"SPRING")===v?T.navyLight:T.border}`,
                   background:(inputs.valveType||"SPRING")===v?T.navy+"0D":T.cardBg,
                   transition:"all 0.15s"}}>
-                <div style={{fontSize:12,fontWeight:900,color:(inputs.valveType||"SPRING")===v?T.navy:T.text,fontFamily:font.sans}}>{l}</div>
-                <div style={{fontSize:9,color:T.sub,marginTop:2,fontFamily:font.mono}}>{sub}</div>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <ValveIllustration kind={v} size={40}/>
+                  <div style={{minWidth:0}}>
+                    <div style={{fontSize:12,fontWeight:900,color:(inputs.valveType||"SPRING")===v?T.navy:T.text,fontFamily:font.sans}}>{l}</div>
+                    <div style={{fontSize:9,color:T.sub,marginTop:2,fontFamily:font.mono}}>{sub}</div>
+                  </div>
+                </div>
               </div>
             ))}
           </div>
