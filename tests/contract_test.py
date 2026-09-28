@@ -5895,6 +5895,12 @@ def test_a1_valve_illustration_contract() -> TestResult:
              "일러스트가 T 토큰을 사용하지 않음")
 
     # 선 굵기 2(sw=2), 글자 없음(라벨은 카드 텍스트가 담당 → 11px 미만 글자 불가)
+    tr.check("A1_04b_principle_difference_drawn",
+             "arrowDown" in comp and "T.red" in comp and "T.blue" in comp and "벤트" in comp,
+             "스프링식(배압이 디스크를 누름)/벨로우즈형(주름관+벤트)의 구동원리 차이가 그림에 없음")
+    tr.check("A1_04c_spring_has_back_pressure_arrows_bellows_does_not",
+             "{!bellows && (<>{arrowDown(18)}{arrowDown(30)}</>)}" in comp,
+             "배압 화살표가 스프링식에만 그려지지 않음")
     tr.check("A1_05_stroke_width_2", "const sw = 2;" in comp, "기본 선 굵기가 2가 아님")
     tr.check("A1_06_no_svg_text_elements", "<text" not in comp,
              "SVG 안에 <text>가 있음 — 넣는다면 11px 이상이어야 하므로 카드 텍스트로 대체할 것")

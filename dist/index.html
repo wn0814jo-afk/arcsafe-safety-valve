@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:f6032a5d6b53\n\n' +
+    box.textContent = '[ERROR] BUILD:1ad702763132\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:f6032a5d6b53\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:1ad702763132\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:f6032a5d6b53 | 2026-09-28T10:36:15Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:1ad702763132 | 2026-09-28T10:43:51Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "f6032a5d6b53";
+const __BUILD_HASH__ = "1ad702763132";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -5081,25 +5081,38 @@ function ValveIllustration({ kind, size = 44 }) {
     );
   }
   const bellows = kind === "BELLOWS";
+  // 구동원리 차이(배압 영향)를 그림으로 구분한다:
+  //  - 스프링식(일반형): 출구 쪽 배압(빨강 화살표)이 디스크 윗면을 눌러
+  //    닫힘 방향 힘이 더해진다 → 설정압에 배압이 영향(허용 배압비율 낮음)
+  //  - 벨로우즈형(밸런스형): 주름관(파랑)이 스핀들을 감싸 배압이 디스크
+  //    윗면·스프링 쪽에 닿지 않는다(보닛은 대기로 벤트) → 배압 영향 작음
+  const arrowDown = (x) => (
+    <path d={`M${x} 29 V41 M${x - 2.5} 38.5 L${x} 42 L${x + 2.5} 38.5`} fill="none"
+      stroke={T.red} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round"/>
+  );
   return (
     <svg {...svgProps}>
-      {/* 조정 나사 + 보닛 */}
+      {/* 조정 나사 + 보닛 + 스프링 */}
       <rect x="20" y="2" width="8" height="4" rx="1" fill={T.navy}/>
       <rect x="15" y="6" width="18" height="20" rx="2" fill={T.blueBg} stroke={T.navy} strokeWidth={sw}/>
-      {/* 스프링 */}
       <path d="M24 8 L19 11 L29 15 L19 19 L29 23 L24 25" fill="none" stroke={T.orange} strokeWidth={sw} strokeLinejoin="round" strokeLinecap="round"/>
       {/* 본체 + 출구 노즐 */}
       <path d="M10 26 H36 V32 H44 V42 H36 V46 H10 Z" fill={T.blueBg} stroke={T.navy} strokeWidth={sw} strokeLinejoin="round"/>
-      {/* 입구 배관 */}
+      {/* 입구 배관 + 디스크 + 스핀들 */}
       <rect x="17" y="46" width="14" height="10" fill={T.blueBg} stroke={T.navy} strokeWidth={sw}/>
-      {/* 디스크(시트) */}
+      <line x1="24" y1="25" x2="24" y2="45" stroke={T.navy} strokeWidth={sw}/>
       <line x1="17" y1="46" x2="31" y2="46" stroke={T.navy} strokeWidth={sw + 1} strokeLinecap="round"/>
+      {!bellows && (<>{arrowDown(18)}{arrowDown(30)}</>)}
       {bellows && (
         <>
-          {/* 벨로우즈: 디스크 위 주름관 — 배압이 스프링 쪽으로 새지 않게 격리 */}
-          <path d="M20 44 L28 41 L20 38 L28 35 L20 32 L28 29" fill="none" stroke={T.blue} strokeWidth={sw} strokeLinejoin="round" strokeLinecap="round"/>
-          {/* 보닛 벤트 */}
-          <line x1="33" y1="20" x2="38" y2="20" stroke={T.navy} strokeWidth={sw} strokeLinecap="round"/>
+          {/* 벨로우즈: 스핀들을 감싼 주름관(위·아래 플레이트 포함) */}
+          <path d="M20 28 L17 30 L20 32 L17 34 L20 36 L17 38 L20 40 L17 42 L20 44 M28 28 L31 30 L28 32 L31 34 L28 36 L31 38 L28 40 L31 42 L28 44 M20 28 H28 M20 44 H28"
+            fill="none" stroke={T.blue} strokeWidth={sw} strokeLinejoin="round" strokeLinecap="round"/>
+          {/* 배압은 주름관 옆면에만 작용(디스크 윗면에 안 닿음) */}
+          <path d="M12 36 H14.5 M13 34.5 L15 36 L13 37.5 M35 36 H32.5 M34 34.5 L32 36 L34 37.5" fill="none"
+            stroke={T.red} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round"/>
+          {/* 보닛 벤트(대기 개방) */}
+          <line x1="33" y1="20" x2="39" y2="20" stroke={T.navy} strokeWidth={sw} strokeLinecap="round"/>
         </>
       )}
     </svg>
@@ -5359,7 +5372,7 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
               transition:"all 0.15s"}}>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               {ill && <ValveIllustration kind={ill} size={36}/>}
-              <div style={{minWidth:0}}>
+              <div style={{minWidth:0,wordBreak:"keep-all",overflowWrap:"break-word"}}>
                 <div style={{fontSize:13,fontWeight:900,color:deviceType===v?T.navy:T.text,fontFamily:font.sans}}>{l}</div>
                 <div style={{fontSize:10,color:T.sub,marginTop:3,fontFamily:font.sans,lineHeight:1.4}}>{sub}</div>
               </div>
@@ -5386,7 +5399,7 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
                   transition:"all 0.15s"}}>
                 <div style={{display:"flex",alignItems:"center",gap:8}}>
                   <ValveIllustration kind={v} size={40}/>
-                  <div style={{minWidth:0}}>
+                  <div style={{minWidth:0,wordBreak:"keep-all",overflowWrap:"break-word"}}>
                     <div style={{fontSize:12,fontWeight:900,color:(inputs.valveType||"SPRING")===v?T.navy:T.text,fontFamily:font.sans}}>{l}</div>
                     <div style={{fontSize:9,color:T.sub,marginTop:2,fontFamily:font.mono}}>{sub}</div>
                   </div>
