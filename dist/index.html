@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:d38c71416327\n\n' +
+    box.textContent = '[ERROR] BUILD:60d53016a4f7\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:d38c71416327\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:60d53016a4f7\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:d38c71416327 | 2026-09-29T08:21:57Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:60d53016a4f7 | 2026-09-29T08:27:22Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "d38c71416327";
+const __BUILD_HASH__ = "60d53016a4f7";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -5150,6 +5150,11 @@ function ValveIllustrationModal({ kind, onClose }) {
     RUPTURE: "압력이 오르면 디스크가 점점 부풀다가 설정 파열압에서 터지며 완전히 개방됩니다. 1회성 장치로, 작동 후 반드시 교체합니다.",
   };
   const titles = { SPRING: "스프링식(일반형)", BELLOWS: "벨로우즈형(밸런스형)", RUPTURE: "럽처디스크" };
+  const hasBackpressure = kind === "SPRING" || kind === "BELLOWS";
+  const legend = {
+    SPRING: [[T.red, "배압 — 출구 배관에 걸리는 압력, 디스크를 누르는 방향으로 작용"]],
+    BELLOWS: [[T.blue, "벨로우즈(주름관) — 배압을 스프링실과 격리"], [T.red, "배압 — 주름관 옆면에만 작용, 디스크 윗면엔 안 닿음"]],
+  }[kind] || [];
   return (
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(15,43,76,0.55)",
       display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:20}}>
@@ -5159,9 +5164,25 @@ function ValveIllustrationModal({ kind, onClose }) {
         <div style={{fontSize:14,fontWeight:900,color:T.navy,fontFamily:font.sans,marginBottom:10}}>
           {titles[kind]}
         </div>
-        <div style={{display:"flex",justifyContent:"center",marginBottom:12}}>
+        <div style={{display:"flex",justifyContent:"center",marginBottom:8}}>
           <ValveIllustration kind={kind} size={160} animate/>
         </div>
+        {legend.length > 0 && (
+          <div style={{display:"flex",flexDirection:"column",gap:3,marginBottom:10,textAlign:"left"}}>
+            {legend.map(([color,text],i)=>(
+              <div key={i} style={{display:"flex",alignItems:"center",gap:6}}>
+                <span style={{width:14,height:2,background:color,flexShrink:0,borderRadius:1}}/>
+                <span style={{fontSize:10,color:T.sub,fontFamily:font.sans}}>{text}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {hasBackpressure && (
+          <div style={{fontSize:10,color:T.navyLight,fontFamily:font.sans,lineHeight:1.6,
+            marginBottom:8,textAlign:"left",background:T.blueBg,borderRadius:8,padding:"6px 8px"}}>
+            배압(Back Pressure)이란? 안전밸브 출구 쪽 배관에 걸리는 압력입니다. 밸브가 열린 뒤 방출가스가 흐르면서 배관 저항으로 생기며, 종류에 따라 개방 압력에 미치는 영향이 다릅니다.
+          </div>
+        )}
         <div style={{fontSize:12,color:T.sub,fontFamily:font.sans,lineHeight:1.6,marginBottom:16,textAlign:"left"}}>
           {captions[kind]}
         </div>
@@ -5431,8 +5452,9 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               {ill && (
                 <div onClick={(e)=>{e.stopPropagation(); setZoomedValve(ill);}}
-                  style={{cursor:"zoom-in"}} title="눌러서 크게 보기">
+                  style={{cursor:"zoom-in",position:"relative",margin:-8,padding:8}} title="눌러서 크게 보기">
                   <ValveIllustration kind={ill} size={36}/>
+                  <span style={{position:"absolute",right:4,bottom:4,fontSize:9,lineHeight:1}}>🔍</span>
                 </div>
               )}
               <div style={{minWidth:0,wordBreak:"keep-all",overflowWrap:"break-word"}}>
@@ -5462,8 +5484,9 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
                   transition:"all 0.15s"}}>
                 <div style={{display:"flex",alignItems:"center",gap:8}}>
                   <div onClick={(e)=>{e.stopPropagation(); setZoomedValve(v);}}
-                    style={{cursor:"zoom-in"}} title="눌러서 크게 보기">
+                    style={{cursor:"zoom-in",position:"relative",margin:-8,padding:8}} title="눌러서 크게 보기">
                     <ValveIllustration kind={v} size={40}/>
+                    <span style={{position:"absolute",right:4,bottom:4,fontSize:9,lineHeight:1}}>🔍</span>
                   </div>
                   <div style={{minWidth:0,wordBreak:"keep-all",overflowWrap:"break-word"}}>
                     <div style={{fontSize:12,fontWeight:900,color:(inputs.valveType||"SPRING")===v?T.navy:T.text,fontFamily:font.sans}}>{l}</div>
