@@ -5489,10 +5489,20 @@ def test_c432_journey_d_contract() -> TestResult:
     #     검증 — Journey D 수정은 순수 JSX 조건부 렌더링 재구성이지 새 hook
     #     추가가 아니어야 한다는 지시서 5번 원칙)
     baseline_iv_src = _git_show("8a31850", "src/components/InputView.jsx")
+    # A-1 후속(밸브 그림 확대+애니메이션)에서 zoomedValve useState 1개를
+    # 정당하게 추가했다 — wInputSource와 무관한 모달 열림 상태이므로
+    # 허용 델타를 +1로 갱신한다(가드 취지: wInputSource를 대체/중복하는
+    # 새 "시나리오 가시성" state가 몰래 추가되는 것을 막는 것이지, 이후
+    # 다른 목적의 모든 useState 추가를 영구히 금지하는 것이 아니다).
+    KNOWN_LEGITIMATE_USESTATE_DELTA = 1  # zoomedValve (A-1 후속)
     tr.check("WIZ_032_D_05_no_duplicate_visibility_state_introduced",
-             baseline_iv_src is None or iv_src.count("useState(") == baseline_iv_src.count("useState("),
-             "InputView.jsx의 useState( 호출 개수가 C-4.32 baseline(8a31850) 대비 늘어남 — "
+             baseline_iv_src is None or
+             iv_src.count("useState(") == baseline_iv_src.count("useState(") + KNOWN_LEGITIMATE_USESTATE_DELTA,
+             "InputView.jsx의 useState( 호출 개수가 C-4.32 baseline(8a31850) 대비 예상치(+1: zoomedValve) 이상으로 늘어남 — "
              "wInputSource를 대체/중복하는 새 visibility state가 추가됐을 가능성(지시서 5번 위반)")
+    tr.check("A1_16_wInputSource_still_sole_scenario_visibility_state",
+             "wInputSource" in iv_src and "zoomedValve" in iv_src and "wInputSource" != "zoomedValve",
+             "zoomedValve가 wInputSource 시나리오 가시성 state를 대체/중복함")
 
     # ── WIZ-032-D-06: §5.1~5.12 세부 입력은 여전히 scenarioType 선택 시에만
     #    (ReliefLoadScenarioSection 내부, 기존 C-4.21 로직 — 이번에 안 건드림) ──
@@ -5925,8 +5935,8 @@ def test_a1_valve_illustration_contract() -> TestResult:
     tr.check("A1_13_step1_gate_unchanged", "nextDisabled={!deviceType}" in step0,
              "Step 1 진행 조건이 변경됨")
     tr.check("A1_14_no_other_step_touched",
-             iv_src.count("<ValveIllustration") == 2,
-             "ValveIllustration 호출이 Step 1 카드 2곳(맵 2개) 외에 존재함")
+             iv_src.count("<ValveIllustration kind=") == 3,
+             "ValveIllustration 호출이 Step 1 카드 2곳 + 확대모달 1곳(총 3) 외에 존재함")
 
     # Engine/Snapshot/Report/Persistence/계산 무변경
     for name in ["engine/api520.js", "engine/relief_load.js", "engine/backpressure.js",
@@ -5935,6 +5945,29 @@ def test_a1_valve_illustration_contract() -> TestResult:
         src = (SRC / name).read_text()
         tr.check(f"A1_15_untouched_{name.replace('/','_').replace('.','_')}",
                  "ValveIllustration" not in src, f"{name}에 일러스트 관련 변경이 들어감")
+
+    # ── 확대+동작 애니메이션(모달)은 순수 표시 전용, 선택/계산과 분리 ──
+    modal_start = iv_src.index("function ValveIllustrationModal(")
+    modal_end = iv_src.index("function SectionHeader(", modal_start)
+    modal_src = iv_src[modal_start:modal_end]
+    tr.check("A1_17_modal_defined_once", iv_src.count("function ValveIllustrationModal(") == 1,
+             "ValveIllustrationModal이 정확히 1번 정의되어 있지 않음")
+    tr.check("A1_18_modal_does_not_call_onChange_or_onDeviceChange",
+             "onChange(" not in modal_src and "onDeviceChange(" not in modal_src,
+             "확대 모달이 onChange/onDeviceChange를 호출함 — 표시 전용 원칙 위반(선택값을 바꾸면 안 됨)")
+    tr.check("A1_19_thumbnails_do_not_pass_animate_true",
+             'kind={ill} size={36}/>' in iv_src and 'kind={v} size={40}/>' in iv_src,
+             "카드 썸네일에 animate가 켜짐 — 썸네일은 정지 상태여야 함(회귀)")
+    tr.check("A1_20_modal_thumbnail_click_wrapped_with_stopPropagation",
+             iv_src.count("e.stopPropagation(); setZoomedValve(") == 2,
+             "그림 클릭이 카드 선택 클릭과 분리되지 않음(stopPropagation 누락) — 클릭 시 선택값이 바뀔 위험")
+    tr.check("A1_21_zoomedValve_state_declared_once",
+             iv_src.count("const [zoomedValve, setZoomedValve] = useState(null);") == 1,
+             "zoomedValve state가 정확히 1번 선언되어 있지 않음")
+    tr.check("A1_22_css_only_no_js_timers",
+             "setInterval" not in modal_src and "requestAnimationFrame" not in modal_src and
+             "@keyframes" in iv_src[iv_src.index("function ValveIllustration("):modal_start],
+             "애니메이션이 CSS keyframes가 아닌 JS 타이머로 구현됨")
     return tr
 
 

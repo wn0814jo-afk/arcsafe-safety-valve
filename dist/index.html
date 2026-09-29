@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:1ad702763132\n\n' +
+    box.textContent = '[ERROR] BUILD:d38c71416327\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:1ad702763132\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:d38c71416327\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:1ad702763132 | 2026-09-28T10:43:51Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:d38c71416327 | 2026-09-29T08:21:57Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "1ad702763132";
+const __BUILD_HASH__ = "d38c71416327";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -5062,21 +5062,36 @@ function DecisionChoice({ param, label, options, value, onChange }) {
 // 수치 기준 없음)이라 의도적으로 그리지 않는다 — 그림이 곧 지원 표시가
 // 되기 때문. 색상은 T 토큰만, 선 굵기 2, 글자는 넣지 않는다(라벨은
 // 카드 텍스트가 담당). 표시 전용 — 선택 로직/계산과 무관.
-function ValveIllustration({ kind, size = 44 }) {
+function ValveIllustration({ kind, size = 44, animate = false }) {
   const sw = 2;
   const labels = { SPRING: "스프링식 안전밸브 구조도", BELLOWS: "벨로우즈형 안전밸브 구조도", RUPTURE: "럽처디스크 구조도" };
   const svgProps = {
     viewBox: "0 0 48 60", width: size, height: Math.round(size * 60 / 48),
-    role: "img", "aria-label": labels[kind] || "밸브 구조도", style: { flexShrink: 0 },
+    role: "img", "aria-label": labels[kind] || "밸브 구조도", style: { flexShrink: 0, overflow: "visible" },
   };
+  // A-1 후속: 확대 보기에서만 동작 애니메이션을 튼다(카드 썸네일은 정지
+  // 상태 그대로 — 회귀 없음). CSS만 사용, JS 타이머 없음.
+  const animStyle = animate ? (
+    <style>{`
+      @keyframes vi-lift-${kind} { 0%,25%{transform:translateY(0);} 55%,80%{transform:translateY(-3.5px);} 100%{transform:translateY(0);} }
+      @keyframes vi-spring-${kind} { 0%,25%{transform:scaleY(1);} 55%,80%{transform:scaleY(0.82);} 100%{transform:scaleY(1);} }
+      @keyframes vi-bulge { 0%,15%{transform:scaleY(1);} 70%{transform:scaleY(1.9);} 85%{opacity:0.25;} 86%{transform:scaleY(1);opacity:0;} 100%{transform:scaleY(1);opacity:1;} }
+      .vi-lift-${kind}{animation:vi-lift-${kind} 2.2s ease-in-out infinite;}
+      .vi-spring-${kind}{animation:vi-spring-${kind} 2.2s ease-in-out infinite;transform-origin:24px 8px;}
+      .vi-bulge{animation:vi-bulge 2.2s ease-in-out infinite;transform-origin:24px 30px;}
+    `}</style>
+  ) : null;
   if (kind === "RUPTURE") {
     return (
       <svg {...svgProps}>
+        {animStyle}
         <rect x="16" y="4" width="16" height="20" fill={T.blueBg} stroke={T.navy} strokeWidth={sw}/>
         <rect x="16" y="36" width="16" height="20" fill={T.blueBg} stroke={T.navy} strokeWidth={sw}/>
         <rect x="10" y="24" width="28" height="5" rx="1" fill={T.navy}/>
         <rect x="10" y="31" width="28" height="5" rx="1" fill={T.navy}/>
-        <path d="M17 30 Q24 19 31 30" fill="none" stroke={T.orange} strokeWidth={sw} strokeLinecap="round"/>
+        <g className={animate ? "vi-bulge" : undefined}>
+          <path d="M17 30 Q24 19 31 30" fill="none" stroke={T.orange} strokeWidth={sw} strokeLinecap="round"/>
+        </g>
       </svg>
     );
   }
@@ -5092,16 +5107,23 @@ function ValveIllustration({ kind, size = 44 }) {
   );
   return (
     <svg {...svgProps}>
-      {/* 조정 나사 + 보닛 + 스프링 */}
+      {animStyle}
+      {/* 조정 나사 + 보닛 */}
       <rect x="20" y="2" width="8" height="4" rx="1" fill={T.navy}/>
       <rect x="15" y="6" width="18" height="20" rx="2" fill={T.blueBg} stroke={T.navy} strokeWidth={sw}/>
-      <path d="M24 8 L19 11 L29 15 L19 19 L29 23 L24 25" fill="none" stroke={T.orange} strokeWidth={sw} strokeLinejoin="round" strokeLinecap="round"/>
+      {/* 스프링(확대 보기에서 압축 애니메이션) */}
+      <g className={animate ? `vi-spring-${kind}` : undefined}>
+        <path d="M24 8 L19 11 L29 15 L19 19 L29 23 L24 25" fill="none" stroke={T.orange} strokeWidth={sw} strokeLinejoin="round" strokeLinecap="round"/>
+      </g>
       {/* 본체 + 출구 노즐 */}
       <path d="M10 26 H36 V32 H44 V42 H36 V46 H10 Z" fill={T.blueBg} stroke={T.navy} strokeWidth={sw} strokeLinejoin="round"/>
-      {/* 입구 배관 + 디스크 + 스핀들 */}
+      {/* 입구 배관 */}
       <rect x="17" y="46" width="14" height="10" fill={T.blueBg} stroke={T.navy} strokeWidth={sw}/>
-      <line x1="24" y1="25" x2="24" y2="45" stroke={T.navy} strokeWidth={sw}/>
-      <line x1="17" y1="46" x2="31" y2="46" stroke={T.navy} strokeWidth={sw + 1} strokeLinecap="round"/>
+      {/* 스핀들 + 디스크(확대 보기에서 들림 애니메이션) */}
+      <g className={animate ? `vi-lift-${kind}` : undefined}>
+        <line x1="24" y1="25" x2="24" y2="45" stroke={T.navy} strokeWidth={sw}/>
+        <line x1="17" y1="46" x2="31" y2="46" stroke={T.navy} strokeWidth={sw + 1} strokeLinecap="round"/>
+      </g>
       {!bellows && (<>{arrowDown(18)}{arrowDown(30)}</>)}
       {bellows && (
         <>
@@ -5116,6 +5138,40 @@ function ValveIllustration({ kind, size = 44 }) {
         </>
       )}
     </svg>
+  );
+}
+
+// A-1 후속 — 밸브 그림 확대+동작 애니메이션 모달. 순수 표시 전용(선택
+// 로직과 완전히 분리) — 여기서 값을 바꾸거나 onChange를 호출하지 않는다.
+function ValveIllustrationModal({ kind, onClose }) {
+  const captions = {
+    SPRING: "설정압에서 스프링 힘을 이기고 디스크가 들려 개방됩니다. 출구 배압도 디스크를 누르는 방향으로 함께 작용합니다.",
+    BELLOWS: "벨로우즈(주름관)가 스핀들을 감싸 배압을 스프링실과 격리시킵니다. 배압이 개방 압력에 미치는 영향이 작습니다.",
+    RUPTURE: "압력이 오르면 디스크가 점점 부풀다가 설정 파열압에서 터지며 완전히 개방됩니다. 1회성 장치로, 작동 후 반드시 교체합니다.",
+  };
+  const titles = { SPRING: "스프링식(일반형)", BELLOWS: "벨로우즈형(밸런스형)", RUPTURE: "럽처디스크" };
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(15,43,76,0.55)",
+      display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:20}}>
+      <div onClick={(e)=>e.stopPropagation()} style={{background:T.white,borderRadius:16,
+        padding:"20px 20px 16px",maxWidth:320,width:"100%",textAlign:"center",
+        boxShadow:"0 12px 40px rgba(15,43,76,0.35)"}}>
+        <div style={{fontSize:14,fontWeight:900,color:T.navy,fontFamily:font.sans,marginBottom:10}}>
+          {titles[kind]}
+        </div>
+        <div style={{display:"flex",justifyContent:"center",marginBottom:12}}>
+          <ValveIllustration kind={kind} size={160} animate/>
+        </div>
+        <div style={{fontSize:12,color:T.sub,fontFamily:font.sans,lineHeight:1.6,marginBottom:16,textAlign:"left"}}>
+          {captions[kind]}
+        </div>
+        <button onClick={onClose} type="button"
+          style={{padding:"10px 24px",background:T.navy,color:T.white,border:"none",
+            borderRadius:10,fontSize:13,fontWeight:700,fontFamily:font.sans,cursor:"pointer"}}>
+          닫기
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -5287,6 +5343,8 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
   // 기존 blockReason 판정 로직은 그대로 두고, "그 원인이 몇 번째 step인지"
   // 만 이동용으로 별도 보관한다(판정 자체를 여기서 복제하지 않음).
   const goToStep = (n) => setStep(Math.max(0, Math.min(WIZ_STEPS.length - 1, n)));
+  // A-1 후속 — 밸브 그림을 눌러 확대+동작 애니메이션으로 보기
+  const [zoomedValve, setZoomedValve] = useState(null); // null | "SPRING" | "BELLOWS" | "RUPTURE"
 
   // 유체 선택 → M, k, Kd 동시 결정
   const handleFluidSelect = (f) => {
@@ -5371,7 +5429,12 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
               background:deviceType===v?T.navy+"0D":T.cardBg,
               transition:"all 0.15s"}}>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
-              {ill && <ValveIllustration kind={ill} size={36}/>}
+              {ill && (
+                <div onClick={(e)=>{e.stopPropagation(); setZoomedValve(ill);}}
+                  style={{cursor:"zoom-in"}} title="눌러서 크게 보기">
+                  <ValveIllustration kind={ill} size={36}/>
+                </div>
+              )}
               <div style={{minWidth:0,wordBreak:"keep-all",overflowWrap:"break-word"}}>
                 <div style={{fontSize:13,fontWeight:900,color:deviceType===v?T.navy:T.text,fontFamily:font.sans}}>{l}</div>
                 <div style={{fontSize:10,color:T.sub,marginTop:3,fontFamily:font.sans,lineHeight:1.4}}>{sub}</div>
@@ -5398,7 +5461,10 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
                   background:(inputs.valveType||"SPRING")===v?T.navy+"0D":T.cardBg,
                   transition:"all 0.15s"}}>
                 <div style={{display:"flex",alignItems:"center",gap:8}}>
-                  <ValveIllustration kind={v} size={40}/>
+                  <div onClick={(e)=>{e.stopPropagation(); setZoomedValve(v);}}
+                    style={{cursor:"zoom-in"}} title="눌러서 크게 보기">
+                    <ValveIllustration kind={v} size={40}/>
+                  </div>
                   <div style={{minWidth:0,wordBreak:"keep-all",overflowWrap:"break-word"}}>
                     <div style={{fontSize:12,fontWeight:900,color:(inputs.valveType||"SPRING")===v?T.navy:T.text,fontFamily:font.sans}}>{l}</div>
                     <div style={{fontSize:9,color:T.sub,marginTop:2,fontFamily:font.mono}}>{sub}</div>
@@ -5992,6 +6058,7 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
           </div>
         </div>
       )}
+      {zoomedValve && <ValveIllustrationModal kind={zoomedValve} onClose={()=>setZoomedValve(null)}/>}
     </div>
   );
 }
