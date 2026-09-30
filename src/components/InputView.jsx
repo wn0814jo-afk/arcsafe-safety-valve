@@ -1034,6 +1034,12 @@ function ValveIllustration({ kind, size = 44, animate = false }) {
     viewBox: "0 0 48 60", width: size, height: Math.round(size * 60 / 48),
     role: "img", "aria-label": labels[kind] || "밸브 구조도", style: { flexShrink: 0, overflow: "visible" },
   };
+  // 밸브가 열려 있는 구간(다른 keyframe들과 같은 타이밍)에만, 눈에 덜 띄는
+  // 하얀 유체 입자가 inlet에서 outlet으로 흐르는 것처럼 보이게 한다.
+  // 표시 전용(계산과 무관) — 확대 보기(animate=true)에서만 렌더, 썸네일은
+  // 기존과 완전히 동일하게 유지. animStyle보다 먼저 선언(템플릿 리터럴이
+  // 참조하므로 순서 중요 — TDZ 방지).
+  const flowPath = kind === "RUPTURE" ? "M24 54 L24 6" : "M24 54 L24 39 L42 37";
   // A-1 후속: 확대 보기에서만 동작 애니메이션을 튼다(카드 썸네일은 정지
   // 상태 그대로 — 회귀 없음). CSS만 사용, JS 타이머 없음.
   const animStyle = animate ? (
@@ -1044,8 +1050,18 @@ function ValveIllustration({ kind, size = 44, animate = false }) {
       .vi-lift-${kind}{animation:vi-lift-${kind} 2.2s ease-in-out infinite;}
       .vi-spring-${kind}{animation:vi-spring-${kind} 2.2s ease-in-out infinite;transform-origin:24px 8px;}
       .vi-bulge{animation:vi-bulge 2.2s ease-in-out infinite;transform-origin:24px 30px;}
+      @keyframes vi-flow-${kind} { 0%,30%{opacity:0;offset-distance:0%;} 35%{opacity:0.6;offset-distance:6%;} 75%{opacity:0.6;offset-distance:96%;} 82%,100%{opacity:0;offset-distance:100%;} }
+      .vi-flow-${kind}{offset-path:path("${flowPath}");animation:vi-flow-${kind} 2.2s ease-in-out infinite;}
     `}</style>
   ) : null;
+  const FlowParticles = () => !animate ? null : (
+    <>
+      {[0, 0.5, 1].map((d) => (
+        <circle key={d} r="1.3" fill={T.white} opacity="0"
+          className={`vi-flow-${kind}`} style={{ animationDelay: `${d}s` }}/>
+      ))}
+    </>
+  );
   if (kind === "RUPTURE") {
     return (
       <svg {...svgProps}>
@@ -1057,6 +1073,7 @@ function ValveIllustration({ kind, size = 44, animate = false }) {
         <g className={animate ? "vi-bulge" : undefined}>
           <path d="M17 30 Q24 19 31 30" fill="none" stroke={T.orange} strokeWidth={sw} strokeLinecap="round"/>
         </g>
+        <FlowParticles/>
       </svg>
     );
   }
@@ -1102,6 +1119,7 @@ function ValveIllustration({ kind, size = 44, animate = false }) {
           <line x1="33" y1="20" x2="39" y2="20" stroke={T.navy} strokeWidth={sw} strokeLinecap="round"/>
         </>
       )}
+      <FlowParticles/>
     </svg>
   );
 }
