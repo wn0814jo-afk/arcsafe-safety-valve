@@ -1424,7 +1424,7 @@ function InputView({ inputs, deviceType, onChange, onDeviceChange, onSubmit, dis
       <SectionHeader step="1" title="밸브 종류" sub="설치된 밸브 또는 럽처디스크 선택"/>
       <div style={{display:"flex",gap:8,marginBottom:16}}>
         {[
-          ["safetyValve","🔧 안전밸브","스프링식 또는 파일럿식. 설정압에서 개방, 이후 자동 재폐.",null],
+          ["safetyValve","🔧 안전밸브","스프링식 또는 벨로우즈형. 설정압에서 개방, 이후 자동 재폐.",null],
           ["ruptureDisk","💥 럽처디스크","단일 작동. 파열 후 교체 필요. Kd ×0.9 보정 적용.","RUPTURE"],
         ].map(([v,l,sub,ill])=>(
           <div key={v} onClick={()=>onDeviceChange(v)}
