@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:3ec015c66279\n\n' +
+    box.textContent = '[ERROR] BUILD:bb2c5c8c8c63\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:3ec015c66279\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:bb2c5c8c8c63\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:3ec015c66279 | 2026-10-01T07:30:47Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:bb2c5c8c8c63 | 2026-10-01T15:33:52Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "3ec015c66279";
+const __BUILD_HASH__ = "bb2c5c8c8c63";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -5246,9 +5246,9 @@ function ValveIllustration({ kind, size = 44, animate = false, open, flow = fals
   const sw = 2;
   const isOpen = open === true;
   const liftStyle = open === undefined ? undefined
-    : { transform: isOpen ? "translateY(-3.5px)" : "translateY(0)", transition: "transform 0.5s ease-in-out" };
+    : { transform: isOpen ? "translateY(-7px)" : "translateY(0)", transition: "transform 0.5s ease-in-out" };
   const springStyle = open === undefined ? undefined
-    : { transform: isOpen ? "scaleY(0.82)" : "scaleY(1)", transformOrigin: "24px 8px", transition: "transform 0.5s ease-in-out" };
+    : { transform: isOpen ? "scaleY(0.68)" : "scaleY(1)", transformOrigin: "24px 8px", transition: "transform 0.5s ease-in-out" };
   const labels = { SPRING: "스프링식 안전밸브 구조도", BELLOWS: "벨로우즈형 안전밸브 구조도", RUPTURE: "럽처디스크 구조도" };
   const svgProps = {
     viewBox: "0 0 48 60", width: size, height: Math.round(size * 60 / 48),
@@ -5341,6 +5341,8 @@ function ValveIllustration({ kind, size = 44, animate = false, open, flow = fals
       <path d="M10 26 H36 V32 H44 V42 H36 V46 H10 Z" fill={T.blueBg} stroke={T.navy} strokeWidth={sw} strokeLinejoin="round"/>
       {/* 입구 배관 */}
       <rect x="17" y="46" width="14" height="10" fill={T.blueBg} stroke={T.navy} strokeWidth={sw}/>
+      {/* B-2: 열림 상태에서 시트와 디스크 사이에 벌어진 통로(유체가 지나가는 틈)를 표시 */}
+      {isOpen && <rect x="17.5" y="39.5" width="13" height="6" fill={T.orangeBg}/>}
       {/* 스핀들 + 디스크(확대 보기에서 들림 애니메이션) */}
       <g className={animate ? `vi-lift-${kind}` : undefined} style={liftStyle}>
         <line x1="24" y1="25" x2="24" y2="45" stroke={T.navy} strokeWidth={sw}/>

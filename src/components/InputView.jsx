@@ -1035,9 +1035,9 @@ function ValveIllustration({ kind, size = 44, animate = false, open, flow = fals
   const sw = 2;
   const isOpen = open === true;
   const liftStyle = open === undefined ? undefined
-    : { transform: isOpen ? "translateY(-3.5px)" : "translateY(0)", transition: "transform 0.5s ease-in-out" };
+    : { transform: isOpen ? "translateY(-7px)" : "translateY(0)", transition: "transform 0.5s ease-in-out" };
   const springStyle = open === undefined ? undefined
-    : { transform: isOpen ? "scaleY(0.82)" : "scaleY(1)", transformOrigin: "24px 8px", transition: "transform 0.5s ease-in-out" };
+    : { transform: isOpen ? "scaleY(0.68)" : "scaleY(1)", transformOrigin: "24px 8px", transition: "transform 0.5s ease-in-out" };
   const labels = { SPRING: "스프링식 안전밸브 구조도", BELLOWS: "벨로우즈형 안전밸브 구조도", RUPTURE: "럽처디스크 구조도" };
   const svgProps = {
     viewBox: "0 0 48 60", width: size, height: Math.round(size * 60 / 48),
@@ -1130,6 +1130,8 @@ function ValveIllustration({ kind, size = 44, animate = false, open, flow = fals
       <path d="M10 26 H36 V32 H44 V42 H36 V46 H10 Z" fill={T.blueBg} stroke={T.navy} strokeWidth={sw} strokeLinejoin="round"/>
       {/* 입구 배관 */}
       <rect x="17" y="46" width="14" height="10" fill={T.blueBg} stroke={T.navy} strokeWidth={sw}/>
+      {/* B-2: 열림 상태에서 시트와 디스크 사이에 벌어진 통로(유체가 지나가는 틈)를 표시 */}
+      {isOpen && <rect x="17.5" y="39.5" width="13" height="6" fill={T.orangeBg}/>}
       {/* 스핀들 + 디스크(확대 보기에서 들림 애니메이션) */}
       <g className={animate ? `vi-lift-${kind}` : undefined} style={liftStyle}>
         <line x1="24" y1="25" x2="24" y2="45" stroke={T.navy} strokeWidth={sw}/>
