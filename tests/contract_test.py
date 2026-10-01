@@ -5972,6 +5972,191 @@ def test_a1_valve_illustration_contract() -> TestResult:
 
 
 # ════════════════════════════════════════════════════════════════
+#  B-2 — 안전밸브 팝핑 원리 6단계 설명 시뮬레이션 (SIM-STEP-001)
+#  원칙: 단계 기반 정지/진행(자동 전환 없음), 설명용 연출과 실제 Snapshot 값 분리,
+#  Engine/Snapshot/Report/Wizard/Auth/Persistence 무변경.
+# ════════════════════════════════════════════════════════════════
+def test_b2_pop_sim_step_contract() -> TestResult:
+    import re, json as _json
+    tr = TestResult("SIM-STEP-001", "B-2 안전밸브 팝핑 6단계 설명 시뮬레이션")
+    step_src = (SRC / "sim" / "step.js").read_text()
+    rend_src = (SRC / "components" / "renderers" / "index.jsx").read_text()
+    rv_src = (SRC / "components" / "ReportView.jsx").read_text()
+    iv_src = (SRC / "components" / "InputView.jsx").read_text()
+
+    def _nocomment(x):
+        x = re.sub(r"/\*[\s\S]*?\*/", "", x)
+        return re.sub(r"(?m)^\s*//.*$|(?<=\s)//\s.*$", "", x)
+    # 컴포넌트 구간 추출
+    c0 = rend_src.index("function popSimText(")
+    c1 = rend_src.index("// PressChartRenderer", c0)
+    comp = rend_src[c0:c1]
+    tr.check("SIM_00_component_defined_once",
+             rend_src.count("function PopSimWalkthrough(") == 1 and rend_src.count("function popSimText(") == 1,
+             "PopSimWalkthrough/popSimText가 정확히 1번 정의되어 있지 않음")
+
+    # ── node로 순수 헬퍼 실제 실행 (SIM-STEP-01~07, 10) ──
+    node = shutil.which("node")
+    res = None
+    if node:
+        js = (
+            "const fs=require('fs');\n"
+            f"const src=fs.readFileSync({_json.dumps(str(SRC / 'sim' / 'step.js'))},'utf8');\n"
+            "(0,eval)(src+'\\nglobalThis.__S={POP_SIM_STEPS,POP_SIM_TOTAL,popSimNext,popSimPrev,popSimRestart,popSimClamp,popSimKind};');\n"
+            "const S=globalThis.__S;\n"
+            "const fwd=[],bwd=[];for(let i=1;i<=6;i++){fwd.push(S.popSimNext(i));bwd.push(S.popSimPrev(i));}\n"
+            "console.log(JSON.stringify({total:S.POP_SIM_TOTAL,len:S.POP_SIM_STEPS.length,ns:S.POP_SIM_STEPS.map(s=>s.n),\n"
+            " open:S.POP_SIM_STEPS.map(s=>s.open),flow:S.POP_SIM_STEPS.map(s=>s.flow),fwd,bwd,restart:S.popSimRestart(),\n"
+            " kinds:[S.popSimKind({deviceType:'ruptureDisk',inputs:{valveType:'SPRING'}}),S.popSimKind({deviceType:'safetyValve',inputs:{valveType:'BELLOWS'}}),\n"
+            "  S.popSimKind({deviceType:'safetyValve',inputs:{valveType:'SPRING'}}),S.popSimKind({deviceType:'safetyValve',inputs:{}}),S.popSimKind({deviceType:'safetyValve',inputs:{valveType:'BELLOWS'},result:{verdict:'NO_GO'}})]}));\n"
+        )
+        tmp = ROOT / "tests" / "_tmp_popsim_check.js"
+        tmp.write_text(js)
+        r = subprocess.run([node, str(tmp)], capture_output=True, text=True, timeout=15)
+        tmp.unlink(missing_ok=True)
+        try:
+            res = _json.loads(r.stdout.strip())
+        except Exception:
+            res = None
+    tr.check("SIM_STEP_01_exactly_6_steps",
+             res is not None and res["total"] == 6 and res["len"] == 6 and res["ns"] == [1, 2, 3, 4, 5, 6],
+             f"6개 단계가 아님 — {res}")
+    tr.check("SIM_STEP_02_initial_step_is_1_of_6",
+             "useState(1)" in comp and "{info.n} / {POP_SIM_TOTAL}" in comp and res is not None and res["restart"] == 1,
+             "초기 단계가 1 / 6이 아님")
+    tr.check("SIM_STEP_03_next_is_exactly_plus_1",
+             res is not None and res["fwd"] == [2, 3, 4, 5, 6, 6], f"다음 단계가 +1이 아님 — {res and res['fwd']}")
+    tr.check("SIM_STEP_04_prev_is_exactly_minus_1",
+             res is not None and res["bwd"] == [1, 1, 2, 3, 4, 5], f"이전 단계가 -1이 아님 — {res and res['bwd']}")
+    tr.check("SIM_STEP_04b_buttons_wired_to_helpers",
+             "setN(popSimNext(info.n))" in comp and "setN(popSimPrev(info.n))" in comp and "setN(popSimRestart())" in comp
+             and "다음 단계 →" in comp and "← 이전" in comp and "처음부터 다시 보기" in comp,
+             "[← 이전]/[다음 단계 →]/[처음부터 다시 보기]가 단계 헬퍼에 연결되지 않음")
+    # 자동 전환 없음: 컴포넌트·헬퍼 어디에도 타이머/자동 진행이 없고, setN은 클릭 핸들러에서만 호출
+    tr.check("SIM_STEP_05_no_auto_advance",
+             not re.search(r"setInterval|setTimeout|requestAnimationFrame|useEffect", comp)
+             and not re.search(r"setInterval|setTimeout|requestAnimationFrame", step_src[step_src.index("POP_SIM_TOTAL"):])
+             and len(re.findall(r"setN\(", comp)) == comp.count("onClick={()=>setN("),
+             "자동 단계 전환(타이머/Effect) 또는 클릭 외 경로의 setN이 존재함")
+    tr.check("SIM_STEP_06_steps_1_to_3_open_false",
+             res is not None and res["open"][:3] == [False, False, False], f"STEP 1~3 open이 false가 아님 — {res and res['open']}")
+    tr.check("SIM_STEP_07_steps_4_to_6_open_true",
+             res is not None and res["open"][3:] == [True, True, True], f"STEP 4~6 open이 true가 아님 — {res and res['open']}")
+    tr.check("SIM_STEP_07b_open_passed_to_illustration",
+             "open={info.open}" in comp and "<ValveIllustration kind={kind}" in comp,
+             "단계 open 상태가 ValveIllustration에 전달되지 않음")
+    tr.check("SIM_STEP_07c_flow_only_steps_5_6",
+             res is not None and res["flow"] == [False, False, False, False, True, True], f"유체 방출 연출이 STEP 5~6에만 있지 않음 — {res and res['flow']}")
+    tr.check("SIM_STEP_07d_supported_kinds_only",
+             res is not None and res["kinds"] == ["RUPTURE", "BELLOWS", "SPRING", "SPRING", "BELLOWS"],
+             f"밸브 종류 매핑 오류 — {res and res['kinds']}") if node else None
+    tr.check("SIM_STEP_07f_no_pilot_literal",
+             "PILOT" not in _nocomment(comp).upper() and "파일럿" not in _nocomment(comp)
+             and "파일럿" not in _nocomment(step_src[step_src.index("POP_SIM_TOTAL"):]),
+             "Engine 미지원 파일럿식이 시뮬레이션에 포함됨")
+
+    # ── 실제 값 출처 (SIM-STEP-08/09) ──
+    tr.check("SIM_STEP_08_set_pressure_from_snap_inputs_P1",
+             "snap.inputs.P1" in comp, "설정압력이 snap.inputs.P1에서 읽히지 않음")
+    tr.check("SIM_STEP_09_W_from_orifice_W",
+             "sd.orifice.W" in comp and "snap.result.stepData" in comp,
+             "방출량이 snap.result.stepData.orifice.W에서 읽히지 않음")
+    tr.check("SIM_STEP_09b_margin_backpress_from_snapshot",
+             "snap.result.margin" in comp and "sd.backpress" in comp and "bp.ratio" in comp and "bp.allowableRatio" in comp,
+             "여유율/배압비/허용배압비가 Snapshot에서 읽히지 않음")
+    tr.check("SIM_STEP_09c_device_and_valvetype_from_snapshot",
+             "snap.deviceType" in step_src and "snap.inputs.valveType" in step_src.replace("snap && snap.inputs && snap.inputs.valveType", "snap.inputs.valveType"),
+             "장치 종류/밸브 형식이 snap.deviceType/snap.inputs.valveType에서 결정되지 않음")
+    tr.check("SIM_STEP_09d_real_values_labeled_separately",
+             "이 케이스의 계산된 실제 값" in comp and "원리 설명용 그림 · 실제 압력 변화 아님" in comp
+             and "시간에 따라 변하는 값이 아닙니다" in comp,
+             "실제 계산값과 설명용 연출의 구분 문구가 없음")
+    # 새 시계열/물리모델 금지: W·압력을 시간으로 보간하거나 stepSim을 재사용하지 않음
+    tr.check("SIM_STEP_09e_no_new_physics",
+             "stepSim" not in comp and "API_CONST" not in comp and "Math.random" not in comp
+             and "hist" not in re.sub(r"history", "", comp),
+             "시뮬레이션 UX가 stepSim/시계열/난수에 의존함")
+
+    # ── verdict는 밸브 개방 판단에 사용하지 않음 (SIM-STEP-10) ──
+    pop_logic = _nocomment(comp) + _nocomment(step_src[step_src.index("POP_SIM_TOTAL"):])
+    tr.check("SIM_STEP_10_verdict_not_used_for_valve_open",
+             "verdict" not in pop_logic and not re.search(r"\b(?:NO_GO|GO|INSUFFICIENT_INPUT)\b", pop_logic),
+             "verdict가 단계/밸브 개방 판단 로직에 쓰임")
+
+    # ── Engine/Snapshot/Report/Wizard/Auth/Pro/Persistence 무변경 (SIM-STEP-11) ──
+    for name in ["engine/api520.js", "engine/relief_load.js", "engine/backpressure.js", "engine/evidence.js",
+                 "engine/workflow_engine.js", "snapshot/create.js", "report/createPackage.js", "report/schema.js",
+                 "persistence/CaseRepository.js", "ArcSafe.jsx", "components/CaseView.jsx"]:
+        src = (SRC / name).read_text()
+        tr.check(f"SIM_STEP_11_untouched_{name.replace('/','_').replace('.','_')}",
+                 not re.search(r"PopSim|popSim|POP_SIM", src), f"{name}에 B-2 시뮬레이션 변경이 들어감")
+    snap_src = (SRC / "snapshot" / "create.js").read_text()
+    tr.check("SIM_STEP_11b_snapshot_schema_has_no_sim_field",
+             "popSim" not in snap_src and "simStep" not in snap_src, "Snapshot schema에 시뮬레이션 필드가 추가됨")
+    tr.check("SIM_STEP_11c_wizard_gate_unchanged",
+             "nextDisabled={!deviceType}" in iv_src and "onClick={()=>onDeviceChange(v)}" in iv_src
+             and 'onClick={()=>onChange("valveType",v)}' in iv_src,
+             "Wizard/Step1 선택·진행 조건이 변경됨")
+    tr.check("SIM_STEP_11d_reportview_only_sim_tab_changed",
+             "<PopSimWalkthrough snap={snap}/>" in rv_src and "stepSim" not in rv_src and "setInterval" not in rv_src
+             and "approvals" in rv_src and "ApprovalForm" in rv_src and "AuditEvidence" in rv_src
+             and rv_src.count("buildReportPackage(") >= 1,
+             "ReportView의 시뮬레이션 탭 외 영역이 변경되었거나 자동 시뮬레이션 코드가 남아 있음")
+    tr.check("SIM_STEP_11e_build_requires_symbols",
+             "POP_SIM_STEPS" in (ROOT / "build.py").read_text() and "PipeFlowRenderer" in (ROOT / "build.py").read_text(),
+             "build.py 필수 심볼 등록이 누락됨")
+
+    # ── ValveIllustration open prop / animate 회귀 없음 (SIM-STEP-12) ──
+    i0 = iv_src.index("function ValveIllustration(")
+    i1 = iv_src.index("function ValveIllustrationModal(", i0)
+    vi = iv_src[i0:i1]
+    tr.check("SIM_STEP_12_open_prop_added",
+             "animate = false, open, flow = false" in vi and "const isOpen = open === true;" in vi,
+             "ValveIllustration에 open prop이 추가되지 않음")
+    tr.check("SIM_STEP_12b_open_undefined_keeps_legacy_render",
+             "open === undefined ? undefined" in vi, "open 미지정 시 기존 렌더와 동일하지 않을 수 있음")
+    tr.check("SIM_STEP_12c_animate_loop_preserved",
+             all(k in vi for k in ["@keyframes vi-lift-", "@keyframes vi-spring-", "@keyframes vi-bulge", "@keyframes vi-flow-",
+                                  "vi-bulge", "2.2s ease-in-out infinite"])
+             and 'className={animate ? `vi-spring-${kind}` : undefined}' in vi
+             and 'className={animate ? `vi-lift-${kind}` : undefined}' in vi,
+             "기존 animate=true 자동 loop 코드가 변경됨 — 회귀")
+    tr.check("SIM_STEP_12d_modal_still_animate_thumbnails_still_static",
+             "<ValveIllustration kind={kind} size={160} animate/>" in iv_src
+             and "kind={ill} size={36}/>" in iv_src and "kind={v} size={40}/>" in iv_src
+             and iv_src.count("<ValveIllustration kind=") == 3,
+             "A-1 확대 모달(animate)/썸네일(정지) 호출이 변경됨 — 회귀")
+    tr.check("SIM_STEP_12e_open_flow_uses_T_tokens_only",
+             re.search(r"#[0-9a-fA-F]{3,8}\b", vi) is None and "rgb(" not in vi and "<text" not in vi,
+             "ValveIllustration에 T 토큰이 아닌 색 리터럴/SVG text가 있음")
+
+    # ── 모바일(≈390px) 레이아웃 정적 보증 (SIM-STEP-13) ──
+    sizes = [int(x) for x in re.findall(r"fontSize:\s*(\d+)", comp)]
+    tr.check("SIM_STEP_13_min_font_11px", sizes and min(sizes) >= 11, f"11px 미만 글자가 있음 — {sorted(set(sizes))}")
+    widths = [int(x) for x in re.findall(r"[^a-zA-Z]width:\s*(\d+)\b", comp)]
+    tr.check("SIM_STEP_13b_no_fixed_width_over_360", all(w <= 360 for w in widths), f"360px 초과 고정 폭 — {widths}")
+    d0 = comp.index('data-popsim="desc"'); d1 = comp.index("{/* 5)", d0)
+    desc_block = comp[d0:d1]
+    tr.check("SIM_STEP_13c_description_wraps_never_clipped",
+             "overflowWrap" in desc_block and "wordBreak" in desc_block
+             and "overflow:\"hidden\"" not in desc_block and "textOverflow" not in comp and "whiteSpace:\"nowrap\"" not in desc_block
+             and "height:" not in desc_block.replace("lineHeight", ""),
+             "단계 설명문이 잘릴 수 있는 스타일(고정 높이/ellipsis/nowrap/overflow hidden)이 있음")
+    tr.check("SIM_STEP_13d_title_and_buttons_not_clipped",
+             'data-popsim="title"' in comp and "minHeight: 44" in comp and "flex:1" in comp
+             and "textOverflow" not in comp,
+             "단계 제목/버튼이 잘릴 수 있거나 터치 영역(44px)이 부족함")
+    order = [comp.index(k) for k in ['data-popsim="counter"', 'data-popsim="title"', "ValveIllustration kind",
+                                     'data-popsim="desc"', 'data-popsim="real"', 'data-popsim="prev"']]
+    tr.check("SIM_STEP_13e_mobile_priority_order", order == sorted(order),
+             "모바일 우선순위(n / 6 → 제목 → 시각화 → 설명 → 실제값 → 버튼) 순서가 아님")
+    tr.check("SIM_STEP_13f_card_radius_12_and_tokens",
+             "borderRadius:12" in comp and not re.search(r"#[0-9a-fA-F]{3,8}\b", comp),
+             "카드 radius 12/T 토큰 규칙 위반")
+    return tr
+
+
+# ════════════════════════════════════════════════════════════════
 #  BASELINE LOCK CONTRACT (Sprint A.1) — Engine 1.3.0 기준선 보호 장치
 #  1) ENGINE-VERSION-LOCK-001: Snapshot/ReportPackage/Fixture 엔진버전 일치
 #  2) GOLDEN-FIXTURE-MUTATION-GUARD-001: fixture를 손으로 고치면 감지
@@ -8397,6 +8582,17 @@ def main():
     all_results.append(tr)
     status = "✓ PASS" if tr.passed else "✗ FAIL"
     print(f"\n  [VALVEILL-001] {tr.label}")
+    print(f"  {status}")
+    for name, ok, detail in tr.checks:
+        mark = "  ✓" if ok else "  ✗"
+        print(f"{mark} {name}" + (f"\n       {detail}" if detail and not ok else ""))
+
+    # ── B-2 팝핑 6단계 설명 시뮬레이션 ───────────────────────────
+    print("\n── SIM-STEP-001 (B-2) ─────────────────────────────")
+    tr = test_b2_pop_sim_step_contract()
+    all_results.append(tr)
+    status = "✓ PASS" if tr.passed else "✗ FAIL"
+    print(f"\n  [SIM-STEP-001] {tr.label}")
     print(f"  {status}")
     for name, ok, detail in tr.checks:
         mark = "  ✓" if ok else "  ✗"

@@ -1,11 +1,7 @@
 //  REPORT VIEW — Snapshot projection
 // ════════════════════════════════════════════════════════════════
 function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, onApprovalSubmit }) {
-  const [simMode, setSimMode] = useState("IDLE");
-  const [sim, setSim] = useState({pressure:2.0,direction:1,valveOpen:false,ratio:0});
-  const [hist, setHist] = useState([2.0]);
   const [reportTab, setReportTab] = useState("checklist");
-  const simRef = useRef(null);
 
   // 서명 검증은 여기서 1회만 계산 — ApprovalHistory와 AuditEvidence가 결과 공유
   // (두 곳에서 각자 verifyApprovalRecord를 부르면 중복 호출)
@@ -23,26 +19,8 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
     return () => { cancelled = true; };
   }, [approvals, caseSnapshotHistory]);
 
-  const setPoint = snap.inputs.P1;
-  const mawp     = snap.inputs.mawp;
-
-  useEffect(() => {
-    if (simMode !== "RUNNING") { clearInterval(simRef.current); return; }
-    simRef.current = setInterval(() => {
-      setSim(prev => {
-        const next = stepSim(prev, setPoint, mawp);
-        setHist(h => [...h.slice(-API_CONST.HISTORY_SIZE), next.pressure]);
-        return next;
-      });
-    }, 50);
-    return () => clearInterval(simRef.current);
-  }, [simMode, setPoint, mawp]);
-
-  const resetSim = () => {
-    setSimMode("IDLE");
-    setSim({pressure:1.0,direction:1,valveOpen:false,ratio:0});
-    setHist([1.0]);
-  };
+  // B-2: 시간 기반 자동 오실레이션 제거 — 시뮬레이션 탭은
+  // 단계 기반 PopSimWalkthrough(사용자가 [다음 단계]를 눌러야 진행)로 대체.
 
   const r = snap.result;
   // INLET-LOSS-001: allOK를 checklist.every(Boolean)로 직접 계산하지 않는다.
@@ -201,20 +179,8 @@ function ReportView({ snap, approvals, caseSnapshotHistory, onWorkflowAdvance, o
       </div>
 
       {reportTab === "sim" && (
-        <div>
-          <div style={{background:T.cardBg,borderRadius:14,padding:12,marginBottom:10,border:`1px solid ${T.border}`}}>
-            <PipeFlowRenderer snap={snap} sim={sim}/>
-          </div>
-          <div style={{background:T.cardBg,borderRadius:14,padding:12,marginBottom:10,border:`1px solid ${T.border}`}}>
-            <PressChartRenderer hist={hist} snap={snap}/>
-          </div>
-          <div style={{display:"flex",gap:8}}>
-            {simMode === "RUNNING"
-              ? <button onClick={()=>setSimMode("IDLE")} style={{flex:1,padding:"11px",background:T.orange,color:T.white,border:"none",borderRadius:10,fontWeight:700,fontSize:12,fontFamily:font.mono,cursor:"pointer",boxShadow:`0 4px 0 #CC7000`}}>⏸ 정지</button>
-              : <button onClick={()=>setSimMode("RUNNING")} style={{flex:1,padding:"11px",background:T.blue,color:T.white,border:"none",borderRadius:10,fontWeight:700,fontSize:12,fontFamily:font.mono,cursor:"pointer",boxShadow:`0 4px 0 ${T.blueDk}`}}>▶ 시뮬 시작</button>
-            }
-            <button onClick={resetSim} style={{padding:"11px 16px",background:T.bg,color:T.sub,border:`1px solid ${T.border}`,borderRadius:10,fontWeight:700,fontSize:12,fontFamily:font.mono,cursor:"pointer"}}>↺ 초기화</button>
-          </div>
+        <div style={{background:T.cardBg,borderRadius:14,padding:12,marginBottom:10,border:`1px solid ${T.border}`}}>
+          <PopSimWalkthrough snap={snap}/>
         </div>
       )}
 

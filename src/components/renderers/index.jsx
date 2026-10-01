@@ -123,6 +123,147 @@ function PipeFlowRenderer({ snap, sim }) {
   );
 }
 
+// ════════════════════════════════════════════════════════════════
+// B-2 — PopSimWalkthrough: 안전밸브 팝핑 원리 6단계 설명 시뮬레이션
+//  · 자동 재생/타이머 없음 — [다음 단계]를 눌러야만 진행(상태는 step 하나뿐)
+//  · 그림(막대/밸브)은 "설명용 연출" — 압력/방출량 시계열을 계산·추정하지 않는다
+//  · 실제 값은 Snapshot에서 읽기만 한다: P1 / orifice.W / margin /
+//    backpress.ratio·allowableRatio. verdict는 밸브 개방 판단에 쓰지 않는다
+//  · 단계 상태(open/flow/pressure)는 sim/step.js의 POP_SIM_STEPS가 단일 출처
+// ════════════════════════════════════════════════════════════════
+function popSimText(n, kind, P1) {
+  const rd = kind === "RUPTURE";
+  const p1 = (P1 != null && Number.isFinite(Number(P1))) ? `${P1} barg` : null;
+  const set = rd ? "설정(파열)압력" : "설정압력";
+  const T6 = {
+    1: rd
+      ? ["정상 상태", `현재 압력이 ${set}보다 낮아 파열판이 온전하게 막고 있습니다.`]
+      : ["정상 상태", "현재 압력이 설정압력보다 낮아 안전밸브가 닫혀 있습니다."],
+    2: ["압력이 상승하고 있습니다",
+        rd ? "보호설비 내부의 압력이 상승하고 있습니다.\n아직 파열압력에 도달하지 않았으므로 파열판은 그대로입니다."
+           : "보호설비 내부의 압력이 상승하고 있습니다.\n아직 설정압력에 도달하지 않았으므로 밸브는 닫혀 있습니다."],
+    3: [`${set}에 도달했습니다`,
+        rd ? "압력이 설정(파열)압력에 도달하면 파열판이 터지는 조건이 됩니다."
+           : "압력이 설정압력에 도달하면 안전밸브가 개방되기 시작하는 조건이 됩니다."],
+    4: rd
+      ? ["파열판이 파열했습니다", "설정(파열)압력에서 디스크가 터지면서 유체가 배출될 통로가 열립니다.\n파열판은 1회용이라, 작동 후에는 반드시 교체해야 합니다."]
+      : ["밸브가 팝핑했습니다", "디스크가 시트에서 떨어지면서 유체가 배출될 통로가 열립니다.\n입구 압력이 스프링이 누르는 힘을 넘어섰기 때문입니다."],
+    5: ["유체가 배출됩니다",
+        "밸브가 열리면서 유체가 배출됩니다.\n유체의 배출은 보호설비의 압력이 계속 상승하는 것을 억제하는 방향으로 작용합니다."],
+    6: ["압력 상승이 억제됩니다",
+        "유체가 배출되면서 보호설비의 압력이 계속 상승하는 것을 억제하는 방향으로 작용합니다."],
+  };
+  if (rd) { T6[5][1] = "파열판이 열리면서 유체가 배출됩니다.\n유체의 배출은 보호설비의 압력이 계속 상승하는 것을 억제하는 방향으로 작용합니다."; }
+  return { title: T6[n][0], body: T6[n][1], p1 };
+}
+
+function PopSimWalkthrough({ snap }) {
+  const [n, setN] = useState(1);
+  const info = popSimStepInfo(n);
+  const kind = popSimKind(snap);
+  const P1 = snap && snap.inputs ? snap.inputs.P1 : null;
+  const txt = popSimText(info.n, kind, P1);
+  const sd = (snap && snap.result && snap.result.stepData) || {};
+  const W = sd.orifice ? sd.orifice.W : null;
+  const margin = snap && snap.result ? snap.result.margin : null;
+  const bp = sd.backpress || {};
+  const isNum = (v) => v != null && Number.isFinite(Number(v));
+  const real = [];
+  if (info.n === 1 || info.n === 3 || info.n === 4) {
+    if (isNum(P1)) real.push([kind === "RUPTURE" ? "설정(파열)압력 P1" : "설정압력 P1", `${P1} barg`]);
+  }
+  if (info.n === 5 && isNum(W)) real.push(["설계 방출량 W", `${Number(W).toLocaleString("ko-KR")} kg/h`]);
+  if (info.n === 6) {
+    if (isNum(margin)) real.push(["여유율", `${Number(margin).toFixed(3)}×`]);
+    if (isNum(bp.ratio)) real.push(["배압비", `${(Number(bp.ratio) * 100).toFixed(1)}%`]);
+    if (isNum(bp.allowableRatio)) real.push(["허용 배압비", `${(Number(bp.allowableRatio) * 100).toFixed(0)}%`]);
+  }
+  const vh = 137;
+  const fill = info.pressure;
+  const fillColor = info.n === 1 ? T.green : info.n === 2 ? T.yellow : T.orange;
+  const btn = { padding: "13px 12px", borderRadius: 12, fontWeight: 800, fontSize: 13, fontFamily: font.sans, cursor: "pointer", minHeight: 44 };
+  const last = info.n === POP_SIM_TOTAL;
+  return (
+    <div>
+      {/* 1) 현재 위치 — 항상 "n / 6" */}
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:6}}>
+        <div data-popsim="counter" style={{fontSize:20,fontWeight:900,color:T.navyLight,fontFamily:font.mono,whiteSpace:"nowrap"}}>{info.n} / {POP_SIM_TOTAL}</div>
+        <div style={{flex:1,display:"flex",gap:3}} aria-hidden="true">
+          {POP_SIM_STEPS.map((s) => (
+            <div key={s.n} style={{flex:1,height:6,borderRadius:3,background:s.n<=info.n?T.navyLight:T.border,transition:"background 0.3s"}}/>
+          ))}
+        </div>
+      </div>
+      {/* 2) 단계 제목 */}
+      <div data-popsim="title" style={{fontSize:17,fontWeight:900,color:T.navy,fontFamily:font.sans,marginBottom:10}}>{txt.title}</div>
+
+      {/* 3) 시각화 — 설명용 연출 */}
+      <div style={{background:T.cardBg,border:`1px solid ${T.border}`,borderRadius:12,padding:"12px 12px 10px",marginBottom:10}}>
+        <div style={{display:"flex",justifyContent:"center",alignItems:"flex-end",gap:14}}>
+          <div style={{position:"relative",width:104,height:vh,flexShrink:0}}>
+            <div style={{position:"absolute",left:0,top:0,bottom:0,width:34,background:T.bg,border:`2px solid ${T.border}`,borderRadius:12,overflow:"hidden"}}>
+              <div data-popsim="pressure-fill" style={{position:"absolute",left:0,right:0,bottom:0,height:`${fill*100}%`,background:fillColor,opacity:0.6,transition:"height 0.8s ease, background 0.4s"}}/>
+            </div>
+            <div style={{position:"absolute",left:-4,width:42,bottom:`${POP_SIM_SET_LEVEL*100}%`,borderTop:`2px dashed ${T.red}`}}/>
+            <div style={{position:"absolute",left:44,bottom:`calc(${POP_SIM_SET_LEVEL*100}% - 8px)`,fontSize:11,fontWeight:700,color:T.redDk,fontFamily:font.sans,whiteSpace:"nowrap"}}>{kind==="RUPTURE"?"파열압력":"설정압력"}</div>
+            <div style={{position:"absolute",left:44,bottom:0,fontSize:11,color:T.sub,fontFamily:font.sans,lineHeight:1.3}}>보호설비<br/>내부 압력{info.n===2?" ▲":""}</div>
+          </div>
+          <ValveIllustration kind={kind} size={Math.round(vh*48/60)} open={info.open} flow={info.flow}/>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginTop:8}}>
+          <span data-popsim="valve-state" style={{fontSize:11,fontWeight:800,fontFamily:font.sans,padding:"3px 10px",borderRadius:12,
+            background:info.open?T.orangeBg:T.greenBg,color:info.open?T.orange:T.greenDk,border:`1px solid ${info.open?T.orange:T.green}`}}>
+            {kind==="RUPTURE" ? (info.open?"파열판 파열":"파열판 온전") : (info.open?"밸브 열림":"밸브 닫힘")}
+          </span>
+          <span style={{fontSize:11,color:T.sub,fontFamily:font.sans,textAlign:"right"}}>원리 설명용 그림 · 실제 압력 변화 아님</span>
+        </div>
+      </div>
+
+      {/* 4) 단계 설명 — 잘리지 않게 줄바꿈 허용 */}
+      <div data-popsim="desc" style={{background:T.blueBg,borderRadius:12,padding:"12px 14px",marginBottom:10}}>
+        {txt.body.split("\n").map((line, i) => (
+          <div key={i} style={{fontSize:14,lineHeight:1.65,color:T.text,fontFamily:font.sans,marginTop:i?6:0,wordBreak:"keep-all",overflowWrap:"anywhere"}}>{line}</div>
+        ))}
+      </div>
+
+      {/* 5) 실제 계산값(Snapshot) — 설명용 연출과 분리 표시 */}
+      {real.length > 0 && (
+        <div data-popsim="real" style={{background:T.bg,border:`1px solid ${T.border}`,borderRadius:12,padding:"10px 12px",marginBottom:10}}>
+          <div style={{fontSize:11,fontWeight:800,color:T.sub,fontFamily:font.sans,marginBottom:6}}>이 케이스의 계산된 실제 값</div>
+          <div style={{display:"grid",gridTemplateColumns:`repeat(${real.length},1fr)`,gap:8}}>
+            {real.map(([k, v]) => (
+              <div key={k} style={{background:T.white,borderRadius:9,padding:"8px 6px",textAlign:"center"}}>
+                <div style={{fontSize:11,color:T.sub,fontFamily:font.sans}}>{k}</div>
+                <div style={{fontSize:15,fontWeight:900,color:T.navyLight,fontFamily:font.mono,marginTop:2,wordBreak:"break-all"}}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{fontSize:11,color:T.sub,fontFamily:font.sans,marginTop:6,lineHeight:1.5}}>설계 계산 결과이며, 시간에 따라 변하는 값이 아닙니다.</div>
+        </div>
+      )}
+
+      {/* 6) 이전 / 다음 */}
+      <div style={{display:"flex",gap:8}}>
+        {!last && (
+          <button data-popsim="prev" onClick={()=>setN(popSimPrev(info.n))} disabled={info.n===1}
+            style={{...btn,flex:"0 0 34%",background:T.bg,color:info.n===1?T.gray:T.sub,border:`1px solid ${T.border}`,cursor:info.n===1?"not-allowed":"pointer"}}>← 이전</button>
+        )}
+        {last && (
+          <button data-popsim="prev" onClick={()=>setN(popSimPrev(info.n))}
+            style={{...btn,flex:"0 0 34%",background:T.bg,color:T.sub,border:`1px solid ${T.border}`}}>← 이전</button>
+        )}
+        {!last ? (
+          <button data-popsim="next" onClick={()=>setN(popSimNext(info.n))}
+            style={{...btn,flex:1,background:T.blue,color:T.white,border:"none",boxShadow:`0 4px 0 ${T.blueDk}`}}>다음 단계 →</button>
+        ) : (
+          <button data-popsim="restart" onClick={()=>setN(popSimRestart())}
+            style={{...btn,flex:1,background:T.navy,color:T.white,border:"none",boxShadow:`0 4px 0 ${T.navyMid}`}}>처음부터 다시 보기</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // PressChartRenderer — Snapshot.inputs 기준
 function PressChartRenderer({ hist, snap }) {
   const setPoint = snap.inputs.P1;

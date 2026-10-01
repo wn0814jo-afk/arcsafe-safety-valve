@@ -1027,8 +1027,17 @@ function DecisionChoice({ param, label, options, value, onChange }) {
 // 수치 기준 없음)이라 의도적으로 그리지 않는다 — 그림이 곧 지원 표시가
 // 되기 때문. 색상은 T 토큰만, 선 굵기 2, 글자는 넣지 않는다(라벨은
 // 카드 텍스트가 담당). 표시 전용 — 선택 로직/계산과 무관.
-function ValveIllustration({ kind, size = 44, animate = false }) {
+// B-2: `open` = 외부(단계 시뮬레이션)가 지정하는 정지 상태(true=열림/파열,
+// false=닫힘) — animate(A-1 자동 loop)와 별개이며 animate=true 동작은 그대로.
+// `flow` = open일 때만 의미 있는 유체 방출 입자 연출(표시 전용).
+// open이 undefined면 기존과 완전히 동일하게 그려진다(회귀 없음).
+function ValveIllustration({ kind, size = 44, animate = false, open, flow = false }) {
   const sw = 2;
+  const isOpen = open === true;
+  const liftStyle = open === undefined ? undefined
+    : { transform: isOpen ? "translateY(-3.5px)" : "translateY(0)", transition: "transform 0.5s ease-in-out" };
+  const springStyle = open === undefined ? undefined
+    : { transform: isOpen ? "scaleY(0.82)" : "scaleY(1)", transformOrigin: "24px 8px", transition: "transform 0.5s ease-in-out" };
   const labels = { SPRING: "스프링식 안전밸브 구조도", BELLOWS: "벨로우즈형 안전밸브 구조도", RUPTURE: "럽처디스크 구조도" };
   const svgProps = {
     viewBox: "0 0 48 60", width: size, height: Math.round(size * 60 / 48),
@@ -1054,7 +1063,22 @@ function ValveIllustration({ kind, size = 44, animate = false }) {
       .vi-flow-${kind}{offset-path:path("${flowPath}");animation:vi-flow-${kind} 2.2s ease-in-out infinite;}
     `}</style>
   ) : null;
-  const FlowParticles = () => !animate ? null : (
+  const showOpenFlow = isOpen && flow && !animate;
+  const openFlowStyle = showOpenFlow ? (
+    <style>{`
+      @keyframes vi-oflow-${kind} { 0%{opacity:0;offset-distance:0%;} 12%{opacity:0.85;} 88%{opacity:0.85;} 100%{opacity:0;offset-distance:100%;} }
+      .vi-oflow-${kind}{offset-path:path("${flowPath}");animation:vi-oflow-${kind} 1.8s linear infinite;}
+      @media (prefers-reduced-motion: reduce) { .vi-oflow-${kind}{animation:none;opacity:0.85;offset-distance:50%;} }
+    `}</style>
+  ) : null;
+  const FlowParticles = () => showOpenFlow ? (
+    <>
+      {[0, 0.6, 1.2].map((d) => (
+        <circle key={d} r="1.8" fill={T.orange} opacity="0"
+          className={`vi-oflow-${kind}`} style={{ animationDelay: `${d}s` }}/>
+      ))}
+    </>
+  ) : !animate ? null : (
     <>
       {[0, 0.5, 1].map((d) => (
         <circle key={d} r="1.3" fill={T.white} opacity="0"
@@ -1065,14 +1089,19 @@ function ValveIllustration({ kind, size = 44, animate = false }) {
   if (kind === "RUPTURE") {
     return (
       <svg {...svgProps}>
-        {animStyle}
+        {animStyle}{openFlowStyle}
         <rect x="16" y="4" width="16" height="20" fill={T.blueBg} stroke={T.navy} strokeWidth={sw}/>
         <rect x="16" y="36" width="16" height="20" fill={T.blueBg} stroke={T.navy} strokeWidth={sw}/>
         <rect x="10" y="24" width="28" height="5" rx="1" fill={T.navy}/>
         <rect x="10" y="31" width="28" height="5" rx="1" fill={T.navy}/>
-        <g className={animate ? "vi-bulge" : undefined}>
-          <path d="M17 30 Q24 19 31 30" fill="none" stroke={T.orange} strokeWidth={sw} strokeLinecap="round"/>
-        </g>
+        {isOpen ? (
+          /* 파열 후: 터진 디스크 조각이 출구 쪽으로 젖혀진 모양 */
+          <path d="M17 30 L19 24 M31 30 L29 24" fill="none" stroke={T.orange} strokeWidth={sw} strokeLinecap="round"/>
+        ) : (
+          <g className={animate ? "vi-bulge" : undefined}>
+            <path d="M17 30 Q24 19 31 30" fill="none" stroke={T.orange} strokeWidth={sw} strokeLinecap="round"/>
+          </g>
+        )}
         <FlowParticles/>
       </svg>
     );
@@ -1089,12 +1118,12 @@ function ValveIllustration({ kind, size = 44, animate = false }) {
   );
   return (
     <svg {...svgProps}>
-      {animStyle}
+      {animStyle}{openFlowStyle}
       {/* 조정 나사 + 보닛 */}
       <rect x="20" y="2" width="8" height="4" rx="1" fill={T.navy}/>
       <rect x="15" y="6" width="18" height="20" rx="2" fill={T.blueBg} stroke={T.navy} strokeWidth={sw}/>
       {/* 스프링(확대 보기에서 압축 애니메이션) */}
-      <g className={animate ? `vi-spring-${kind}` : undefined}>
+      <g className={animate ? `vi-spring-${kind}` : undefined} style={springStyle}>
         <path d="M24 8 L19 11 L29 15 L19 19 L29 23 L24 25" fill="none" stroke={T.orange} strokeWidth={sw} strokeLinejoin="round" strokeLinecap="round"/>
       </g>
       {/* 본체 + 출구 노즐 */}
@@ -1102,7 +1131,7 @@ function ValveIllustration({ kind, size = 44, animate = false }) {
       {/* 입구 배관 */}
       <rect x="17" y="46" width="14" height="10" fill={T.blueBg} stroke={T.navy} strokeWidth={sw}/>
       {/* 스핀들 + 디스크(확대 보기에서 들림 애니메이션) */}
-      <g className={animate ? `vi-lift-${kind}` : undefined}>
+      <g className={animate ? `vi-lift-${kind}` : undefined} style={liftStyle}>
         <line x1="24" y1="25" x2="24" y2="45" stroke={T.navy} strokeWidth={sw}/>
         <line x1="17" y1="46" x2="31" y2="46" stroke={T.navy} strokeWidth={sw + 1} strokeLinecap="round"/>
       </g>

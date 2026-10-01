@@ -299,7 +299,7 @@ REQUIRED_SYMBOLS = [
     ('workflow/index.js',         ['WF_TRANSITIONS', 'WF_LABEL', 'WF_COLOR',
                                    'REVIEW_REQUIRED']),
     # sim
-    ('sim/step.js',               ['stepSim']),
+    ('sim/step.js',               ['stepSim', 'POP_SIM_STEPS', 'popSimNext', 'popSimPrev', 'popSimKind']),
     # case
     ('case/history.js',           ['appendSnapshot', 'resolveSnapshot',
                                    'getLatestSnapshot', 'hasDuplicateHash']),
