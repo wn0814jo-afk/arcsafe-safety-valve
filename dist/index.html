@@ -30,7 +30,7 @@
   window.addEventListener('error', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[ERROR] BUILD:bb2c5c8c8c63\n\n' +
+    box.textContent = '[ERROR] BUILD:a1bb7c0aa0ed\n\n' +
       'message: ' + e.message + '\n' +
       'file: ' + e.filename + '\n' +
       'line: ' + e.lineno + ':' + e.colno + '\n\n' +
@@ -39,7 +39,7 @@
   window.addEventListener('unhandledrejection', function(e) {
     var box = document.getElementById('boot-error');
     box.className = 'show';
-    box.textContent = '[PROMISE REJECTION] BUILD:bb2c5c8c8c63\n\n' + String(e.reason);
+    box.textContent = '[PROMISE REJECTION] BUILD:a1bb7c0aa0ed\n\n' + String(e.reason);
   });
 </script>
 <script src="https://unpkg.com/react@18.2.0/umd/react.production.min.js" crossorigin
@@ -50,9 +50,9 @@
   onerror="document.getElementById('boot-error').className='show';document.getElementById('boot-error').textContent='[CDN FAIL] Babel 로드 실패 — 네트워크 확인 후 새로고침';"></script>
 <script src="https://auth.archsafe.co.kr/sdk/auth-client.js"></script>
 <script type="text/babel" data-presets="react">
-/* ArcSafe | BUILD_HASH:bb2c5c8c8c63 | 2026-10-01T15:33:52Z | v0.2.0-asset-master */
+/* ArcSafe | BUILD_HASH:a1bb7c0aa0ed | 2026-10-01T21:56:41Z | v0.2.0-asset-master */
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
-const __BUILD_HASH__ = "bb2c5c8c8c63";
+const __BUILD_HASH__ = "a1bb7c0aa0ed";
 
 // ── constants.js ──────────────────────────
 // ════════════════════════════════════════════════════════════════
@@ -4035,11 +4035,11 @@ function PopSimWalkthrough({ snap }) {
           <ValveIllustration kind={kind} size={Math.round(vh*48/60)} open={info.open} flow={info.flow}/>
         </div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginTop:8}}>
-          <span data-popsim="valve-state" style={{fontSize:11,fontWeight:800,fontFamily:font.sans,padding:"3px 10px",borderRadius:12,
+          <span data-popsim="valve-state" style={{fontSize:11,fontWeight:800,fontFamily:font.sans,padding:"3px 10px",borderRadius:12,whiteSpace:"nowrap",flexShrink:0,
             background:info.open?T.orangeBg:T.greenBg,color:info.open?T.orange:T.greenDk,border:`1px solid ${info.open?T.orange:T.green}`}}>
             {kind==="RUPTURE" ? (info.open?"파열판 파열":"파열판 온전") : (info.open?"밸브 열림":"밸브 닫힘")}
           </span>
-          <span style={{fontSize:11,color:T.sub,fontFamily:font.sans,textAlign:"right"}}>원리 설명용 그림 · 실제 압력 변화 아님</span>
+          <span style={{fontSize:11,color:T.sub,fontFamily:font.sans,textAlign:"right",wordBreak:"keep-all",overflowWrap:"anywhere"}}>원리 설명용 그림 · 실제 압력 변화 아님</span>
         </div>
       </div>
 
@@ -4062,7 +4062,7 @@ function PopSimWalkthrough({ snap }) {
               </div>
             ))}
           </div>
-          <div style={{fontSize:11,color:T.sub,fontFamily:font.sans,marginTop:6,lineHeight:1.5}}>설계 계산 결과이며, 시간에 따라 변하는 값이 아닙니다.</div>
+          <div style={{fontSize:11,color:T.sub,fontFamily:font.sans,marginTop:6,lineHeight:1.5,wordBreak:"keep-all"}}>설계 계산 결과이며, 시간에 따라 변하는 값이 아닙니다.</div>
         </div>
       )}
 

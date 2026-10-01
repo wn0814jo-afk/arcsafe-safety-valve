@@ -211,11 +211,11 @@ function PopSimWalkthrough({ snap }) {
           <ValveIllustration kind={kind} size={Math.round(vh*48/60)} open={info.open} flow={info.flow}/>
         </div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginTop:8}}>
-          <span data-popsim="valve-state" style={{fontSize:11,fontWeight:800,fontFamily:font.sans,padding:"3px 10px",borderRadius:12,
+          <span data-popsim="valve-state" style={{fontSize:11,fontWeight:800,fontFamily:font.sans,padding:"3px 10px",borderRadius:12,whiteSpace:"nowrap",flexShrink:0,
             background:info.open?T.orangeBg:T.greenBg,color:info.open?T.orange:T.greenDk,border:`1px solid ${info.open?T.orange:T.green}`}}>
             {kind==="RUPTURE" ? (info.open?"파열판 파열":"파열판 온전") : (info.open?"밸브 열림":"밸브 닫힘")}
           </span>
-          <span style={{fontSize:11,color:T.sub,fontFamily:font.sans,textAlign:"right"}}>원리 설명용 그림 · 실제 압력 변화 아님</span>
+          <span style={{fontSize:11,color:T.sub,fontFamily:font.sans,textAlign:"right",wordBreak:"keep-all",overflowWrap:"anywhere"}}>원리 설명용 그림 · 실제 압력 변화 아님</span>
         </div>
       </div>
 
@@ -238,7 +238,7 @@ function PopSimWalkthrough({ snap }) {
               </div>
             ))}
           </div>
-          <div style={{fontSize:11,color:T.sub,fontFamily:font.sans,marginTop:6,lineHeight:1.5}}>설계 계산 결과이며, 시간에 따라 변하는 값이 아닙니다.</div>
+          <div style={{fontSize:11,color:T.sub,fontFamily:font.sans,marginTop:6,lineHeight:1.5,wordBreak:"keep-all"}}>설계 계산 결과이며, 시간에 따라 변하는 값이 아닙니다.</div>
         </div>
       )}
 
