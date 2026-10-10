@@ -156,6 +156,24 @@ function EntryCard({ emphasis, title, desc, onClick }) {
   );
 }
 
+// 사용자 매뉴얼 PDF — public/ 의 정적 파일(build.py 가 dist/·배포 zip 에 복사).
+// 스토리지·API 없이 정적 경로로만 내려받는다. 파일명(버전)은 public/ 의 PDF 와 일치해야 한다.
+const MANUAL_PDF_FILE = "ArchSafe_안전밸브_사용자매뉴얼_v1.2.pdf";
+
+function ManualDownloadLink() {
+  return (
+    <a href={"/" + encodeURIComponent(MANUAL_PDF_FILE)} download={MANUAL_PDF_FILE}
+      style={{display:"flex",alignItems:"center",justifyContent:"center",gap:6,
+        minHeight:44,boxSizing:"border-box",marginBottom:14,padding:"8px 12px",
+        background:T.white,border:`1px solid ${T.border}`,borderRadius:10,
+        color:T.blueDk,fontSize:12,fontWeight:700,fontFamily:font.sans,
+        textDecoration:"none",wordBreak:"keep-all"}}>
+      <span aria-hidden="true">📄</span>
+      <span>사용자 매뉴얼 PDF 다운로드</span>
+    </a>
+  );
+}
+
 // C-4.30: 첫 화면 — "무엇을 하시겠어요?"를 사용자 목적 중심으로 먼저
 // 받는다. 데이터 모델(설비/배출계통/Case/Snapshot/MOC)은 여기서 설명하지
 // 않고, 실제로 필요한 다음 화면(ReviewEntryScreen)에서 그때그때만 노출.
@@ -163,6 +181,8 @@ function FirstRunMenu({ hasCases, onStartReview, onShowExisting, onStartExample 
   return (
     <div>
       <AboutBanner defaultOpen={false}/>
+
+      <ManualDownloadLink/>
 
       <div style={{fontSize:14,fontWeight:900,color:T.navy,fontFamily:font.sans,
         marginBottom:12,textAlign:"center"}}>

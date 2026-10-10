@@ -28,7 +28,7 @@ BUILD PIPELINE
   14 ArcSafe
 """
 
-import hashlib, re, sys, zipfile
+import hashlib, re, shutil, sys, zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -36,6 +36,7 @@ ROOT    = Path(__file__).parent
 SRC     = ROOT / 'src'
 DIST    = ROOT / 'dist'
 ZIP_OUT = ROOT / 'ArcSafe-CF-DEPLOY.zip'
+PUBLIC  = ROOT / 'public'   # 정적 파일(사용자 매뉴얼 PDF 등) — dist/ 와 배포 zip 에 그대로 복사
 
 # ── BUILD ORDER ───────────────────────────────────────────────────
 BUILD_ORDER = [
@@ -607,6 +608,12 @@ def step5_hash():
     print(f"  BUILD_HASH: {digest}")
     return digest
 
+def _public_files():
+    """public/ 바로 아래 일반 파일만(하위 폴더·숨김 파일 제외), 이름순."""
+    if not PUBLIC.is_dir():
+        return []
+    return sorted(p for p in PUBLIC.iterdir() if p.is_file() and not p.name.startswith('.'))
+
 # ── STEP 6: PACKAGE (concat → index.html) ────────────────────────
 HTML_HEAD = '''\
 <!DOCTYPE html>
@@ -710,6 +717,9 @@ def step6_package(build_hash):
         '  Pragma: no-cache\n'
         '  Expires: 0\n')
     (DIST / '_redirects').write_text('/* /index.html 200\n')
+    for f in _public_files():
+        shutil.copyfile(f, DIST / f.name)
+        print(f"  public/{f.name}: {f.stat().st_size:,} bytes -> dist/")
     print(f"  index.html: {len(html):,} bytes / {html.count(chr(10))} lines")
     return html
 
@@ -718,6 +728,8 @@ def step7_zip():
     with zipfile.ZipFile(ZIP_OUT, 'w', zipfile.ZIP_DEFLATED) as zf:
         for f in ['index.html', '_headers', '_redirects']:
             zf.write(DIST / f, arcname=f)
+        for f in _public_files():
+            zf.write(f, arcname=f.name)
     size = ZIP_OUT.stat().st_size
     print(f"  {ZIP_OUT.name}: {size:,} bytes")
 
