@@ -63,6 +63,15 @@ const PDF_CHECKLIST_ITEMS = [
     detail:"안전밸브 인입배관 내 압력손실이 설정압력의 허용 비율을 넘지 않는지 확인 (KOSHA D-18-2020 §7.2(1))" },
 ];
 
+// 표시 전용: dataGaps 의 내부 키(inletPiping 등)를 사용자용 한글 이름으로 바꿔 보여준다.
+// 패키지 데이터(dataGaps 값)·해시·판정은 그대로 — 출력 문구만 변환한다.
+// 앱 화면의 DATA_GAP_LABELS(components/renderers/index.jsx)와 문구를 같게 유지한다.
+// (골든 테스트가 schema/styles/template 3개 파일만 로드하므로 이 파일 안에서 자급한다.)
+const _PDF_DATA_GAP_LABELS = { inletPiping: "인입배관 정보(길이·내경·ΣK)" };
+function _pdfFormatDataGaps(gaps) {
+  return (gaps || []).map(g => _PDF_DATA_GAP_LABELS[g] || g).join(", ");
+}
+
 function _pdfVerdictSection(checklist, backpress, accumulation, inletLoss, dataGaps, verdict) {
   if (!checklist) return "";
   // INLET-LOSS-001: verdict는 Engine의 computeAdequacyVerdict() 결과를
@@ -110,7 +119,7 @@ function _pdfVerdictSection(checklist, backpress, accumulation, inletLoss, dataG
     ? `<div class="pdf-row" style="align-items:flex-start;background:#fff7e6;">
          <span class="k" style="font-family:'Pretendard','Malgun Gothic',sans-serif;color:#92400e;">
            <span style="font-weight:700;">! 일부 세부 판정 보류 — 선택 입력 항목 (OPTIONAL)</span><br/>
-           <span style="font-weight:400;color:#92400e;font-size:9px;">${dataGaps.join(", ")} 데이터가 없어 해당 세부 판정만 보류됩니다 — 오리피스 sizing·여유율 등 나머지 계산 결과에는 영향이 없습니다. 이 상태는 적정(GO)으로 임의 취급하지 않습니다.</span>
+           <span style="font-weight:400;color:#92400e;font-size:9px;">${_pdfFormatDataGaps(dataGaps)} 데이터가 없어 해당 세부 판정만 보류됩니다 — 오리피스 sizing·여유율 등 나머지 계산 결과에는 영향이 없습니다. 이 상태는 적정(GO)으로 임의 취급하지 않습니다.</span>
          </span>
        </div>`
     : "";
