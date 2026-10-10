@@ -946,6 +946,14 @@ function EngineeringDecisionReviewArea() {
   );
 }
 
+// 슬라이더 표시 자릿수 = step 의 소수 자릿수. 예전에는 step<1 이면 무조건 1자리여서
+// Z(step 0.01)=0.96 이 "1.0"으로, P2(step 0.05)=0.35 가 "0.4"로 보였다(계산에는 실제값 사용).
+// 표시 전용 — 값·계산에는 영향 없음.
+function sliderDecimals(step) {
+  const s = String(step);
+  return s.includes(".") ? s.split(".")[1].length : 0;
+}
+
 // ── 결정 슬라이더 (수치 입력이 필요한 파라미터용) ────────────
 function DecisionSlider({ param, label, unit, value, min, max, step, onChange, basis, warning }) {
   const [open, setOpen] = useState(false);
@@ -960,7 +968,7 @@ function DecisionSlider({ param, label, unit, value, min, max, step, onChange, b
           <div style={{fontSize:13,fontWeight:900,color:T.navy,fontFamily:font.sans,marginTop:1}}>{label}</div>
         </div>
         <div style={{textAlign:"right",flexShrink:0}}>
-          <div style={{fontSize:20,fontWeight:900,color:T.navyLight,fontFamily:font.mono,lineHeight:1}}>{Number(value).toFixed(step<1?1:0)}</div>
+          <div style={{fontSize:20,fontWeight:900,color:T.navyLight,fontFamily:font.mono,lineHeight:1}}>{Number(value).toFixed(sliderDecimals(step))}</div>
           <div style={{fontSize:10,color:T.sub,fontFamily:font.mono}}>{unit}</div>
         </div>
       </div>

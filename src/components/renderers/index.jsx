@@ -298,24 +298,43 @@ function PressChartRenderer({ hist, snap }) {
 }
 
 // EvidenceCard — Snapshot.evidence 렌더링
-function EvidenceCard({ step }) {
+// 화면 표시용 데이터 부족 항목 이름 — 내부 키(inletPiping 등)를 사용자에게 그대로 보이지 않는다.
+// 표시 전용: 키 자체(dataGaps 값)는 엔진/스냅샷 그대로 두고 여기서만 한글로 바꿔 보여준다.
+const DATA_GAP_LABELS = { inletPiping: "인입배관 정보(길이·내경·ΣK)" };
+function formatDataGaps(gaps) {
+  return (gaps || []).map(g => DATA_GAP_LABELS[g] || g).join(", ");
+}
+
+// pending: 입력 부족으로 판정 보류인 단계(예: 인입배관 미등록 Step 8) — PSM 체크 탭의
+// 회색 "−" 보류 항목과 같은 모양으로 보여 준다. step.ok(=false)를 빨간 ✗(부적정)로 보이지 않는다.
+const PENDING_STEP_TEXT = {
+  8: {
+    result: "계산 불가 — 인입배관 정보(길이·내경·ΣK) 없음 → 판정 보류",
+    detail: "설비대장에 인입배관(길이·내경·ΣK)이 등록되어 있지 않아 실제 압력손실을 계산할 수 없습니다. 임의 추정값을 넣지 않고 판정을 보류하며, 이 상태는 \"적정\"으로 취급되지 않습니다(GO 아님). 부적정이 아니라 정보 부족이며, 오리피스 sizing·여유율 등 나머지 계산 결과에는 영향이 없습니다.",
+  },
+};
+function EvidenceCard({ step, pending }) {
   const [open, setOpen] = useState(false);
+  const pendingText = pending ? PENDING_STEP_TEXT[step.id] : null;
+  const isPending = !!pendingText;
+  const tone = isPending ? T.gray : (step.ok ? T.green : T.red);
+  const toneBg = isPending ? T.bg : (step.ok ? T.greenBg : T.redBg);
   return (
-    <div style={{border:`2px solid ${step.ok?T.green:T.red}`,borderRadius:12,overflow:"hidden",marginBottom:10,boxShadow:"0 2px 8px #0001"}}>
-      <div onClick={()=>setOpen(o=>!o)} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 15px",cursor:"pointer",background:step.ok?T.greenBg:T.redBg}}>
-        <div style={{width:28,height:28,borderRadius:"50%",background:step.ok?T.green:T.red,display:"flex",alignItems:"center",justifyContent:"center",color:T.white,fontWeight:900,fontSize:13,flexShrink:0}}>
-          {step.ok?"✓":"✗"}
+    <div style={{border:`2px ${isPending?"dashed":"solid"} ${isPending?T.border:tone}`,borderRadius:12,overflow:"hidden",marginBottom:10,boxShadow:"0 2px 8px #0001"}}>
+      <div onClick={()=>setOpen(o=>!o)} style={{display:"flex",alignItems:"center",gap:12,padding:"11px 15px",cursor:"pointer",background:toneBg}}>
+        <div style={{width:28,height:28,borderRadius:"50%",background:tone,display:"flex",alignItems:"center",justifyContent:"center",color:T.white,fontWeight:900,fontSize:13,flexShrink:0}}>
+          {isPending?"−":(step.ok?"✓":"✗")}
         </div>
         <div style={{flex:1}}>
           <div style={{fontSize:13,fontWeight:700,color:T.text,fontFamily:font.mono}}>Step {step.id}: {step.title}</div>
-          <div style={{fontSize:11,color:T.sub,marginTop:2,fontFamily:font.mono}}>{step.result}</div>
+          <div style={{fontSize:11,color:T.sub,marginTop:2,fontFamily:font.mono}}>{isPending ? pendingText.result : step.result}</div>
         </div>
         <span style={{fontSize:11,color:T.sub}}>{open?"▲":"▼"}</span>
       </div>
       {open && (
         <div style={{background:T.white,padding:"12px 15px",borderTop:`1px solid ${T.border}`}}>
           <div style={{background:"#F0F4FA",borderRadius:8,padding:"7px 12px",fontFamily:font.mono,fontSize:11,color:T.blue,marginBottom:8}}>{step.formula}</div>
-          <p style={{fontSize:11,color:T.sub,margin:0,lineHeight:1.65}}>{step.detail}</p>
+          <p style={{fontSize:11,color:T.sub,margin:0,lineHeight:1.65}}>{isPending ? pendingText.detail : step.detail}</p>
         </div>
       )}
     </div>
@@ -350,7 +369,7 @@ function ChecklistRenderer({ checklist, backpress, accumulation, inletLoss, data
           <div style={{width:24,height:24,borderRadius:"50%",background:T.amber||"#d97706",display:"flex",alignItems:"center",justifyContent:"center",color:T.white,fontWeight:900,fontSize:12,flexShrink:0}}>!</div>
           <div>
             <div style={{fontSize:12,fontWeight:700,color:T.text,fontFamily:font.mono}}>일부 세부 판정 보류 — 선택 입력 항목 (OPTIONAL)</div>
-            <div style={{fontSize:10,color:T.sub,marginTop:2}}>{dataGaps.join(", ")} 데이터가 없어 해당 세부 판정만 보류됩니다 — 개별 항목이 전부 충족이어도 "적정(GO)"으로 표시하지 않습니다.
+            <div style={{fontSize:10,color:T.sub,marginTop:2}}>{formatDataGaps(dataGaps)} 데이터가 없어 해당 세부 판정만 보류됩니다 — 개별 항목이 전부 충족이어도 "적정(GO)"으로 표시하지 않습니다.
               <b> 오리피스 sizing·여유율 등 나머지 계산 결과에는 영향이 없습니다.</b></div>
           </div>
         </div>
