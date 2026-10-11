@@ -136,9 +136,14 @@ async function main() {
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle0', timeout: 30000 });
     await page.waitForSelector('button', { timeout: 15000 });
 
-    // 최초 화면: "사양 결정 시작" 버튼 클릭 → InputView 진입
-    const startClicked = await clickByText(page, '사양 결정 시작');
-    results.launchAndInitialRender = startClicked;
+    // 최초 화면: 하네스는 latestSnap=null 인 CaseView 를 직접 마운트하므로
+    // (CaseView: startScreen = latestSnap ? "report" : "input") 바로 InputView 1/7(밸브 종류)에서 시작한다.
+    // 과거의 '사양 결정 시작' 버튼은 info/report 화면에만 있어 이 경로에서는 렌더되지 않는다.
+    // 현재 경로: 1단계 "다음 →" → 2단계 "PSV 과압 시나리오" → "외부화재"
+    const nextClicked = await clickByText(page, '다음 →');
+    await new Promise(r => setTimeout(r, 200));
+    const scenarioClicked = await clickByText(page, 'PSV 과압 시나리오');
+    results.launchAndInitialRender = nextClicked && scenarioClicked;
     await new Promise(r => setTimeout(r, 200));
 
     // 시나리오 선택 카드에서 "외부화재" 클릭
@@ -294,8 +299,8 @@ async function main() {
       return true;
     }
     const fillOk = {};
-    fillOk.P1 = await fillNumberFieldByLabel('P1 (설정압력)', 1.5);
-    fillOk.A = await fillNumberFieldByLabel('A (노출 면적)', 20);
+    fillOk.P1 = await fillNumberFieldByLabel('P1 — 분출압력', 1.5);
+    fillOk.A = await fillNumberFieldByLabel('A — 화재 노출 면적', 20);
     fillOk.Tw = await fillNumberFieldByLabel('Tw', 250);
     await new Promise(r => setTimeout(r, 150));
     results.H_debug_fillOk = fillOk;
@@ -331,7 +336,7 @@ async function main() {
     const aHandle = await page.evaluateHandle(() => {
       const divs = Array.from(document.querySelectorAll('div'));
       for (const d of divs) {
-        if (d.textContent.includes('A (노출 면적)') &&
+        if (d.textContent.includes('A — 화재 노출 면적') &&
             d.nextElementSibling && d.nextElementSibling.tagName === 'INPUT' &&
             d.nextElementSibling.type === 'number') {
           return d.nextElementSibling;
