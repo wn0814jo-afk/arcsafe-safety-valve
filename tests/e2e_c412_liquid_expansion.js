@@ -198,148 +198,210 @@ async function main() {
     await page.waitForSelector('button', { timeout: 15000 });
     await new Promise(r => setTimeout(r, 200));
 
-    // 1~3. 앱 진입, 기존 5개 카드 정상 표시, §5.11 독립 블록 표시
+    // ════════════════════════════════════════════════════════════════
+    //  C-4.32 Journey D 이후 계약(코드 대조 완료):
+    //   · W 산정 근거는 3탭(수동 입력 W / PSV 과압 시나리오 / 열팽창용 안전밸브)으로 배타 렌더링.
+    //   · §5.11 블록은 "열팽창용 안전밸브" 탭에서만 렌더, 입력은 β·QF·S, 결과 W = QF·β/S [kg/h].
+    //   · 입력 state 는 CaseView 소유 — 탭을 바꿔도 보존, 블록 열림/닫힘만 로컬 state.
+    //   · Snapshot: §5.11 이 활성 소스면 reliefLoad.governing 에 기록(supplementary 중복 없음),
+    //     비활성이어도 유효 입력이면 supplementary 에 {scenario, W, unit:'kg/h'} 로만 기록.
+    //  진입: 하네스는 latestSnap=null 인 CaseView 를 직접 마운트 → InputView 1/7 에서 시작.
+    // ════════════════════════════════════════════════════════════════
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const TAB_SCENARIO = 'PSV 과압 시나리오';
+    const TAB_LE = '열팽창용 안전밸브(§5.11';
+    const TAB_MANUAL = '수동 입력 W';
+    const RESULT_RE = (w) => new RegExp('SCENARIO RESULT\\s*' + w + '\\s*kg\\/h');
+    async function enterStep2() {          // 1/7 → 2/7(방출 시나리오)
+      const ok = await clickByText(page, '다음 →');
+      await sleep(200);
+      return ok;
+    }
+    async function goTab(label) {
+      const ok = await clickByText(page, label);
+      await sleep(200);
+      return ok;
+    }
+    async function fillLE(beta, qf, cp) {  // §5.11 입력(β·QF·S)
+      await fillNumberFieldByLabel(page, '열팽창 부피계수', beta);
+      await fillNumberFieldByLabel(page, '유입 열량', qf);
+      await fillNumberFieldByLabel(page, '비열', cp);
+      await sleep(250);
+    }
+    async function confirmSpec() {         // '사양 확정' 은 7단계 — "다음 →" 로 이동 후 클릭
+      for (let i = 0; i < 8 && !(await visibleText(page)).includes('사양 확정'); i++) {
+        if (!(await clickByText(page, '다음 →'))) break;
+        await sleep(200);
+      }
+      const ok = await clickByText(page, '사양 확정');
+      await sleep(300);
+      return ok;
+    }
+    // CaseView 는 Draft(IndexedDB caseDrafts, PERSISTENCE-001)를 같은 caseId 로 복원하므로,
+    // 시나리오 간 상태가 새지 않도록 새 진입 전에 이 origin 의 저장소를 비운다(테스트 위생).
+    async function freshStart() {
+      const cdp = await page.createCDPSession();
+      await cdp.send('Storage.clearDataForOrigin', { origin: `http://127.0.0.1:${port}`, storageTypes: 'indexeddb,local_storage' });
+      await cdp.detach();
+      await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle0', timeout: 30000 });
+      await sleep(200);
+      return enterStep2();
+    }
+
+    // 1~3. 진입, 기존 5개 카드 정상 표시, §5.11 은 카드가 아니라 별도 W 산정 근거 탭
+    results.entryNavigationOk = await enterStep2();
+    results.scenarioTabSelected = await goTab(TAB_SCENARIO);
     let t = await visibleText(page);
     results.existingScenarioCardsShown = t.includes('출구 차단') && t.includes('과충전') &&
       t.includes('자동제어밸브 고장') && t.includes('비정상 열/증기 유입') && t.includes('외부화재');
-    results.liquidExpansionBlockShown = t.includes('부가 계산 — 액체부피팽창 (§5.11, 참고용)');
-    // §5.11이 5개 카드 라디오 그룹 "안"에는 없어야 함 — 카드 라벨 목록에 "액체부피팽창" 텍스트가
-    // 안 보이는 상태(블록 헤더 문구는 위에서 별도 확인했으므로, 여기선 카드 형태 라벨 부재만 확인)
-    results.liquidExpansionNotARadioCard = !t.includes('§5.11') || t.includes('부가 계산 — 액체부피팽창');
+    // §5.11 이 5개 카드 그룹 안에 없어야 함 — 시나리오 탭에는 §5.11 블록/카드가 없고 별도 탭으로만 존재
+    results.liquidExpansionNotARadioCard = !t.includes('액체부피팽창 계산 열기') && t.includes(TAB_LE);
+    await goTab(TAB_LE);
+    t = await visibleText(page);
+    results.liquidExpansionBlockShown = t.includes('열팽창용 안전밸브 (§5.11') && t.includes('액체부피팽창 계산 열기');
 
-    // 4. §5.11 열기 (닫혀있는 상태에서 시작 — 다른 카드 선택 없이도 열림)
+    // 4. §5.11 열기 (다른 시나리오 카드를 고르지 않아도 열림)
     const openClicked = await clickByText(page, '액체부피팽창 계산 열기');
     results.openedIndependently = openClicked;
-    await new Promise(r => setTimeout(r, 150));
+    await sleep(150);
     t = await visibleText(page);
-    results.formShownAfterOpen = t.includes('열팽창계수') && t.includes('유입 열량') &&
-      t.includes('비중') && t.includes('비열');
+    results.formShownAfterOpen = t.includes('열팽창 부피계수') && t.includes('유입 열량') && t.includes('비열');
     results.insufficientBeforeInput = t.includes('입력을 완료하면 결과가 표시됩니다');
+    // 재정의(구 nonGoverningNoticeShown 일부): 활성 §5.11 탭의 미완료 상태 배지
+    results.incompleteBadgeShownBeforeInput = t.includes('입력 미완료');
 
-    // 5~7. α/Q/SG/Cp 입력 → 계산(버튼 없이 즉시 반영) → COMPUTABLE 결과 표시
-    // V = α·Q / (500·SG·Cp) = (0.001 * 5000) / (500 * 0.8 * 0.5) = 5 / 200 = 0.025 m3/h
-    await fillNumberFieldByLabel(page, '열팽창계수 α', 0.001);
-    await fillNumberFieldByLabel(page, '유입 열량 Q', 5000);
-    await fillNumberFieldByLabel(page, '비중 SG', 0.8);
-    await fillNumberFieldByLabel(page, '비열 Cp', 0.5);
-    await new Promise(r => setTimeout(r, 250));
+    // 5~7. β/QF/S 입력 → 즉시 계산 → W [kg/h]
+    // W = QF·β/S = 5000·0.001/0.5 = 10 kg/h
+    await fillLE(0.001, 5000, 0.5);
     t = await visibleText(page);
-    results.computableShown = t.includes('SCENARIO RESULT') || /0\.025/.test(t);
-    results.valueCorrect = /0\.025/.test(t);
-    results.unitShown = t.includes('m³/h') || t.includes('m3/h');
-    results.nonGoverningNoticeShown = t.includes('governing') || t.includes('sizing에 자동 반영되지 않습') ||
-      t.includes('kg/h 시나리오에서만 산정');
-    results.noGoverningBadgeOnLiquidExpansion = !/GOVERNING RELIEF LOAD[\s\S]{0,60}0\.025/.test(t);
+    results.computableShown = t.includes('SCENARIO RESULT');
+    results.valueCorrect = RESULT_RE(10).test(t);
+    results.unitShown = t.includes('kg/h');
+    results.formulaShown = t.includes('W = QF·β / S');
+    // 재정의(구 nonGoverningNoticeShown 일부): 활성 §5.11 탭의 "SIZING에 사용 중" 상태 배지
+    results.sizingBadgeShownWhenValid = t.includes('SIZING에 사용 중') && !t.includes('입력 미완료');
 
-    // 8~9. 기존 MASS_FLOW governing 시나리오(§5.1) 선택 — §5.11이 여전히 열려있고
-    // 값이 보존되는지, 서로 state가 섞이지 않는지 확인
+    // 8~9. 시나리오 탭에서 §5.1 선택 — §5.11 입력은 탭을 오가도 보존, §5.1 결과에 영향 없음
+    await goTab(TAB_SCENARIO);
     const s51selected = await clickByText(page, '출구 차단');
-    await new Promise(r => setTimeout(r, 150));
+    await sleep(150);
     await clickByText(page, '액체(Liquid)');
-    await new Promise(r => setTimeout(r, 150));
+    await sleep(150);
     await fillNumberFieldByLabel(page, '최대 유입량 (Inflow)', 100);
-    await new Promise(r => setTimeout(r, 250));
+    await sleep(250);
     t = await visibleText(page);
     results.s51SelectedWhileLiquidExpansionOpen = s51selected && t.includes('PHASE');
     results.s51ResultShown = /100\s*kg\/h/.test(t);
-    // §5.11 블록/입력이 §5.1 선택 이후에도 그대로 남아있는지(state 오염 없음)
-    results.liquidExpansionSurvivesOtherScenarioSelection = t.includes('부가 계산 — 액체부피팽창') &&
-      t.includes('열팽창계수') && /0\.025/.test(t);
-    // §5.1의 governing 결과가 §5.11 값 때문에 바뀌지 않았는지(정확히 100 유지)
+    // §5.1 §5.1 의 governing 결과가 §5.11 값 때문에 바뀌지 않았는지(정확히 100 유지)
     results.governingUnaffectedByLiquidExpansion = /100\s*kg\/h/.test(t) && !/125\s*kg\/h/.test(t);
+    // §5.11 탭으로 돌아가 다시 열어 입력값(β·QF·S)과 결과가 그대로인지(state 오염/소실 없음)
+    await goTab(TAB_LE);
+    await clickByText(page, '액체부피팽창 계산 열기');
+    await sleep(200);
+    t = await visibleText(page);
+    results.liquidExpansionSurvivesOtherScenarioSelection = t.includes('열팽창 부피계수') && RESULT_RE(10).test(t);
 
     // 10~11. §5.11 재계산 — 입력을 바꿔도 §5.1 결과가 변하지 않는지 재확인
-    await fillNumberFieldByLabel(page, '열팽창계수 α', 0.002);
-    await new Promise(r => setTimeout(r, 250));
+    await fillNumberFieldByLabel(page, '열팽창 부피계수', 0.002);
+    await sleep(250);
     t = await visibleText(page);
-    // 새 값: (0.002*5000)/(500*0.8*0.5) = 10/200 = 0.05
-    results.liquidExpansionRecalculated = /0\.05\b/.test(t);
+    // 새 값: 5000·0.002/0.5 = 20 kg/h
+    results.liquidExpansionRecalculated = RESULT_RE(20).test(t);
+    await goTab(TAB_SCENARIO);
+    t = await visibleText(page);
     results.s51StillIntactAfterLiquidExpansionChange = /100\s*kg\/h/.test(t);
 
-    // 12. 불충분 입력으로 되돌리면 stale 결과가 남지 않는지
-    await clearNumberFieldByLabel(page, '비중 SG');
-    await new Promise(r => setTimeout(r, 250));
+    // 12. 불충분 입력으로 되돌리면 stale 결과가 남지 않는지 (S 는 분모 — 비우면 무효)
+    await goTab(TAB_LE);
+    await clickByText(page, '액체부피팽창 계산 열기');
+    await sleep(200);
+    await clearNumberFieldByLabel(page, '비열');
+    await sleep(250);
     t = await visibleText(page);
     results.staleClearedOnIncompleteInput = t.includes('입력을 완료하면 결과가 표시됩니다') &&
-      !/0\.05\b/.test(t);
-    await fillNumberFieldByLabel(page, '비중 SG', 0.8);
-    await new Promise(r => setTimeout(r, 250));
+      !RESULT_RE(20).test(t) && t.includes('입력 미완료');
+    await fillNumberFieldByLabel(page, '비열', 0.5);
+    await sleep(250);
 
-    // 13. 블록 닫기 → 다시 열기: 입력값이 보존되는지(CaseView 레벨 state이므로 유지되어야 함)
+    // 13. 블록 닫기 → 다시 열기: 입력값이 보존되는지(CaseView 레벨 state)
     const closedClicked = await clickByText(page, '닫기');
-    await new Promise(r => setTimeout(r, 150));
+    await sleep(150);
     t = await visibleText(page);
-    results.closedHidesForm = !t.includes('열팽창계수');
+    results.closedHidesForm = !t.includes('열팽창 부피계수');
     const reopenClicked = await clickByText(page, '액체부피팽창 계산 열기');
-    await new Promise(r => setTimeout(r, 150));
+    await sleep(150);
     t = await visibleText(page);
-    results.reopenPreservesValue = /0\.05\b/.test(t); // α=0.002 그대로였으므로 0.05 재표시
+    results.reopenPreservesValue = RESULT_RE(20).test(t); // β=0.002 그대로였으므로 20 kg/h 재표시
     results.closeReopenWorked = closedClicked && reopenClicked;
 
-    // 14. Manual W(시나리오 선택 없음) 상태에서도 §5.11이 동작하는지 —
-    // §5.1 선택 해제 없이 이 요구사항은 이미 "동시 사용 가능" 형태로 검증했으므로,
-    // 여기서는 별도로 시나리오를 아예 선택하지 않은 새 진입 상태에서도 성립함을
-    // 스냅샷 레벨(아래 STEP)에서 재확인한다.
-
-    // ── Snapshot Node-runtime 검증 (①/② 핵심 판정) ──
-    // §5.1이 여전히 선택된 채로 "사양 결정" 실행 → governing=§5.1, supplementary=§5.11
-    const calcClicked = await clickByText(page, '사양 확정');
-    await new Promise(r => setTimeout(r, 300));
+    // ── Snapshot Node-runtime 검증 ──
+    // (a) §5.11 비활성(시나리오 탭 + §5.1 선택) + 유효 §5.11 입력 → governing=§5.1, supplementary=§5.11
+    await goTab(TAB_SCENARIO);
+    const calcClicked = await confirmSpec();
     const snap1 = await page.evaluate(() => window.__E2E_LAST_SNAPSHOT__ || null);
-    results.snapshotCreated_withGoverning = !!snap1;
+    results.snapshotCreated_withGoverning = !!snap1 && calcClicked;
     results.snapshot_governingPreserved = snap1 && snap1.reliefLoad && snap1.reliefLoad.governing === 'OUTLET_BLOCKED';
     results.snapshot_supplementaryExists = snap1 && Array.isArray(snap1.reliefLoad?.supplementary) &&
       snap1.reliefLoad.supplementary.length === 1;
     results.snapshot_supplementaryScenario = snap1?.reliefLoad?.supplementary?.[0]?.scenario === 'LIQUID_THERMAL_EXPANSION';
-    results.snapshot_supplementaryUnit = snap1?.reliefLoad?.supplementary?.[0]?.unit === 'm3/h';
-    results.snapshot_supplementaryValueClose = snap1?.reliefLoad?.supplementary?.[0]?.value !== undefined &&
-      Math.abs(snap1.reliefLoad.supplementary[0].value - 0.05) < 1e-9;
-    results.snapshot_supplementaryNotInGoverning = snap1?.reliefLoad?.governing !== 'LIQUID_THERMAL_EXPANSION';
+    // C-4.32 이후: 단위 kg/h, 값 필드 W (이전: m3/h, value)
+    results.snapshot_supplementaryUnit = snap1?.reliefLoad?.supplementary?.[0]?.unit === 'kg/h';
+    results.snapshot_supplementaryValueClose = snap1?.reliefLoad?.supplementary?.[0]?.W !== undefined &&
+      Math.abs(snap1.reliefLoad.supplementary[0].W - 20) < 1e-9;
+    // 재정의(구 nonGoverningNoticeShown 일부): 비활성 §5.11 값은 governing 에 섞이지 않는다
+    results.snapshot_supplementaryNotInGoverning = snap1?.reliefLoad?.governing !== 'LIQUID_THERMAL_EXPANSION' &&
+      snap1?.reliefLoad?.governing !== 'LIQUID_EXPANSION';
 
-    // ── Governing scenario 없이(Manual W만) §5.11 supplementary만 있는 케이스 ──
-    await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle0', timeout: 30000 });
-    await new Promise(r => setTimeout(r, 200));
+    // (b) Governing scenario 없이(수동 W 탭) §5.11 supplementary 만 있는 케이스
+    await freshStart();
+    await goTab(TAB_LE);
     await clickByText(page, '액체부피팽창 계산 열기');
-    await new Promise(r => setTimeout(r, 150));
-    await fillNumberFieldByLabel(page, '열팽창계수 α', 0.001);
-    await fillNumberFieldByLabel(page, '유입 열량 Q', 5000);
-    await fillNumberFieldByLabel(page, '비중 SG', 0.8);
-    await fillNumberFieldByLabel(page, '비열 Cp', 0.5);
-    await new Promise(r => setTimeout(r, 250));
-    const calc2 = await clickByText(page, '사양 확정');
-    await new Promise(r => setTimeout(r, 300));
+    await sleep(150);
+    await fillLE(0.001, 5000, 0.5);
+    await goTab(TAB_MANUAL);            // §5.11 비활성화(입력 state 는 유지)
+    const calc2 = await confirmSpec();
     const snap2 = await page.evaluate(() => window.__E2E_LAST_SNAPSHOT__ || null);
     results.snapshotCreated_manualWOnly = !!snap2 && calc2;
     results.snapshot_governingNullWhenNoScenario = snap2 && snap2.reliefLoad && snap2.reliefLoad.governing === null;
     results.snapshot_supplementaryAloneExists = snap2 && Array.isArray(snap2.reliefLoad?.supplementary) &&
       snap2.reliefLoad.supplementary.length === 1 &&
-      Math.abs(snap2.reliefLoad.supplementary[0].value - 0.025) < 1e-9;
+      Math.abs(snap2.reliefLoad.supplementary[0].W - 10) < 1e-9;
+
+    // (c) 신규(감독 결정): §5.11 을 활성 W 소스로 선택하고 사양 확정 → governing 에 기록, supplementary 중복 없음
+    await freshStart();
+    await goTab(TAB_LE);
+    await clickByText(page, '액체부피팽창 계산 열기');
+    await sleep(150);
+    await fillLE(0.001, 5000, 0.5);
+    const calc4 = await confirmSpec();
+    const snap4 = await page.evaluate(() => window.__E2E_LAST_SNAPSHOT__ || null);
+    results.snapshotCreated_activeLE = !!snap4 && calc4;
+    // governing id 는 Engine 의 scenarioId("LIQUID_EXPANSION") — CaseView 가 selector 결과를 그대로 기록
+    results.snapshot_activeLE_governingRecorded = snap4?.reliefLoad?.governing === 'LIQUID_EXPANSION' &&
+      snap4?.reliefLoad?.quantity === 'MASS_FLOW' && snap4?.reliefLoad?.unit === 'kg/h';
+    results.snapshot_activeLE_noDuplicateSupplementary =
+      !(snap4?.reliefLoad?.supplementary || []).some(x => x.scenario === 'LIQUID_THERMAL_EXPANSION');
 
     // ── 아무것도 안 쓴 기존 Case(§5.11/governing 둘 다 미사용) — 하위호환 확인 ──
-    await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle0', timeout: 30000 });
-    await new Promise(r => setTimeout(r, 200));
-    const calc3 = await clickByText(page, '사양 확정');
-    await new Promise(r => setTimeout(r, 300));
+    await freshStart();
+    const calc3 = await confirmSpec();
     const snap3 = await page.evaluate(() => window.__E2E_LAST_SNAPSHOT__ || null);
     results.snapshotCreated_bareDefault = !!snap3 && calc3;
     results.snapshot_reliefLoadNullWhenUnused = snap3 && snap3.reliefLoad === null;
 
     // ── Responsive ──
-    await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle0', timeout: 30000 });
-    await new Promise(r => setTimeout(r, 200));
+    await freshStart();
+    await goTab(TAB_LE);
     await clickByText(page, '액체부피팽창 계산 열기');
-    await fillNumberFieldByLabel(page, '열팽창계수 α', 0.001);
-    await fillNumberFieldByLabel(page, '유입 열량 Q', 5000);
-    await fillNumberFieldByLabel(page, '비중 SG', 0.8);
-    await fillNumberFieldByLabel(page, '비열 Cp', 0.5);
-    await new Promise(r => setTimeout(r, 250));
+    await sleep(150);
+    await fillLE(0.001, 5000, 0.5);
     const desktopLayout = await page.evaluate(() => ({
       scrollWidth: document.body.scrollWidth, clientWidth: document.documentElement.clientWidth,
     }));
     results.desktop = { noHorizontalOverflow: desktopLayout.scrollWidth <= desktopLayout.clientWidth + 2, debug: desktopLayout };
 
     await page.setViewport({ width: 375, height: 800 });
-    await new Promise(r => setTimeout(r, 200));
+    await sleep(200);
     const tMobile = await visibleText(page);
     const mobileLayout = await page.evaluate(() => ({
       scrollWidth: document.body.scrollWidth, clientWidth: document.documentElement.clientWidth,
@@ -347,8 +409,8 @@ async function main() {
     results.mobile = {
       noHorizontalOverflow: mobileLayout.scrollWidth <= mobileLayout.clientWidth + 2,
       debug: mobileLayout,
-      blockStillVisible: tMobile.includes('부가 계산 — 액체부피팽창'),
-      resultStillVisible: /0\.025/.test(tMobile),
+      blockStillVisible: tMobile.includes('열팽창용 안전밸브 (§5.11'),
+      resultStillVisible: RESULT_RE(10).test(tMobile),
     };
     await page.setViewport({ width: 1280, height: 900 });
 
@@ -369,8 +431,9 @@ async function main() {
 
   const uiIndependenceOk = results.existingScenarioCardsShown && results.liquidExpansionBlockShown &&
     results.liquidExpansionNotARadioCard && results.openedIndependently && results.formShownAfterOpen &&
-    results.insufficientBeforeInput && results.computableShown && results.valueCorrect && results.unitShown &&
-    results.nonGoverningNoticeShown && results.noGoverningBadgeOnLiquidExpansion &&
+    results.insufficientBeforeInput && results.incompleteBadgeShownBeforeInput &&
+    results.computableShown && results.valueCorrect && results.unitShown && results.formulaShown &&
+    results.sizingBadgeShownWhenValid &&
     results.s51SelectedWhileLiquidExpansionOpen && results.s51ResultShown &&
     results.liquidExpansionSurvivesOtherScenarioSelection && results.governingUnaffectedByLiquidExpansion &&
     results.liquidExpansionRecalculated && results.s51StillIntactAfterLiquidExpansionChange &&
@@ -383,6 +446,8 @@ async function main() {
     results.snapshot_supplementaryNotInGoverning &&
     results.snapshotCreated_manualWOnly && results.snapshot_governingNullWhenNoScenario &&
     results.snapshot_supplementaryAloneExists &&
+    results.snapshotCreated_activeLE && results.snapshot_activeLE_governingRecorded &&
+    results.snapshot_activeLE_noDuplicateSupplementary &&
     results.snapshotCreated_bareDefault && results.snapshot_reliefLoadNullWhenUnused;
 
   const responsiveOk = results.desktop?.noHorizontalOverflow && results.mobile?.noHorizontalOverflow &&
