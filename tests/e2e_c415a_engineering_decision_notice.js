@@ -196,6 +196,13 @@ async function main() {
     await page.waitForSelector('button', { timeout: 15000 });
     await new Promise(r => setTimeout(r, 200));
 
+    // 진입: 하네스는 latestSnap=null 인 CaseView 를 직접 마운트 → InputView 1/7(밸브 종류)에서 시작.
+    // 2단계로 이동 후 §5 시나리오 카드가 있는 "PSV 과압 시나리오" 탭 선택.
+    const navNext = await clickByText(page, '다음 →');
+    await new Promise(r => setTimeout(r, 200));
+    const navScenario = await clickByText(page, 'PSV 과압 시나리오');
+    await new Promise(r => setTimeout(r, 200));
+
     // ── (Desktop) Step 2 로드 + §5.2/§5.10 안내 visible ──
     let t = await visibleText(page);
     results.desktop = {};
@@ -237,15 +244,19 @@ async function main() {
     results.governingScenarioStillWorks = (t.includes('SCENARIO RESULT') || t.includes('GOVERNING RELIEF LOAD')) && !t.includes('undefined');
 
     // ── §5.11 액체부피팽창 supplementary 정상 동작 ──
+    // §5.11 블록은 현재 "열팽창용 안전밸브(§5.11, C-C-13-2026)" 탭에서만 렌더된다 → 탭 전환 후 열기
+    await clickByText(page, '열팽창용 안전밸브(§5.11');
+    await new Promise(r => setTimeout(r, 200));
     await clickByText(page, '액체부피팽창 계산 열기');
     await new Promise(r => setTimeout(r, 150));
-    await fillNumberFieldByLabel(page, '열팽창계수', 0.001);
+    // C-4.32 이후 입력은 β(열팽창 부피계수)·QF(유입 열량)·S(비열)이고 SG 는 없다.
+    // W = QF·β/S = 5000·0.001/0.5 = 10 kg/h (이전: α·Q/(500·SG·Cp) = 0.025 m3/h)
+    await fillNumberFieldByLabel(page, '열팽창 부피계수', 0.001);
     await fillNumberFieldByLabel(page, '유입 열량', 5000);
-    await fillNumberFieldByLabel(page, '비중', 0.8);
     await fillNumberFieldByLabel(page, '비열', 0.5);
     await new Promise(r => setTimeout(r, 250));
     t = await visibleText(page);
-    results.liquidExpansionStillWorks = t.includes('m3/h') || t.includes('m³/h') || t.includes('COMPUTABLE');
+    results.liquidExpansionStillWorks = /SCENARIO RESULT\s*10\s*kg\/h/.test(t);
 
     // ── §5.13 열교환기 고장 supplementary 정상 동작 ──
     await clickByText(page, '열교환기 고장 계산 열기');

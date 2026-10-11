@@ -200,6 +200,14 @@ async function main() {
     await page.waitForSelector('button', { timeout: 15000 });
     await new Promise(r => setTimeout(r, 200));
 
+    // 진입: 하네스는 latestSnap=null 인 CaseView 를 직접 마운트 → InputView 1/7(밸브 종류)에서 시작.
+    // §5 시나리오 카드는 2단계 "PSV 과압 시나리오" 탭에 있다 → "다음 →" → "PSV 과압 시나리오".
+    const navNext = await clickByText(page, '다음 →');
+    await new Promise(r => setTimeout(r, 200));
+    const navScenario = await clickByText(page, 'PSV 과압 시나리오');
+    results.entryNavigationOk = navNext && navScenario;
+    await new Promise(r => setTimeout(r, 200));
+
     // 1~4. 앱 진입, 기존 5개 카드 정상 표시, §5.13 독립 블록 표시(라디오 그룹과 분리)
     let t = await visibleText(page);
     results.existingScenarioCardsShown = t.includes('출구 차단') && t.includes('과충전') &&
@@ -261,21 +269,28 @@ async function main() {
     t = await visibleText(page);
     results.insufficientAfterModeSwitchBack = t.includes('입력을 완료하면 결과가 표시됩니다');
 
-    // 17~18. §5.11 + §5.13 동시 계산 — 서로 독립적으로 존재/계산
+    // 17~18. §5.11 + §5.13 — 서로 독립적으로 존재/계산
+    // C-4.32 이후 §5.11 은 'W 산정 근거' 3탭 중 "열팽창용 안전밸브" 탭에서만 렌더되고(β·QF·S → W kg/h),
+    // §5.13 블록은 탭과 무관하게 항상 렌더된다. §5.11/§5.13 의 동시 표시는 필수 조건이 아니므로
+    // (열팽창 탭에서는 우연히 함께 보이지만) 탭 전환 후에도 각자의 값이 유지되는지로 독립성을 검증한다.
     await fillNumberFieldByLabel(page, '튜브 단면적', 0.01);
+    await new Promise(r => setTimeout(r, 200));
+    await clickByText(page, '열팽창용 안전밸브(§5.11');
     await new Promise(r => setTimeout(r, 200));
     await clickByText(page, '액체부피팽창 계산 열기');
     await new Promise(r => setTimeout(r, 150));
-    await fillNumberFieldByLabel(page, '열팽창계수 α', 0.001);
-    await fillNumberFieldByLabel(page, '유입 열량 Q', 5000);
-    await fillNumberFieldByLabel(page, '비중 SG', 0.8);
-    await fillNumberFieldByLabel(page, '비열 Cp', 0.5);
+    // W = QF·β/S = 5000·0.001/0.5 = 10 kg/h
+    await fillNumberFieldByLabel(page, '열팽창 부피계수', 0.001);
+    await fillNumberFieldByLabel(page, '유입 열량', 5000);
+    await fillNumberFieldByLabel(page, '비열', 0.5);
     await new Promise(r => setTimeout(r, 250));
     t = await visibleText(page);
-    results.bothBlocksSimultaneouslyOpen = t.includes('부가 계산 — 액체부피팽창') && t.includes('부가 계산 — 열교환기 고장');
-    results.le_and_ex_both_computed = /0\.025/.test(t) && /0\.02\b/.test(t);
+    results.bothBlocksSimultaneouslyOpen = t.includes('열팽창용 안전밸브 (§5.11') && t.includes('부가 계산 — 열교환기 고장');
+    results.le_and_ex_both_computed = /SCENARIO RESULT\s*10\s*kg\/h/.test(t) && /0\.02\b/.test(t);
 
-    // 11~12. 기존 governing 시나리오(§5.1)도 동시에 정상 동작(독립성)
+    // 11~12. 기존 governing 시나리오(§5.1)도 정상 동작 + §5.13 은 그대로 표시, §5.11 값은 탭 복귀 후 보존
+    await clickByText(page, 'PSV 과압 시나리오');
+    await new Promise(r => setTimeout(r, 200));
     await clickByText(page, '출구 차단');
     await new Promise(r => setTimeout(r, 150));
     await clickByText(page, '액체(Liquid)');
@@ -283,9 +298,19 @@ async function main() {
     await fillNumberFieldByLabel(page, '최대 유입량 (Inflow)', 100);
     await new Promise(r => setTimeout(r, 250));
     t = await visibleText(page);
-    results.governingScenarioWorksAlongsideBoth = /100\s*kg\/h/.test(t) &&
-      t.includes('부가 계산 — 액체부피팽창') && t.includes('부가 계산 — 열교환기 고장') &&
-      /0\.025/.test(t) && /0\.02\b/.test(t);
+    const s51Ok = /100\s*kg\/h/.test(t) && t.includes('부가 계산 — 열교환기 고장') && /0\.02\b/.test(t);
+    await clickByText(page, '열팽창용 안전밸브(§5.11');
+    await new Promise(r => setTimeout(r, 200));
+    // 블록의 열림/닫힘은 로컬 state 라 탭 복귀 시 닫혀 있다 — 다시 열어 입력값(CaseView state) 보존을 확인
+    await clickByText(page, '액체부피팽창 계산 열기');
+    await new Promise(r => setTimeout(r, 200));
+    t = await visibleText(page);
+    const s511Kept = t.includes('열팽창용 안전밸브 (§5.11') && /SCENARIO RESULT\s*10\s*kg\/h/.test(t) &&
+      t.includes('부가 계산 — 열교환기 고장') && /0\.02\b/.test(t);
+    results.governingScenarioWorksAlongsideBoth = s51Ok && s511Kept;
+    // governing 계산·Snapshot 은 시나리오 탭이 선택된 상태에서 확인한다(탭 복귀)
+    await clickByText(page, 'PSV 과압 시나리오');
+    await new Promise(r => setTimeout(r, 200));
 
     // ── Responsive (사양 확정 클릭 전 — 클릭 후에는 report 화면으로 전환되어
     // InputView 자체가 사라지므로 반드시 그 전에 확인해야 함) ──
@@ -308,6 +333,11 @@ async function main() {
     await page.setViewport({ width: 1280, height: 900 });
 
     // ── Snapshot Node-runtime 검증 ──
+    // '사양 확정' 은 7단계(마지막)에 있으므로 "다음 →" 으로 이동한다(입력 state 는 CaseView 소유라 유지).
+    for (let i = 0; i < 8 && !(await visibleText(page)).includes('사양 확정'); i++) {
+      if (!(await clickByText(page, '다음 →'))) break;
+      await new Promise(r => setTimeout(r, 200));
+    }
     const calcClicked = await clickByText(page, '사양 확정');
     await new Promise(r => setTimeout(r, 300));
     const snap = await page.evaluate(() => window.__E2E_LAST_SNAPSHOT__ || null);
@@ -316,7 +346,8 @@ async function main() {
     results.snapshot_supplementaryHasBoth = snap && Array.isArray(snap.reliefLoad?.supplementary) &&
       snap.reliefLoad.supplementary.length === 2;
     const supList = snap?.reliefLoad?.supplementary || [];
-    results.snapshot_hasLE = supList.some(s => s.scenario === 'LIQUID_THERMAL_EXPANSION' && Math.abs(s.value - 0.025) < 1e-9);
+    // C-4.32 이후 supplementary 필드는 W(kg/h) — 이전에는 value(m3/h)
+    results.snapshot_hasLE = supList.some(s => s.scenario === 'LIQUID_THERMAL_EXPANSION' && s.unit === 'kg/h' && Math.abs(s.W - 10) < 1e-9);
     results.snapshot_hasEX = supList.some(s => s.scenario === 'EXCHANGER_FAILURE' && Math.abs(s.requiredOrificeArea_m2 - 0.02) < 1e-9);
     results.snapshot_governingNeverBecomesExchanger = snap?.reliefLoad?.governing !== 'EXCHANGER_FAILURE' &&
       snap?.reliefLoad?.governing !== 'LIQUID_THERMAL_EXPANSION';
