@@ -171,6 +171,39 @@ async function main() {
     await page.waitForSelector('button', { timeout: 15000 });
     await new Promise(r => setTimeout(r, 200));
 
+    // 진입: 하네스는 latestSnap=null 인 CaseView 를 직접 마운트 → InputView 1/7(밸브 종류)에서 시작.
+    // 2단계(방출 시나리오)로 이동: "다음 →"
+    // 이어서 "PSV 과압 시나리오" 탭(§5 시나리오 카드)
+    const navNext = await clickByText(page, '다음 →');
+    await new Promise(r => setTimeout(r, 200));
+    const navScenario = await clickByText(page, 'PSV 과압 시나리오');
+    results.entryNavigationOk = navNext && navScenario;
+    await new Promise(r => setTimeout(r, 200));
+
+    // 위자드 이동 도우미 — "사양 결정 요약"(Basis 라벨)은 현재 7단계(마지막) 화면에만 있고,
+    // 시나리오 입력은 2단계에 있으므로 입력 후 요약 단계까지 "다음 →", 다시 입력하려면 "← 이전"으로 이동한다.
+    async function goToSummary() {
+      for (let i = 0; i < 8; i++) {
+        if ((await visibleText(page)).includes('사양 결정 요약')) return true;
+        if (!(await clickByText(page, '다음 →'))) return false;
+        await new Promise(r => setTimeout(r, 200));
+      }
+      return (await visibleText(page)).includes('사양 결정 요약');
+    }
+    async function backToScenarioStep() {
+      for (let i = 0; i < 8; i++) {
+        const tt = await visibleText(page);
+        if (tt.includes('Relief Load — §5 시나리오 기반 산정') || tt.includes('PSV 과압 시나리오(§5.1~5.12)')) {
+          if (!tt.includes('출구 차단')) await clickByText(page, 'PSV 과압 시나리오');
+          await new Promise(r => setTimeout(r, 150));
+          return true;
+        }
+        if (!(await clickByText(page, '← 이전'))) return false;
+        await new Promise(r => setTimeout(r, 200));
+      }
+      return false;
+    }
+
     // ── §5.12 외부화재 선택 → 계산 → Basis 확인(핵심 버그 재현/수정 확인 지점) ──
     await clickByText(page, '외부화재');
     await new Promise(r => setTimeout(r, 150));
@@ -187,6 +220,9 @@ async function main() {
     await new Promise(r => setTimeout(r, 300));
     let t = await visibleText(page);
     results.fireResultShown = t.includes('SCENARIO RESULT') || t.includes('GOVERNING RELIEF LOAD');
+    // 요약(Basis)은 7단계에서 확인
+    results.summaryStepReached = await goToSummary();
+    t = await visibleText(page);
     results.basisSectionShown = t.includes('사양 결정 요약');
     results.noLiteralUndefinedAnywhere = !t.includes('undefined');
     results.basisShowsExternalFireLabel = t.includes('§5.12 외부화재');
@@ -198,11 +234,13 @@ async function main() {
       { click: '과충전', sub: null, field: '최대 유입량 (Inflow)', value: 200, expectLabel: '§5.6 과충전' },
     ];
     for (const c of cases) {
+      await backToScenarioStep();
       await clickByText(page, c.click);
       await new Promise(r => setTimeout(r, 150));
       if (c.sub) { await clickByText(page, c.sub); await new Promise(r => setTimeout(r, 150)); }
       await fillNumberFieldByLabel(page, c.field, c.value);
       await new Promise(r => setTimeout(r, 250));
+      await goToSummary();
       t = await visibleText(page);
       regressionChecks[c.click] = { noUndefined: !t.includes('undefined'), hasLabel: t.includes(c.expectLabel) };
     }

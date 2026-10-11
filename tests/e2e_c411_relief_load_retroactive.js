@@ -220,8 +220,13 @@ async function main() {
     await page.goto(`http://127.0.0.1:${port}/`, { waitUntil: 'networkidle0', timeout: 30000 });
     await page.waitForSelector('button', { timeout: 15000 });
 
-    const startClicked = await clickByText(page, '사양 결정 시작');
-    results.launchAndInitialRender = startClicked;
+    // 하네스는 latestSnap=null 인 CaseView 를 직접 마운트 → InputView 1/7 에서 시작
+    // (CaseView: startScreen = latestSnap ? "report" : "input"). '사양 결정 시작' 은 이 경로에 없다.
+    // 현재 경로: 1단계 "다음 →" → 2단계 "PSV 과압 시나리오"
+    const nextClicked = await clickByText(page, '다음 →');
+    await new Promise(r => setTimeout(r, 200));
+    const scenarioClicked = await clickByText(page, 'PSV 과압 시나리오');
+    results.launchAndInitialRender = nextClicked && scenarioClicked;
     await new Promise(r => setTimeout(r, 200));
 
     const initialText = await visibleText(page);
@@ -379,10 +384,18 @@ async function main() {
     manualReturn.buttonVisible = t.includes('시나리오 사용 안 함 → Manual W로 복귀');
     manualReturn.clicked = await clickByText(page, '시나리오 사용 안 함 → Manual W로 복귀');
     await new Promise(r => setTimeout(r, 200));
+    // C-4.32 Journey D 이후 W 입력원은 3개 탭(수동 입력 W / PSV 과압 시나리오 / 열팽창용)으로 배타 렌더링되며,
+    // "MANUAL INPUT 사용 중" 배지는 '수동 입력 W' 탭 안에만 있다. 복귀 버튼은 시나리오 선택만 해제하므로
+    // Manual W 가 실제 적용 중인지는 해당 탭을 열어 배지로 확인한다(assertion 은 그대로).
+    await clickByText(page, '수동 입력 W');
+    await new Promise(r => setTimeout(r, 200));
     t = await visibleText(page);
     manualReturn.manualInputBadgeRestored = t.includes('MANUAL INPUT 사용 중');
     manualReturn.scenarioFormGone = !t.includes('FAILURE MODE');
     results.manualReturn = manualReturn;
+    // 이후 반응형 구간은 시나리오 탭에서 진행 — 탭 복귀
+    await clickByText(page, 'PSV 과압 시나리오');
+    await new Promise(r => setTimeout(r, 200));
 
     // ══════════════════════════════════════════════════════════════
     //  Responsive — Desktop / Mobile viewport에서 §5 섹션 레이아웃 확인

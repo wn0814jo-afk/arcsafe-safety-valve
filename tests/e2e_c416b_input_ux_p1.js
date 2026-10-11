@@ -211,11 +211,20 @@ async function main() {
     await page.waitForSelector('button', { timeout: 15000 });
     await new Promise(r => setTimeout(r, 200));
 
+    // 진입: 하네스는 latestSnap=null 인 CaseView 를 직접 마운트 → InputView 1/7(밸브 종류)에서 시작.
+    // 2단계(방출 시나리오)로 이동: "다음 →"
+    // (기본 탭 = 수동 입력 W)
+    results.entryNavigationOk = await clickByText(page, '다음 →');
+    await new Promise(r => setTimeout(r, 200));
+
     // ═══ E2E-1: Step2 로드 + P0 10개 가이드 가시성 ═══
     let t = await visibleText(page);
     results.e2e1_step2Loaded = t.includes('방출 시나리오');
     results.e2e1_wManualGuide = t.includes('외부 계산서의 수동 입력값');
     // 최대 유입 조건 가이드는 시나리오 선택 후에만 렌더링됨(reliefLoadScenarioType 기본값 null)
+    // 시나리오 카드는 "PSV 과압 시나리오" 탭에 있으므로 탭 먼저 전환(수동 W 가이드 확인은 위에서 끝남)
+    await clickByText(page, 'PSV 과압 시나리오');
+    await new Promise(r => setTimeout(r, 150));
     await clickByText(page, '출구 차단');
     await new Promise(r => setTimeout(r, 150));
     t = await visibleText(page);
@@ -237,10 +246,30 @@ async function main() {
     });
     results.e2e2_mismatchWarningShown = t.includes('화재 시나리오 계산 조건과 현재 Case 설정이 일치하지 않습니다');
 
+    // "화재 보호 목적" 토글은 현재 4단계(압력 조건)에 있고 P1 입력/자동 제안은 2단계(방출 시나리오)에 있다.
+    // 토글하려면 4단계로 이동 → 토글 → 2단계로 복귀(입력 state 는 CaseView 소유라 유지된다).
+    async function toggleFireProtectionViaStep4(label) {
+      for (let i = 0; i < 6 && !(await visibleText(page)).includes('명판 및 공정 설계 문서 기준'); i++) {
+        if (!(await clickByText(page, '다음 →'))) break;
+        await new Promise(r => setTimeout(r, 200));
+      }
+      const ok = await clickByExactText(page, label, 'div');
+      await new Promise(r => setTimeout(r, 150));
+      for (let i = 0; i < 6 && !(await visibleText(page)).includes('어떤 상황에서 밸브가 열리는가'); i++) {
+        if (!(await clickByText(page, '← 이전'))) break;
+        await new Promise(r => setTimeout(r, 200));
+      }
+      // 시나리오 탭이 유지되지 않았다면 다시 선택
+      if (!(await visibleText(page)).includes('① 어떤 화재 상황인가요?')) {
+        await clickByText(page, 'PSV 과압 시나리오');
+        await new Promise(r => setTimeout(r, 150));
+      }
+      return ok;
+    }
+
     // ═══ E2E-3/4: fireScenario=true → 자동 제안 → 수치 검증 ═══
     // Step4로 이동해 "화재 보호 목적" 토글 (있는 곳으로 스크롤 불필요, 페이지 전체 클릭 탐색)
-    await clickByExactText(page, '화재 보호 목적', 'div');
-    await new Promise(r => setTimeout(r, 150));
+    await toggleFireProtectionViaStep4('화재 보호 목적');
     // 다시 §5.12로 진입 상태 유지 확인 후 자동 제안 버튼 클릭
     t = await visibleText(page);
     results.e2e3_mismatchGoneAfterFireScenarioOn = !t.includes('화재 시나리오 계산 조건과 현재 Case 설정이 일치하지 않습니다');
@@ -299,15 +328,13 @@ async function main() {
       Math.abs(parseFloat(p1ValueAfterRestore) - expectedMPa) < 0.0005;
 
     // ═══ E2E-7: fireScenario=false로 되돌리기 → 불일치 경고 재표시 ═══
-    await clickByExactText(page, '화재 보호 목적 아님', 'div');
-    await new Promise(r => setTimeout(r, 150));
+    await toggleFireProtectionViaStep4('화재 보호 목적 아님');
     t = await visibleText(page);
     results.e2e7_mismatchWarningReturns = t.includes('화재 시나리오 계산 조건과 현재 Case 설정이 일치하지 않습니다');
     results.e2e7_noSuggestButtonWhenFireOff = !t.includes('자동 제안값 사용') && !t.includes('자동 입력값 (Step4 설정압력');
 
     // ═══ E2E-9: F/Tf/Tw/Z/α/Q 가이드 + Tw>T1 검증 유지 ═══
-    await clickByExactText(page, '화재 보호 목적', 'div'); // 다시 fireScenario true로 (아래 검증에 영향 없음)
-    await new Promise(r => setTimeout(r, 100));
+    await toggleFireProtectionViaStep4('화재 보호 목적'); // 다시 fireScenario true로 (아래 검증에 영향 없음)
     t = await visibleText(page);
     results.e2e9_fGuideShown = t.includes('임의로 입력하지 마세요');
     results.e2e9_twGuideShown = t.includes('화재노출 벽면온도');
